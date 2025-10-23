@@ -1,1 +1,338 @@
-testing file
+package com.wawanesa.ace;
+
+import java.io.File;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.wawanesa.ace.configuration.PropertiesConfigLoader;
+import com.wawanesa.ace.connection.ConnectionManager;
+import com.wawanesa.ace.constants.Constants;
+import com.wawanesa.ace.reporting.GlobalProcessingReport;
+import com.wawanesa.ace.utils.Utils;
+
+public class DataTransformService {
+
+    private static final Logger Logger = LogManager.getLogger(DataTransformService.class);
+
+    public static void main(String[] args) {
+
+        Logger.info("===== DataTransformUtility STARTED =====");
+        ExecutorService executor = null;
+        ScheduledExecutorService progressMonitor = null;
+        final ConnectionManager[] connManagerRef = new ConnectionManager[1];
+        final GlobalProcessingReport report = new GlobalProcessingReport();
+        final AtomicInteger totalFilesQueued = new AtomicInteger(0);
+
+        try {
+            PropertiesConfigLoader config = PropertiesConfigLoader.getInstance();
+            
+            // Configure thread pool size (configurable via properties)
+            String threadPoolSizeStr = config.getProperty("app.thread.pool.size");
+            int threadPoolSize = (threadPoolSizeStr != null) ? Integer.parseInt(threadPoolSizeStr) : 5;
+            ExecutorService executorService = Executors.newFixedThreadPool(threadPoolSize);
+            executor = executorService; // Assign to non-final variable for later use
+            Logger.info("Thread pool initialized with {} threads", threadPoolSize);
+            
+            // Create final references for lambdas/shutdown hook
+            final ExecutorService executorRef = executorService;
+            
+            // Start progress monitoring (configurable interval)
+            String progressIntervalStr = config.getProperty("app.progress.log.interval.minutes");
+            int progressIntervalMinutes = (progressIntervalStr != null) ? Integer.parseInt(progressIntervalStr) : 5;
+            
+            if (progressIntervalMinutes > 0) {
+                ScheduledExecutorService progressMonitorService = Executors.newScheduledThreadPool(1);
+                progressMonitor = progressMonitorService;
+                final ScheduledExecutorService progressMonitorRef = progressMonitorService;
+                
+                progressMonitorService.scheduleAtFixedRate(() -> {
+                    try {
+                        report.logProgress();
+                        
+                        // Log thread pool stats if executor is ThreadPoolExecutor
+                        if (executorRef instanceof ThreadPoolExecutor) {
+                            ThreadPoolExecutor tpe = (ThreadPoolExecutor) executorRef;
+                            Logger.info("Thread Pool: Active={}/{}, Queue={}", 
+                                       tpe.getActiveCount(), tpe.getPoolSize(), tpe.getQueue().size());
+                            report.updateThreadPoolStats(tpe.getPoolSize(), tpe.getActiveCount(), tpe.getQueue().size());
+                        }
+                    } catch (Exception e) {
+                        Logger.error("Error in progress monitor", e);
+                    }
+                }, 0, progressIntervalMinutes, TimeUnit.MINUTES);
+                Logger.info("Progress monitoring enabled (interval: {} minutes)", progressIntervalMinutes);
+            }
+            
+            final ScheduledExecutorService progressMonitorRef = progressMonitor;
+            
+            // Add shutdown hook for abnormal termination (e.g., Ctrl+C)
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                Logger.info("Shutdown hook triggered - cleaning up resources...");
+                
+                if (progressMonitorRef != null && !progressMonitorRef.isShutdown()) {
+                    try {
+                        progressMonitorRef.shutdown();
+                        progressMonitorRef.awaitTermination(5, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        progressMonitorRef.shutdownNow();
+                    }
+                }
+                
+                if (executorRef != null && !executorRef.isShutdown()) {
+                    try {
+                        executorRef.shutdown();
+                        if (!executorRef.awaitTermination(30, TimeUnit.SECONDS)) {
+                            executorRef.shutdownNow();
+                        }
+                    } catch (InterruptedException e) {
+                        executorRef.shutdownNow();
+                    }
+                }
+                
+                if (connManagerRef[0] != null) {
+                    try {
+                        connManagerRef[0].close();
+                    } catch (Exception e) {
+                        Logger.error("Error closing connection in shutdown hook", e);
+                    }
+                }
+                
+                Logger.info("Shutdown hook completed");
+            }));
+
+            System.out.println("JRE : " + System.getProperty("java.library.path"));
+            System.out.println("config : " + System.getProperty("config.file"));
+            System.out.println("log4j : " + System.getProperty("log4j.configurationFile"));
+            String base_path = config.getProperty("app.base_path");
+            String category_types = config.getProperty("app.category_types");
+
+            if (isValidDirectory(base_path, Constants.sourceFolder)
+                    && isValidDirectory(base_path, Constants.inprocessFolder)
+                    && isValidDirectory(base_path, Constants.transformedFolder)
+                    && isValidDirectory(base_path, Constants.completedFolder)
+                    && isValidDirectory(base_path, Constants.errorFolder)
+                    && isValidDirectory(base_path, Constants.archiveFolder)) {
+
+                System.out.println("All Required directories are EXIST and VALID under base path '" + base_path + "'");
+
+                if (category_types != null && category_types.trim().length() > 0) {
+                    connManagerRef[0] = new ConnectionManager(config);
+                    String[] folders = category_types.split(",");
+                    
+                    // First pass: count total files to process
+                    Logger.info("Counting total files to process...");
+                    for (int i = 0; i < folders.length; i++) {
+                        if (folders[i] != null && isValidDirectory(base_path,
+                                Constants.sourceFolder + File.separator + folders[i].trim())) {
+                            String folderName = folders[i].trim();
+                            try (DirectoryStream<Path> stream = Files.newDirectoryStream(
+                                    Paths.get(base_path + File.separator + Constants.sourceFolder + File.separator + folderName),
+                                    "*.csv")) {
+                                for (Path filePath : stream) {
+                                    totalFilesQueued.incrementAndGet();
+                                }
+                            } catch (Exception e) {
+                                Logger.error("Error counting files in category: " + folderName, e);
+                            }
+                        }
+                    }
+                    report.setTotalFilesQueued(totalFilesQueued.get());
+                    Logger.info("Total files to process: {}", totalFilesQueued.get());
+                    
+                    // Reset counter for actual processing
+                    totalFilesQueued.set(0);
+
+                    for (int i = 0; i < folders.length; i++) {
+                        if (folders[i] != null && isValidDirectory(base_path,
+                                Constants.sourceFolder + File.separator + folders[i].trim())) {
+                            String folderName = folders[i].trim();
+
+                            // Use try-with-resources to ensure DirectoryStream is properly closed
+                            try (DirectoryStream<Path> directoryStream = Files.newDirectoryStream(
+                                    Paths.get(base_path + File.separator + Constants.sourceFolder + File.separator + folderName),
+                                    "*.csv")) {
+
+                                Logger.info("Processing category: " + folderName);
+                                System.out.println(folderName + " category processing launched...");
+                                
+                                int fileCount = 0;
+                                for (Path filePath : directoryStream) {
+                                    fileCount++;
+                                    totalFilesQueued.incrementAndGet();
+                                    
+                                    try {
+                                        Utils utils = new Utils(base_path);
+                                        executor.submit(() -> {
+                                            Utils.ProcessingResult result = null;
+                                            try {
+                                                Logger.info("Processing file: " + filePath.getFileName());
+                                                result = utils.processCategoryFiles(filePath, folderName, connManagerRef[0]);
+                                                
+                                                // Convert Utils.ProcessingResult to GlobalProcessingReport.ProcessingResult
+                                                GlobalProcessingReport.ProcessingResult reportResult = new GlobalProcessingReport.ProcessingResult();
+                                                reportResult.totalRows = result.totalRows;
+                                                reportResult.successCount = result.successCount;
+                                                reportResult.failureCount = result.failureCount;
+                                                reportResult.skippedEmptyLines = result.skippedEmptyLines;
+                                                
+                                                if (result.successCount > 0 || result.totalRows > 0) {
+                                                    // Record successful file processing with actual row counts
+                                                    report.recordFileSuccess(folderName, reportResult);
+                                                } else {
+                                                    // File had no rows processed - count as failure
+                                                    report.recordFileFailure(folderName, "No rows processed");
+                                                }
+                                                
+                                            } catch (Exception e) {
+                                                Logger.error("Failed to process file: " + filePath.getFileName(), e);
+                                                System.err.println("Failed to process file: " + filePath.getFileName());
+                                                e.printStackTrace();
+                                                report.recordFileFailure(folderName, e.getMessage());
+                                            }
+                                        });
+                                    } catch (Exception e) {
+                                        Logger.error("Failed to submit file for processing: " + filePath.getFileName(), e);
+                                        System.err.println("Failed to process file: " + filePath.getFileName());
+                                        e.printStackTrace();
+                                        report.recordFileFailure(folderName, "Failed to submit: " + e.getMessage());
+                                    }
+                                }
+                                
+                                if (fileCount == 0) {
+                                    Logger.info("No CSV files found in category: " + folderName);
+                                    System.out.println("No Files found for Data transformation in " + folderName);
+                                } else {
+                                    Logger.info("Submitted " + fileCount + " files for processing in category: " + folderName);
+                                }
+
+                            } catch (Exception e2) {
+                                Logger.error("Error processing category: " + folderName, e2);
+                                e2.printStackTrace();
+                            }
+
+                        } else {
+                            Logger.warn("Invalid category folder: " + folders[i]);
+                            System.out.println("mentioned category type " + folders[i] + " is not valid folder under "
+                                    + base_path + Constants.sourceFolder);
+                        }
+                    }
+                } else {
+                    System.out.println("No valid category_types found in properties file to execute this program, terminated!!!");
+                }
+
+            } else {
+                System.out.println("Required directories are missing under the basepath '" + base_path + "'");
+                System.out.println("Please make sure '" + Constants.sourceFolder + "', '" + Constants.inprocessFolder
+                        + "', '" + Constants.transformedFolder + "', '" + Constants.completedFolder + "', '"
+                        + Constants.errorFolder + "', '" + Constants.archiveFolder + "' folders exist under base path '" + base_path + "'");
+            }
+
+        } catch (Exception e) {
+            Logger.error("Error during processing", e);
+            e.printStackTrace();
+        } finally {
+            // Shutdown progress monitor
+            if (progressMonitor != null && !progressMonitor.isShutdown()) {
+                try {
+                    Logger.info("Shutting down progress monitor...");
+                    progressMonitor.shutdown();
+                    progressMonitor.awaitTermination(5, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    progressMonitor.shutdownNow();
+                }
+            }
+            
+            // Shutdown ExecutorService gracefully
+            if (executor != null) {
+                try {
+                    Logger.info("Shutting down executor service...");
+                    executor.shutdown(); // Disable new tasks from being submitted
+                    
+                    // Calculate dynamic timeout based on number of files queued
+                    // Estimate: ~1 second per file average (conservative for safety)
+                    // Minimum: 5 minutes, Maximum: 8 hours
+                    int filesQueued = totalFilesQueued.get();
+                    long estimatedSecondsPerFile = 1;
+                    long calculatedTimeout = filesQueued * estimatedSecondsPerFile;
+                    
+                    // Apply bounds
+                    long minTimeout = 300; // 5 minutes minimum
+                    long maxTimeout = 28800; // 8 hours maximum
+                    long shutdownTimeout = Math.max(minTimeout, Math.min(calculatedTimeout, maxTimeout));
+                    
+                    Logger.info("Waiting for {} files to complete (timeout: {} seconds / {} minutes)...", 
+                               filesQueued, shutdownTimeout, shutdownTimeout / 60);
+                    
+                    // Wait for existing tasks to terminate
+                    if (!executor.awaitTermination(shutdownTimeout, TimeUnit.SECONDS)) {
+                        Logger.warn("Executor did not terminate in time, forcing shutdown...");
+                        executor.shutdownNow(); // Cancel currently executing tasks
+                        
+                        // Wait a while for tasks to respond to being cancelled
+                        if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                            Logger.error("Executor did not terminate after forced shutdown");
+                        }
+                    }
+                    Logger.info("Executor service shut down successfully");
+                } catch (InterruptedException e) {
+                    Logger.error("Interrupted while shutting down executor", e);
+                    executor.shutdownNow();
+                    Thread.currentThread().interrupt();
+                }
+            }
+            
+            // Close connection pool
+            if (connManagerRef[0] != null) {
+                try {
+                    Logger.info("Closing database connection pool...");
+                    connManagerRef[0].close();
+                    Logger.info("Database connection pool closed successfully");
+                } catch (Exception e) {
+                    Logger.error("Error closing connection manager", e);
+                    e.printStackTrace();
+                }
+            }
+            
+            // Write final summary report
+            try {
+                Logger.info("===== FINAL SUMMARY =====");
+                Logger.info(report.getSummary());
+                
+                PropertiesConfigLoader config = PropertiesConfigLoader.getInstance();
+                String basePath = config.getProperty("app.base_path");
+                report.writeReportToFile(basePath);
+                Logger.info("Summary report written to: {}", basePath);
+            } catch (Exception e) {
+                Logger.error("Failed to write summary report", e);
+            }
+            
+            Logger.info("===== DataTransformUtility COMPLETED =====");
+        }
+    }
+
+    private static boolean isValidDirectory(String base_path, String folderName) {
+        boolean isExist = false;
+        try {
+            File dir = new File(base_path + folderName);
+            if (dir.exists() && dir.isDirectory()) {
+                isExist = true;
+            } else {
+                System.out.println("Expected Directory not exist : " + (base_path + File.separator + folderName));
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return isExist;
+    }
+}
