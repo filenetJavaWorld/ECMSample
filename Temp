@@ -1,1 +1,149 @@
-testing
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+
+import com.opencsv.CSVParserBuilder;
+import com.opencsv.CSVReader;
+import com.opencsv.CSVReaderBuilder;
+
+public class FolderStructureCreator {
+
+    private static final String SOURCE_ROOT = "D:\\wawa\\Source";
+    private static final String SAMPLE_FILES_ROOT = "D:\\wawa\\mime_type_samples";
+
+    public static void main(String[] args) throws Exception {
+        File sourceDir = new File(SOURCE_ROOT);
+        System.out.println("🔍 Scanning source directory: " + SOURCE_ROOT);
+
+        // Loop through each category folder
+        for (File categoryFolder : sourceDir.listFiles(File::isDirectory)) {
+            System.out.println("\n📂 Entering category folder: " + categoryFolder.getName());
+
+            File[] csvFiles = categoryFolder.listFiles((dir, name) -> name.toLowerCase().endsWith(".csv"));
+            if (csvFiles == null || csvFiles.length == 0) {
+                System.out.println("⚠️ No CSV files found in " + categoryFolder.getName());
+                continue;
+            }
+
+            for (File csvFile : csvFiles) {
+                System.out.println("➡️ Processing CSV: " + csvFile.getName());
+                processCsvFile(csvFile, categoryFolder);
+            }
+        }
+
+        System.out.println("\n✅ Completed processing all category folders.");
+    }
+
+    private static void processCsvFile(File csvFile, File categoryFolder) throws Exception {
+        String csvBaseName = csvFile.getName().replace(".csv", "");
+        File outputBaseFolder = new File(categoryFolder, csvBaseName);
+
+        if (!outputBaseFolder.exists()) {
+            boolean created = outputBaseFolder.mkdirs();
+            System.out.println("📁 Created output base folder: " + outputBaseFolder.getAbsolutePath() + " -> " + created);
+        } else {
+            System.out.println("📁 Output base folder already exists: " + outputBaseFolder.getAbsolutePath());
+        }
+
+        // OpenCSV with quote/escape handling
+        try (CSVReader reader = new CSVReaderBuilder(new FileReader(csvFile))
+                .withCSVParser(new CSVParserBuilder()
+                    .withSeparator(',')
+                    .withQuoteChar('"')
+                    .withEscapeChar('\\')
+                    .build())
+                .build()) {
+            // read header and rows here
+        
+
+            String[] header = reader.readNext();
+            if (header == null) {
+                System.out.println("⚠️ Empty CSV: " + csvFile.getName());
+                return;
+            }
+
+            Map<String, Integer> colIndex = new HashMap<>();
+            for (int i = 0; i < header.length; i++) {
+                colIndex.put(header[i], i);
+            }
+
+            System.out.println("📝 CSV Headers: " + Arrays.toString(header));
+
+            String[] row;
+            int rowCount = 0;
+            while ((row = reader.readNext()) != null) {
+                rowCount++;
+
+                // Guard for rows with fewer columns than expected
+                if (row.length <= colIndex.get("doc_filepath") || row.length <= colIndex.get("mimetype")) {
+                    System.out.println("⚠️ Skipping row " + rowCount + " - not enough columns (" + row.length + " present)");
+                    continue;
+                }
+
+                String docPath = row[colIndex.get("doc_filepath")];
+                String mimeType = row[colIndex.get("mimetype")];
+
+                // Build final file path under the new folder
+                File finalFile = new File(outputBaseFolder, docPath);
+                finalFile.getParentFile().mkdirs();
+
+                System.out.println("   ➡️ Row " + rowCount + ": Creating file for path = " + docPath + " | mimetype = " + mimeType);
+
+                // Pick sample file for this MIME type
+                File sampleFile = getSampleFileForMimeType(mimeType);
+                if (sampleFile != null && sampleFile.exists()) {
+                    Files.copy(sampleFile.toPath(), finalFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                    System.out.println("      ✅ Copied sample file: " + sampleFile.getName() + " -> " + finalFile.getAbsolutePath());
+                } else {
+                    Files.write(finalFile.toPath(), new byte[0]);
+                    System.out.println("      ⚠️ No sample file found for mimetype: " + mimeType + ". Created empty placeholder.");
+                }
+            }
+
+            System.out.println("📊 Finished processing CSV: " + csvFile.getName() + " | Rows processed: " + rowCount);
+        }
+    }
+
+    private static File getSampleFileForMimeType(String mimeType) {
+        switch (mimeType.toLowerCase()) {
+            case "application/pdf": 
+                return new File(SAMPLE_FILES_ROOT, "sample.pdf");
+            case "text/html": 
+                return new File(SAMPLE_FILES_ROOT, "sample.html");
+            case "application/x-zip-compressed": 
+                return new File(SAMPLE_FILES_ROOT, "sample.zip");
+            case "audio/x-m4a": 
+                return new File(SAMPLE_FILES_ROOT, "sample.m4a");
+            case "application/pkcs7-mime": 
+                return new File(SAMPLE_FILES_ROOT, "sample.p7m");
+            case "application/postscript": 
+                return new File(SAMPLE_FILES_ROOT, "sample.ps");
+            case "video/x-ms-wmv": 
+                return new File(SAMPLE_FILES_ROOT, "sample.wmv");
+            case "application/vnd.ms-powerpoint": 
+                return new File(SAMPLE_FILES_ROOT, "sample.ppt");
+            case "application/csv": 
+                return new File(SAMPLE_FILES_ROOT, "sample.csv");
+            case "application/vnd.ms-excel.sheet.macroenabled.12": 
+                return new File(SAMPLE_FILES_ROOT, "sample.xlsm");
+            case "application/x-msdownload": 
+                return new File(SAMPLE_FILES_ROOT, "sample.exe");
+            case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": 
+                return new File(SAMPLE_FILES_ROOT, "sample.xlsx");
+            case "audio/mp3": 
+                return new File(SAMPLE_FILES_ROOT, "sample.mp3");
+            case "video/x-msvideo": 
+                return new File(SAMPLE_FILES_ROOT, "sample.avi");
+            case "video/3gpp": 
+                return new File(SAMPLE_FILES_ROOT, "sample.3gp");
+            case "video/avi": 
+                return new File(SAMPLE_FILES_ROOT, "sample_video.avi");
+            case "image/x-png": 
+                return new File(SAMPLE_FILES_ROOT, "sample.png");
+            case "application/vnd.oasis.opendocument.spreadsheet": 
+                return new File(SAMPLE_FILES_ROOT, "sample.ods");
+            default: 
+                return null; // will create empty placeholder
+        }
+    }
+}
