@@ -1,149 +1,465 @@
-import java.io.*;
-import java.nio.file.*;
-import java.util.*;
+package com.data;
 
-import com.opencsv.CSVParserBuilder;
-import com.opencsv.CSVReader;
-import com.opencsv.CSVReaderBuilder;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVPrinter;
+import org.apache.commons.csv.CSVRecord;
+import org.apache.commons.csv.QuoteMode;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.config.Configurator;
 
-public class FolderStructureCreator {
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Properties;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
-    private static final String SOURCE_ROOT = "D:\\wawa\\Source";
-    private static final String SAMPLE_FILES_ROOT = "D:\\wawa\\mime_type_samples";
-
-    public static void main(String[] args) throws Exception {
-        File sourceDir = new File(SOURCE_ROOT);
-        System.out.println("🔍 Scanning source directory: " + SOURCE_ROOT);
-
-        // Loop through each category folder
-        for (File categoryFolder : sourceDir.listFiles(File::isDirectory)) {
-            System.out.println("\n📂 Entering category folder: " + categoryFolder.getName());
-
-            File[] csvFiles = categoryFolder.listFiles((dir, name) -> name.toLowerCase().endsWith(".csv"));
-            if (csvFiles == null || csvFiles.length == 0) {
-                System.out.println("⚠️ No CSV files found in " + categoryFolder.getName());
-                continue;
-            }
-
-            for (File csvFile : csvFiles) {
-                System.out.println("➡️ Processing CSV: " + csvFile.getName());
-                processCsvFile(csvFile, categoryFolder);
-            }
+public class App {
+    public static void main(String[] args) {
+        try {
+            ToolConfig config = ToolConfigLoader.load();
+            LogSetup.initialize(config);
+            CsvProcessor processor = new CsvProcessor(config);
+            processor.process();
+        } catch (Exception e) {
+            e.printStackTrace();
+            System.exit(1);
         }
-
-        System.out.println("\n✅ Completed processing all category folders.");
     }
 
-    private static void processCsvFile(File csvFile, File categoryFolder) throws Exception {
-        String csvBaseName = csvFile.getName().replace(".csv", "");
-        File outputBaseFolder = new File(categoryFolder, csvBaseName);
+    // ------------------------ Nested classes below ------------------------
 
-        if (!outputBaseFolder.exists()) {
-            boolean created = outputBaseFolder.mkdirs();
-            System.out.println("📁 Created output base folder: " + outputBaseFolder.getAbsolutePath() + " -> " + created);
-        } else {
-            System.out.println("📁 Output base folder already exists: " + outputBaseFolder.getAbsolutePath());
+    static class ToolConfig {
+        public final Path sourceRoot;
+        public final Path archiveRoot;
+        public final Path convertedRoot;
+        public final Path inprocessRoot;
+        public final Path configFile;
+        public final boolean recursive;
+        public final boolean replaceFullPath; // if true, use targetFullPath; else replace only last segment using targetFileName
+        public final String targetFullPath;   // used when replaceFullPath=true
+        public final boolean overrideDirectory; // if true, replace only directory path
+        public final String targetDirectory;    // used when overrideDirectory=true
+        public final String targetFileName;   // used when replaceFullPath=false
+        public final String targetMimeType;
+        public final boolean inPlace; // if false, write to convertedRoot
+        public final boolean createBackup; // legacy; normally false now
+        public final boolean moveOriginalsToArchive;
+        public final int threadCount;
+
+        public ToolConfig(
+                Path sourceRoot,
+                Path archiveRoot,
+                Path convertedRoot,
+                Path inprocessRoot,
+                Path configFile,
+                boolean recursive,
+                boolean replaceFullPath,
+                String targetFullPath,
+                boolean overrideDirectory,
+                String targetDirectory,
+                String targetFileName,
+                String targetMimeType,
+                boolean inPlace,
+                boolean createBackup,
+                boolean moveOriginalsToArchive,
+                int threadCount) {
+            this.sourceRoot = sourceRoot;
+            this.archiveRoot = archiveRoot;
+            this.convertedRoot = convertedRoot;
+            this.inprocessRoot = inprocessRoot;
+            this.configFile = configFile;
+            this.recursive = recursive;
+            this.replaceFullPath = replaceFullPath;
+            this.targetFullPath = targetFullPath;
+            this.overrideDirectory = overrideDirectory;
+            this.targetDirectory = targetDirectory;
+            this.targetFileName = targetFileName;
+            this.targetMimeType = targetMimeType;
+            this.inPlace = inPlace;
+            this.createBackup = createBackup;
+            this.moveOriginalsToArchive = moveOriginalsToArchive;
+            this.threadCount = threadCount;
+        }
+    }
+
+    static class ToolConfigLoader {
+        private static final String DEFAULT_CONFIG_PATH = "D:/Rameshwar/wawa/Config/config.properties";
+
+        public static ToolConfig load() throws IOException {
+            String configPathEnv = System.getProperty("config.path", System.getenv("CONFIG_PATH"));
+            String cfgPath = configPathEnv != null && !configPathEnv.isBlank() ? configPathEnv : DEFAULT_CONFIG_PATH;
+
+            Properties p = new Properties();
+            try (FileInputStream fis = new FileInputStream(cfgPath)) {
+                p.load(fis);
+            }
+
+            Path sourceRoot = Paths.get(req(p, "source.root", "D:/Rameshwar/wawa/source"));
+            Path archiveRoot = Paths.get(req(p, "archive.root", "D:/Rameshwar/wawa/archive"));
+            Path convertedRoot = Paths.get(req(p, "converted.root", "D:/Rameshwar/wawa/converted"));
+            Path inprocessRoot = Paths.get(req(p, "inprocess.root", "D:/Rameshwar/wawa/inprocess"));
+            boolean recursive = getBool(p, "scan.recursive", true);
+            boolean replaceFullPath = getBool(p, "path.replace.full", false);
+            String targetFullPath = p.getProperty("path.target.full", "");
+            boolean overrideDirectory = getBool(p, "path.override.directory", false);
+            String targetDirectory = p.getProperty("path.target.directory", "");
+            String targetFileName = p.getProperty("path.target.filename", "target.pdf");
+            String targetMimeType = req(p, "mimetype.target", "application/pdf");
+            boolean inPlace = getBool(p, "write.in.place", false);
+            boolean createBackup = getBool(p, "write.backup", false);
+            boolean moveOriginalsToArchive = getBool(p, "archive.move.originals", true);
+            int threads = getInt(p, "threads", Math.max(2, Runtime.getRuntime().availableProcessors()));
+
+            return new ToolConfig(
+                    sourceRoot,
+                    archiveRoot,
+                    convertedRoot,
+                    inprocessRoot,
+                    Paths.get(cfgPath),
+                    recursive,
+                    replaceFullPath,
+                    targetFullPath,
+                    overrideDirectory,
+                    targetDirectory,
+                    targetFileName,
+                    targetMimeType,
+                    inPlace,
+                    createBackup,
+                    moveOriginalsToArchive,
+                    threads
+            );
         }
 
-        // OpenCSV with quote/escape handling
-        try (CSVReader reader = new CSVReaderBuilder(new FileReader(csvFile))
-                .withCSVParser(new CSVParserBuilder()
-                    .withSeparator(',')
-                    .withQuoteChar('"')
-                    .withEscapeChar('\\')
-                    .build())
-                .build()) {
-            // read header and rows here
-        
-
-            String[] header = reader.readNext();
-            if (header == null) {
-                System.out.println("⚠️ Empty CSV: " + csvFile.getName());
-                return;
+        private static String req(Properties p, String key, String defaultValue) {
+            String v = p.getProperty(key);
+            if (v == null || v.isBlank()) {
+                return defaultValue;
             }
+            return v;
+        }
 
-            Map<String, Integer> colIndex = new HashMap<>();
-            for (int i = 0; i < header.length; i++) {
-                colIndex.put(header[i], i);
-            }
+        private static boolean getBool(Properties p, String key, boolean defaultVal) {
+            String v = p.getProperty(key);
+            if (v == null) return defaultVal;
+            return v.equalsIgnoreCase("true") || v.equalsIgnoreCase("yes") || v.equals("1");
+        }
 
-            System.out.println("📝 CSV Headers: " + Arrays.toString(header));
+        private static int getInt(Properties p, String key, int defaultVal) {
+            String v = p.getProperty(key);
+            if (v == null || v.isBlank()) return defaultVal;
+            try { return Integer.parseInt(v.trim()); } catch (NumberFormatException e) { return defaultVal; }
+        }
+    }
 
-            String[] row;
-            int rowCount = 0;
-            while ((row = reader.readNext()) != null) {
-                rowCount++;
-
-                // Guard for rows with fewer columns than expected
-                if (row.length <= colIndex.get("doc_filepath") || row.length <= colIndex.get("mimetype")) {
-                    System.out.println("⚠️ Skipping row " + rowCount + " - not enough columns (" + row.length + " present)");
-                    continue;
+    static class LogSetup {
+        public static void initialize(ToolConfig config) throws IOException {
+            Path configDir = config.configFile.getParent();
+            if (configDir != null) {
+                Files.createDirectories(configDir);
+                Files.createDirectories(configDir.resolve("logs"));
+                Path log4j2 = configDir.resolve("log4j2.xml");
+                if (Files.notExists(log4j2)) {
+                    String xml = defaultXml(configDir.resolve("logs").toString().replace('\\','/'));
+                    Files.writeString(log4j2, xml);
                 }
+                System.setProperty("log4j.configurationFile", log4j2.toAbsolutePath().toString());
+                Configurator.initialize(null, log4j2.toAbsolutePath().toString());
+            }
+        }
 
-                String docPath = row[colIndex.get("doc_filepath")];
-                String mimeType = row[colIndex.get("mimetype")];
+        private static String defaultXml(String logsDir) {
+            return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
+                    "<Configuration status=\"WARN\">\n" +
+                    "  <Appenders>\n" +
+                    "    <Console name=\"Console\" target=\"SYSTEM_OUT\">\n" +
+                    "      <PatternLayout pattern=\"%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%t] %logger - %msg%n\"/>\n" +
+                    "    </Console>\n" +
+                    "    <RollingFile name=\"File\" fileName=\"" + logsDir + "/tool.log\" filePattern=\"" + logsDir + "/tool-%d{yyyy-MM-dd}.log.gz\">\n" +
+                    "      <PatternLayout pattern=\"%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%t] %logger - %msg%n\"/>\n" +
+                    "      <Policies><TimeBasedTriggeringPolicy interval=\"1\"/></Policies>\n" +
+                    "    </RollingFile>\n" +
+                    "  </Appenders>\n" +
+                    "  <Loggers>\n" +
+                    "    <Root level=\"info\">\n" +
+                    "      <AppenderRef ref=\"Console\"/>\n" +
+                    "      <AppenderRef ref=\"File\"/>\n" +
+                    "    </Root>\n" +
+                    "  </Loggers>\n" +
+                    "</Configuration>\n";
+        }
+    }
 
-                // Build final file path under the new folder
-                File finalFile = new File(outputBaseFolder, docPath);
-                finalFile.getParentFile().mkdirs();
+    static class CsvProcessor {
+        private final ToolConfig config;
+        private final ObjectMapper objectMapper = new ObjectMapper();
+        private static final Logger log = LogManager.getLogger(CsvProcessor.class);
 
-                System.out.println("   ➡️ Row " + rowCount + ": Creating file for path = " + docPath + " | mimetype = " + mimeType);
+        public CsvProcessor(ToolConfig config) {
+            this.config = config;
+        }
 
-                // Pick sample file for this MIME type
-                File sampleFile = getSampleFileForMimeType(mimeType);
-                if (sampleFile != null && sampleFile.exists()) {
-                    Files.copy(sampleFile.toPath(), finalFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                    System.out.println("      ✅ Copied sample file: " + sampleFile.getName() + " -> " + finalFile.getAbsolutePath());
+        public void process() throws IOException {
+            Files.createDirectories(config.convertedRoot);
+            Files.createDirectories(config.archiveRoot);
+            Files.createDirectories(config.inprocessRoot);
+            List<Path> csvFiles = findCsvFiles();
+
+            log.info("Discovered {} CSV file(s) to process from {}", csvFiles.size(), config.sourceRoot);
+            ExecutorService pool = Executors.newFixedThreadPool(Math.max(1, config.threadCount));
+            final int total = csvFiles.size();
+            final int[] success = {0};
+            final int[] failed = {0};
+            for (Path csv : csvFiles) {
+                pool.submit(() -> {
+                    try {
+                        Path staged = stageToInprocess(csv);
+                        log.info("[STAGED] {} -> {}", csv, staged);
+                        processCsv(staged);
+                        log.info("[DONE] {}", staged);
+                        synchronized (success) { success[0]++; }
+                    } catch (Exception ex) {
+                        log.error("[FAILED] {} - {}", csv, ex.toString(), ex);
+                        synchronized (failed) { failed[0]++; }
+                    }
+                });
+            }
+            pool.shutdown();
+            try {
+                pool.awaitTermination(7, TimeUnit.DAYS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            log.info("Processing summary: total={}, success={}, failed={}", total, success[0], failed[0]);
+        }
+
+        private List<Path> findCsvFiles() throws IOException {
+            List<Path> result = new ArrayList<>();
+            if (config.recursive) {
+                Files.walk(config.sourceRoot)
+                        .filter(p -> Files.isRegularFile(p) && p.toString().toLowerCase(Locale.ROOT).endsWith(".csv"))
+                        .forEach(result::add);
+            } else {
+                Files.list(config.sourceRoot)
+                        .filter(p -> Files.isRegularFile(p) && p.toString().toLowerCase(Locale.ROOT).endsWith(".csv"))
+                        .forEach(result::add);
+            }
+            return result;
+        }
+
+        private void processCsv(Path csvPath) throws IOException {
+            CSVFormat format = CSVFormat.DEFAULT.builder().setHeader().setSkipHeaderRecord(true).build();
+
+            List<Object[]> rows = new ArrayList<>();
+            List<String> headers;
+            try (CSVParser parser = CSVParser.parse(new InputStreamReader(new FileInputStream(csvPath.toFile()), StandardCharsets.UTF_8), format)) {
+                headers = parser.getHeaderNames();
+                log.debug("Headers for {}: {}", csvPath, headers);
+                for (CSVRecord r : parser) {
+                    String docFilePath = get(r, "doc_filepath");
+                    String metadataJson = get(r, "metadata_json");
+
+                    String updatedDocPath = updateDocPath(docFilePath);
+                    String updatedMime = config.targetMimeType;
+                    String updatedMetadata = updateMetadataJson(metadataJson, updatedMime, updatedDocPath);
+
+                    Object[] row = new Object[headers.size()];
+                    for (int i = 0; i < headers.size(); i++) {
+                        String h = headers.get(i);
+                        if (equalsIgnoreCase(h, "doc_filepath")) {
+                            row[i] = updatedDocPath;
+                        } else if (equalsIgnoreCase(h, "mimetype")) {
+                            row[i] = updatedMime;
+                        } else if (equalsIgnoreCase(h, "metadata_json")) {
+                            row[i] = updatedMetadata;
+                        } else if (isUnquotedNumericColumn(h)) {
+                            row[i] = parseNumberSafe(r.get(h));
+                        } else {
+                            row[i] = r.get(h);
+                        }
+                    }
+                    rows.add(row);
+                }
+            }
+
+            // write converted file to convertedRoot, preserving relative path under sourceRoot or inprocess
+            Path relative = relativeUnderSource(csvPath);
+            Path outPath = config.convertedRoot.resolve(relative);
+            Files.createDirectories(outPath.getParent());
+            writeCsv(outPath, headers, rows);
+
+            // move original to archive (no .bak creation) if configured and not inPlace overwrite
+            if (config.moveOriginalsToArchive) {
+                Path archivePath = config.archiveRoot.resolve(relative);
+                moveTo(csvPath, archivePath);
+                log.info("[ARCHIVED] {} -> {}", csvPath, archivePath);
+            } else {
+                try {
+                    Files.deleteIfExists(csvPath);
+                    log.info("[REMOVED INPROCESS] {}", csvPath);
+                } catch (IOException ex) {
+                    log.warn("Could not remove inprocess file {}: {}", csvPath, ex.toString());
+                }
+            }
+        }
+
+        private Path stageToInprocess(Path csv) throws IOException {
+            Path relative = relativeUnderSource(csv);
+            Path staged = config.inprocessRoot.resolve(relative);
+            Files.createDirectories(staged.getParent());
+            // Move atomically if possible so only one thread claims it
+            Files.move(csv, staged, StandardCopyOption.REPLACE_EXISTING);
+            return staged;
+        }
+
+        private Path relativeUnderSource(Path path) {
+            Path p = path.toAbsolutePath().normalize();
+            Path inproc = config.inprocessRoot.toAbsolutePath().normalize();
+            Path src = config.sourceRoot.toAbsolutePath().normalize();
+            if (p.startsWith(inproc)) return inproc.relativize(p);
+            if (p.startsWith(src)) return src.relativize(p);
+            return path.getFileName();
+        }
+
+        // removed unused helper to avoid warnings
+
+        private static boolean equalsIgnoreCase(String a, String b) {
+            return a != null && a.equalsIgnoreCase(b);
+        }
+
+        private String get(CSVRecord r, String key) {
+            try {
+                return r.get(key);
+            } catch (IllegalArgumentException e) {
+                // allow case variations
+                for (String h : r.getParser().getHeaderNames()) {
+                    if (h.equalsIgnoreCase(key)) return r.get(h);
+                }
+                throw e;
+            }
+        }
+
+        private String updateDocPath(String original) {
+            if (original == null) return original;
+            if (config.replaceFullPath && config.targetFullPath != null && !config.targetFullPath.isBlank()) {
+                return normalizeSeparators(config.targetFullPath);
+            }
+            String normalized = normalizeSeparators(original);
+            int lastSlash = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+            String dir = lastSlash >= 0 ? normalized.substring(0, lastSlash + 1) : "";
+            String finalDir = dir;
+            if (config.overrideDirectory && config.targetDirectory != null && !config.targetDirectory.isBlank()) {
+                String td = normalizeSeparators(config.targetDirectory);
+                if (!td.endsWith("/")) td = td + "/";
+                finalDir = td;
+            }
+            String fileName = config.targetFileName;
+            return finalDir + fileName;
+        }
+
+        private String updateMetadataJson(String json, String targetMime, String docPath) throws IOException {
+            if (json == null || json.isBlank()) return json;
+            JsonNode node = objectMapper.readTree(json);
+            if (node instanceof ObjectNode obj) {
+                // update legacy snake_case keys if present; else fall back to camelCase
+                if (obj.has("mime_type")) {
+                    obj.put("mime_type", targetMime);
                 } else {
-                    Files.write(finalFile.toPath(), new byte[0]);
-                    System.out.println("      ⚠️ No sample file found for mimetype: " + mimeType + ". Created empty placeholder.");
+                    obj.put("mimeType", targetMime);
+                }
+                String displayName = extractFileName(docPath);
+                if (obj.has("display_name")) {
+                    obj.put("display_name", displayName);
+                } else {
+                    obj.put("displayName", displayName);
+                }
+                return objectMapper.writeValueAsString(obj);
+            }
+            return json;
+        }
+
+        private static String extractFileName(String path) {
+            if (path == null) return null;
+            String normalized = normalizeSeparators(path);
+            int lastSlash = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+            return lastSlash >= 0 ? normalized.substring(lastSlash + 1) : normalized;
+        }
+
+        private static String normalizeSeparators(String p) {
+            if (p == null) return null;
+            // keep existing style but normalize mixed cases
+            return p.replace('\\', '/');
+        }
+
+        private void writeCsv(Path csvPath, List<String> headers, List<Object[]> rows) throws IOException {
+            File tempFile = File.createTempFile("csvproc-", ".csv");
+            CSVFormat outFormat = CSVFormat.DEFAULT.builder()
+                    .setHeader(headers.toArray(new String[0]))
+                    .setQuote('"')
+                    .setQuoteMode(QuoteMode.NON_NUMERIC)
+                    .build();
+            try (BufferedWriter writer = Files.newBufferedWriter(tempFile.toPath(), StandardCharsets.UTF_8);
+                 CSVPrinter printer = new CSVPrinter(writer, outFormat)) {
+                for (Object[] row : rows) {
+                    printer.printRecord((Object[]) row);
                 }
             }
-
-            System.out.println("📊 Finished processing CSV: " + csvFile.getName() + " | Rows processed: " + rowCount);
+            // overwrite original
+            Files.move(tempFile.toPath(), csvPath, StandardCopyOption.REPLACE_EXISTING);
         }
-    }
 
-    private static File getSampleFileForMimeType(String mimeType) {
-        switch (mimeType.toLowerCase()) {
-            case "application/pdf": 
-                return new File(SAMPLE_FILES_ROOT, "sample.pdf");
-            case "text/html": 
-                return new File(SAMPLE_FILES_ROOT, "sample.html");
-            case "application/x-zip-compressed": 
-                return new File(SAMPLE_FILES_ROOT, "sample.zip");
-            case "audio/x-m4a": 
-                return new File(SAMPLE_FILES_ROOT, "sample.m4a");
-            case "application/pkcs7-mime": 
-                return new File(SAMPLE_FILES_ROOT, "sample.p7m");
-            case "application/postscript": 
-                return new File(SAMPLE_FILES_ROOT, "sample.ps");
-            case "video/x-ms-wmv": 
-                return new File(SAMPLE_FILES_ROOT, "sample.wmv");
-            case "application/vnd.ms-powerpoint": 
-                return new File(SAMPLE_FILES_ROOT, "sample.ppt");
-            case "application/csv": 
-                return new File(SAMPLE_FILES_ROOT, "sample.csv");
-            case "application/vnd.ms-excel.sheet.macroenabled.12": 
-                return new File(SAMPLE_FILES_ROOT, "sample.xlsm");
-            case "application/x-msdownload": 
-                return new File(SAMPLE_FILES_ROOT, "sample.exe");
-            case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": 
-                return new File(SAMPLE_FILES_ROOT, "sample.xlsx");
-            case "audio/mp3": 
-                return new File(SAMPLE_FILES_ROOT, "sample.mp3");
-            case "video/x-msvideo": 
-                return new File(SAMPLE_FILES_ROOT, "sample.avi");
-            case "video/3gpp": 
-                return new File(SAMPLE_FILES_ROOT, "sample.3gp");
-            case "video/avi": 
-                return new File(SAMPLE_FILES_ROOT, "sample_video.avi");
-            case "image/x-png": 
-                return new File(SAMPLE_FILES_ROOT, "sample.png");
-            case "application/vnd.oasis.opendocument.spreadsheet": 
-                return new File(SAMPLE_FILES_ROOT, "sample.ods");
-            default: 
-                return null; // will create empty placeholder
+        private void moveTo(Path source, Path target) throws IOException {
+            Files.createDirectories(target.getParent());
+            try {
+                Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException moveEx) {
+                log.warn("Move failed, attempting copy+delete: {} -> {} : {}", source, target, moveEx.toString());
+                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+                try {
+                    Files.deleteIfExists(source);
+                } catch (IOException delEx) {
+                    log.error("Delete after copy failed for {}: {}", source, delEx.toString(), delEx);
+                }
+            }
+        }
+
+        private static boolean isUnquotedNumericColumn(String header) {
+            return header != null && (
+                    header.equalsIgnoreCase("wdr_id") ||
+                    header.equalsIgnoreCase("filesize") ||
+                    header.equalsIgnoreCase("archiveid")
+            );
+        }
+
+        private static Object parseNumberSafe(String text) {
+            if (text == null) return null;
+            String trimmed = text.trim();
+            if (trimmed.isEmpty()) return text;
+            // Only plain integers are expected for these columns
+            if (trimmed.matches("-?\\d+")) {
+                try {
+                    return Long.parseLong(trimmed);
+                } catch (NumberFormatException ex) {
+                    return trimmed; // fallback to string
+                }
+            }
+            return text;
         }
     }
 }
