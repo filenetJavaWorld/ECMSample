@@ -1,24 +1,54 @@
-<!-- Logging with Log4j2 -->
-    <dependency>
-      <groupId>org.apache.logging.log4j</groupId>
-      <artifactId>log4j-api</artifactId>
-      <version>2.23.1</version>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.logging.log4j</groupId>
-      <artifactId>log4j-core</artifactId>
-      <version>2.23.1</version>
-    </dependency>
-    <!-- CSV parsing -->
-    <dependency>
-      <groupId>org.apache.commons</groupId>
-      <artifactId>commons-csv</artifactId>
-      <version>1.11.0</version>
-    </dependency>
+# Paths
+source.root=D:/Rameshwar/wawa/source
+archive.root=D:/Rameshwar/wawa/archive
+converted.root=D:/Rameshwar/wawa/converted
+inprocess.root=D:/Rameshwar/wawa/inprocess
 
-    <!-- Jackson for JSON processing -->
-    <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-databind</artifactId>
-      <version>2.17.2</version>
-    </dependency>
+# Scanning
+scan.recursive=true
+
+# Path update mode
+# A) keep directory, change only filename:
+path.replace.full=false
+path.target.filename=target.pdf
+# B) replace entire path for every row:
+# path.replace.full=true
+# path.target.full=D:/fixed/location/target.pdf
+
+# MIME type to set everywhere
+mimetype.target=application/pdf
+
+# Output behavior
+write.in.place=false
+write.backup=false
+archive.move.originals=true
+
+# Concurrency
+threads=4
+
+# Or: replace only the directory, keep filename
+path.override.directory=false
+path.target.directory=D:/docrepo/claimcenter
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="Console" target="SYSTEM_OUT">
+      <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%t] %logger - %msg%n"/>
+    </Console>
+    <RollingFile name="File" fileName="D:/Rameshwar/wawa/Config/logs/tool.log" filePattern="D:/Rameshwar/wawa/Config/logs/tool-%d{yyyy-MM-dd}.log.gz">
+      <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%t] %logger - %msg%n"/>
+      <Policies><TimeBasedTriggeringPolicy interval="1"/></Policies>
+    </RollingFile>
+  </Appenders>
+  <Loggers>
+    <Root level="info">
+      <AppenderRef ref="Console"/>
+      <AppenderRef ref="File"/>
+    </Root>
+  </Loggers>
+</Configuration>
+
+
+
