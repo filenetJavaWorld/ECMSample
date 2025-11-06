@@ -1,54 +1,1829 @@
-# Paths
-source.root=D:/Rameshwar/wawa/source
-archive.root=D:/Rameshwar/wawa/archive
-converted.root=D:/Rameshwar/wawa/converted
-inprocess.root=D:/Rameshwar/wawa/inprocess
+package com.sample.editor;
 
-# Scanning
-scan.recursive=true
+import java.util.Locale;
 
-# Path update mode
-# A) keep directory, change only filename:
-path.replace.full=false
-path.target.filename=target.pdf
-# B) replace entire path for every row:
-# path.replace.full=true
-# path.target.full=D:/fixed/location/target.pdf
+import javax.servlet.http.HttpServletRequest;
 
-# MIME type to set everywhere
-mimetype.target=application/pdf
+import com.ibm.ecm.extension.Plugin;
+import com.ibm.ecm.extension.PluginAction;
+import com.ibm.ecm.extension.PluginFeature;
+import com.ibm.ecm.extension.PluginLayout;
+import com.ibm.ecm.extension.PluginMenu;
+import com.ibm.ecm.extension.PluginMenuType;
+import com.ibm.ecm.extension.PluginODAuthenticationService;
+import com.ibm.ecm.extension.PluginOpenAction;
+import com.ibm.ecm.extension.PluginRequestFilter;
+import com.ibm.ecm.extension.PluginResponseFilter;
+import com.ibm.ecm.extension.PluginService;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.ecm.extension.PluginViewerDef;
+import com.ibm.ecm.extension.PluginRepositoryType;
+import com.ibm.ecm.extension.PluginAPI;
 
-# Output behavior
-write.in.place=false
-write.backup=false
-archive.move.originals=true
+/**
+ * Provides the main class of an IBM Content Navigator plug-in. The abstract
+ * methods provide the name and version of the plug-in, and identify the
+ * components such as actions, services, and scripts that are included in the
+ * plug-in. The name of the <code>Plugin</code> subclass is specified in the
+ * plug-in JAR file by using the following property in the manifest:
+ * 
+ * <pre>
+ *     Plugin-Class: <i>pluginClassName</i>
+ * </pre>
+ * 
+ * The location of the plug-in JAR file is specified in the IBM Content
+ * Navigator <code>AppConfig.xml</code> file. An administrator can edit this
+ * file by adding the plug-in to the IBM Content Navigator configuration by
+ * using the IBM Content Navigator administration tool.
+ * <p>
+ */
+public class CustomEditorPlugin extends Plugin {
 
-# Concurrency
-threads=4
+	private PluginAction[] pluginActions = new PluginAction[0];
+	private PluginOpenAction[]  pluginOpenActions = new PluginOpenAction[0];
+	private PluginRequestFilter[] pluginRequestFilters = new PluginRequestFilter[0];
+	private PluginResponseFilter[] pluginResponseFilters = new PluginResponseFilter[0];
+	private PluginService[] pluginServices = new PluginService[0];
+	private PluginODAuthenticationService odAuthenticationService = null;
+	private PluginViewerDef[] pluginViewerDefs = new PluginViewerDef[0];
+	private PluginLayout[] pluginLayouts = new PluginLayout[0];
+	private PluginFeature[] pluginFeatures = new PluginFeature[0];
+	private PluginMenuType[] pluginMenuTypes = new PluginMenuType[0];
+	private PluginMenu[] pluginMenus = new PluginMenu[0];
+	private PluginRepositoryType[] pluginRepositoryTypes = new PluginRepositoryType[0];
+	private PluginAPI[] pluginAPIs = new PluginAPI[0];
 
-# Or: replace only the directory, keep filename
-path.override.directory=false
-path.target.directory=D:/docrepo/claimcenter
+	/**
+	 * Initializes this plug-in in the web client. A plug-in can perform
+	 * initialization that would be shared for all users of the application in
+	 * the method. This method differs from the constructor because this method
+	 * is called only when the plug-in is used within the web application. This
+	 * method is invoked when the application is initializing. This is an optional 
+	 * method and may be removed from the plug-in if no applicationInit is required.
+	 */
+	public void applicationInit(HttpServletRequest request, PluginServiceCallbacks callbacks) throws Exception {
+	}
+
+	/**
+	 * Provides an identifier for the plug-in.
+	 * <p>
+	 * <strong>Important:</strong> This identifier is used in path names and
+	 * URLs so it must contain only alphanumeric characters.
+	 * </p>
+	 */
+	public String getId() {
+		return "CustomEditorPlugin";
+	}
+
+	/**
+	 * Provides a descriptive name for this plug-in. The name identifies the
+	 * plug-in in the IBM Content Navigator administration tool
+	 * 
+	 * @parm locale The locale currently in use. The name should be returned in
+	 *       the language for this locale if it is translated.
+	 */
+	public String getName(Locale locale) {
+		return "CustomEditorPlugin";
+	}
+
+	/**
+	 * Provides a version indicator for this plug-in. The version information is
+	 * displayed in the administration tool to help the administrator validate
+	 * the version of the plug-in that is being used. The plug-in writer needs
+	 * to update this indicator when redistributing a modified version of the
+	 * plug-in.
+	 * 
+	 * @return A <code>String</code> representation of the version indicator for
+	 *         the plug-in.
+	 */
+	public String getVersion() {
+		return "2.0.3";
+	}
+
+	/**
+	 * Provides the copyright license for this plug-in. The information is
+	 * displayed in the About dialog Plugins tab. The license is provided by the
+	 * plugin creator. This is an optional method and may be removed from the plug-in
+	 * if no copyright is specified.
+	 * 
+	 * @return A <code>String</code> representation of the license for the
+	 *         plug-in.
+	 * @since 2.0.2
+	 */
+	public String getCopyright() {
+		return "Optionally add a Copyright statement here";
+	}
+
+	/**
+	 * Returns the name of a JavaScript file provided by this plug-in. This file
+	 * is downloaded to the web browser during the initialization of the web
+	 * client, before login. A script can be used to perform customization that
+	 * cannot be performed by other extension mechanisms, such as features or
+	 * layouts. However, it is preferable to use these other extension
+	 * mechanisms to provide more flexibility to the administrator when
+	 * configuring desktops.
+	 */
+	public String getScript() {
+		return "CustomEditorPlugin.js";
+	}
+
+	/**
+	 * Returns the name of a debug version of the JavaScript file provided by
+	 * getScript(). The default implementation invokes getScript().
+	 * 
+	 * @since 2.0.2
+	 */
+	public String getDebugScript() {
+		return getScript();
+	}
+
+	/**
+	 * Returns the name of a Dojo module or widget that is contained in the
+	 * resources for this plug-in. IBM Content Navigator performs the necessary
+	 * <code>dojo.registerModulePath</code> mapping to allow modules or widgets
+	 * with mapped path names to be loaded by using the
+	 * <code>dojo.require</code> method. A specified module can be the directory
+	 * or package name for a set of Dojo modules or widgets.
+	 */
+	public String getDojoModule() {
+		return "customEditorPluginDojo";
+	}
+
+	/**
+	 * Returns the name of a CSS file that contains styles for this plug-in. IBM
+	 * Content Navigator generates the necessary style tag to pull in this file
+	 * when IBM Content Navigator loads the plug-in.
+	 */
+	public String getCSSFileName() {
+		return "CustomEditorPlugin.css";
+	}
+
+	/**
+	 * Returns a debug version of the CSS file returned by getCSSFileName. The
+	 * default implementation invokes getCSSFileName.
+	 * 
+	 * @since 2.0.2
+	 * @return
+	 */
+	public String getDebugCSSFileName() {
+		return getCSSFileName();
+	}
+		
+	/**
+	 * Returns the name of a Dojo <code>dijit</code> class that provides a
+	 * configuration interface widget for this plug-in. The widget must extend
+	 * the <code>ecm.widget.admin.PluginConfigurationPane</code> widget. An
+	 * instance of the widget is created and displayed in the IBM Content
+	 * Navigator administration tool for configuration that is specific to the
+	 * plug-in.
+	 * <p>
+	 * Refer to the documentation on
+	 * {@link ecm.widget.admin.PluginConfigurationPane PluginConfigurationPane}
+	 * for more information on what is required for a plug-in configuration user
+	 * interface.
+	 * </p>
+	 */
+	public String getConfigurationDijitClass() {
+		return "customEditorPluginDojo.ConfigurationPane";
+	}
+
+	/**
+	 * Provides a list of actions that this plug-in adds to the main toolbar of
+	 * the web client.
+	 * 
+	 * @return An array of
+	 *         <code>{@link com.ibm.ecm.extension.PluginAction PluginAction}</code>
+	 *         objects. The plug-in should return the same set of objects on
+	 *         every call.
+	 */
+	public PluginAction[] getActions() {
+		return pluginActions;
+	}
+
+	/**
+	 * Provides a list of open actions that this plug-in provides for supported
+	 * items.
+	 * 
+	 * @since 2.0.2
+	 * @return An array of
+	 *         <code>{@link com.ibm.ecm.extension.PluginOpenAction PluginOpenAction}</code>
+	 *         objects. The plug-in should return the same set of objects on
+	 *         every call.
+	 */
+	public PluginOpenAction[] getOpenActions() {
+		return pluginOpenActions;
+	}
+
+	/**
+	 * Provides a list of filters that are run before a requested service. This
+	 * method can be used to modify the request or block the request.
+	 * 
+	 * @return An array of
+	 *         <code>{@link com.ibm.ecm.extension.PluginRequestFilter PluginRequestFilter}</code>
+	 *         objects.
+	 */
+	public PluginRequestFilter[] getRequestFilters() {
+		return pluginRequestFilters;
+	}
+
+	/**
+	 * Provides a list of filters that are run after a requested service. This
+	 * list of filters can be used to modify the response that is returned.
+	 * 
+	 * @return An array of
+	 *         <code>{@link com.ibm.ecm.extension.PluginResponseFilter PluginResponseFilter}</code>
+	 *         objects.
+	 */
+	public PluginResponseFilter[] getResponseFilters() {
+		if (pluginResponseFilters.length == 0) {
+			pluginResponseFilters = new PluginResponseFilter[] {new com.sample.editor.filters.SamplePluginOpenClassResponseFilter()};
+		}
+		return pluginResponseFilters;
+	}
+
+	/**
+	 * Provides a custom service used for Content Manager OnDemand single
+	 * sign-on (SSO). This is an optional service that will be called when SSO
+	 * is enabled on a Content Manager OnDemand server. The result of the
+	 * service will be the information passed through the Content Manager
+	 * OnDemand Web Enablement Kit "passThru" API.
+	 * 
+	 * @since 2.0.2
+	 * @return A {@link com.ibm.ecm.extension.PluginODAuthenticationService
+	 *         PluginODAuthenticationService} object used as an authentication
+	 *         exit for Content Manager OnDemand single sign-on.
+	 */
+	public PluginODAuthenticationService getODAuthenticationService() {
+		return odAuthenticationService;
+	}
+
+	/**
+	 * Provides a list of viewers that are provided by this plug-in. The viewers
+	 * become available in the viewer configuration area of the IBM Content
+	 * Navigator administration tool. The viewers can be mapped to be used to
+	 * view certain document types.
+	 * <p>
+	 * <strong>Note:</strong> Typically, a plug-in does not define multiple
+	 * viewers. However, this method can be used to provide multiple
+	 * configurations of the same viewer, such as a view-only version and an
+	 * editing mode version of the same viewer.
+	 * </p>
+	 * 
+	 * @return An array of {@link ecm.widget.admin.PluginViewerDef
+	 *         PluginViewerDef} objects describing the viewers provided by the
+	 *         plug-in.
+	 */
+	public PluginViewerDef[] getViewers() {
+		return pluginViewerDefs;
+	}
+
+	/**
+	 * Specifies one or more custom layouts that are provided by this plug-in.
+	 * Custom layouts can display the features and other user interface
+	 * components of IBM Content Navigator in a different arrangement. The IBM
+	 * Content Navigator administration tool is used to select the layout to use
+	 * for a desktop.
+	 * 
+	 * @return An array of plug-in layout objects.
+	 */
+	public PluginLayout[] getLayouts() {
+		return pluginLayouts;
+	}
+
+	/**
+	 * Specifies custom features that are provided by this plug-in. Features are the major user interface sections,
+	 * which appear as icons on the left side of the user interface in the default layout. Examples of features include
+	 * Search, Favorites, and Teamspaces.
+	 * 
+	 * @return An array of custom plug-in feature objects.
+	 */
+	public PluginFeature[] getFeatures() {
+		return pluginFeatures;
+	}
+
+	/**
+	 * Provides a list of new menu types defined by the plug-in.
+	 * 
+	 * @return An array of new menu type objects.
+	 */
+	public PluginMenuType[] getMenuTypes() {
+		return pluginMenuTypes;
+	}
+
+	/**
+	 * Provides a list of menus defined by the plug-in.
+	 * 
+	 * @return An array of plug-in menu objects.
+	 */
+	public PluginMenu[] getMenus() {
+		return pluginMenus;
+	}
+	
+	/**
+	 * Provides a list of one or more custom repositories that are provided by this plug-in.
+	 *
+	 * @return An array of plug-in repository types.
+	 */
+	 public PluginRepositoryType[] getRepositoryTypes() {
+	 	 return pluginRepositoryTypes;
+	 }
+	 
+	 /**
+	 * Provides a list of one or more custom APIs that are provided by this plug-in.
+	 *
+	 * @return An array of plug-in APIs.
+	 */
+	 public PluginAPI[] getPluginAPIs() {
+	 	 return pluginAPIs;
+	 }
+
+	/**
+	 * Provides a list of services that are provided by this plug-in. The
+	 * services run on the web server, and can be called by the web browser
+	 * logic component of the plug-in.
+	 * 
+	 * @return An array of {@link com.ibm.ecm.extension.PluginService
+	 *         PluginService} objects. The plug-in should return the same set of
+	 *         objects on every call. If there are no services defined by the
+	 *         plug-in, the call should return an empty array.
+	 */
+	public PluginService[] getServices() {
+		if (pluginServices.length == 0) {
+			pluginServices = new PluginService[] {new com.sample.editor.service.AccountLookupService()};
+		}
+		return pluginServices;
+	}
+}
 
 
-<?xml version="1.0" encoding="UTF-8"?>
-<Configuration status="WARN">
-  <Appenders>
-    <Console name="Console" target="SYSTEM_OUT">
-      <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%t] %logger - %msg%n"/>
-    </Console>
-    <RollingFile name="File" fileName="D:/Rameshwar/wawa/Config/logs/tool.log" filePattern="D:/Rameshwar/wawa/Config/logs/tool-%d{yyyy-MM-dd}.log.gz">
-      <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%t] %logger - %msg%n"/>
-      <Policies><TimeBasedTriggeringPolicy interval="1"/></Policies>
-    </RollingFile>
-  </Appenders>
-  <Loggers>
-    <Root level="info">
-      <AppenderRef ref="Console"/>
-      <AppenderRef ref="File"/>
-    </Root>
-  </Loggers>
-</Configuration>
+
+
+================
+
+package com.sample.editor.connection;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+
+import javax.naming.InitialContext;
+import javax.naming.NamingException;
+import javax.sql.DataSource;
+
+
+public class ConnectionManager {
+	
+	static Connection sql_server_dbConnection = null;
+	static Connection oracle_dbConnection = null;
+	
+	
+	public static void main(String[] args) {
+		getSQLServerDBConnection();
+	}
+	public static Connection getSQLServerDBConnection() {
+		try {
+			if(sql_server_dbConnection == null){
+				initializeSQLServerDBConnection();
+			}
+			if(sql_server_dbConnection != null && sql_server_dbConnection.isClosed())
+				initializeSQLServerDBConnection();
+			else{
+				System.out.println("DB Connection is alive for SQL Server, returning existing DB connection...");
+			}
+		} catch (SQLException e) {
+			e.printStackTrace();
+		}
+		
+		return sql_server_dbConnection;
+	}
+	
+	public static Connection getDirectSQLServerConnection() throws SQLException {
+        String jdbcUrl = "jdbc:sqlserver://RUP8521:1433;databaseName=RAMDB;encrypt=false;";
+        String username = "sa";
+        String password = "Ebla1234";
+
+        try {
+            // Optional if using newer JDBC driver versions
+            Class.forName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
+        } catch (ClassNotFoundException e) {
+            throw new RuntimeException("SQLServer JDBC Driver not found!", e);
+        }
+
+        return DriverManager.getConnection(jdbcUrl, username, password);
+    }
+	
+	private static void initializeSQLServerDBConnection(){
+		try {
+            try{
+            	sql_server_dbConnection = getDirectSQLServerConnection();
+                System.out.println("DB Connection intialized success *****************");
+            } catch (SQLException e) {
+            	System.out.println("Failed to obtain a connection:");
+                e.printStackTrace();
+            }
+        } catch (Exception e) {
+        	System.out.println("Failed to lookup the DataSource:");
+            e.printStackTrace();
+        }
+	}
+	
+	public static void closeSQLServerDBConnection() {
+		try {
+			if(sql_server_dbConnection != null && !(sql_server_dbConnection.isClosed())){
+				sql_server_dbConnection.close();
+				System.out.println("DB Connection Closed success!");
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+	
+	public static Connection getOracleDBConnection(String dataSourceName) {
+		try {
+			if(oracle_dbConnection == null){
+				initializeOracleDBConnection(dataSourceName);
+			}
+			if(oracle_dbConnection != null && oracle_dbConnection.isClosed())
+				initializeOracleDBConnection(dataSourceName);
+			else{
+				System.out.println("DB Connection is alive for SQL Server, returning existing DB connection...");
+			}
+		} catch (SQLException e) {
+			e.printStackTrace();
+		}
+		
+		return oracle_dbConnection;
+	}
+	
+	private static void initializeOracleDBConnection(String dataSourceName){
+		try {
+            InitialContext ctx = new InitialContext();
+            DataSource ds = (DataSource)ctx.lookup(dataSourceName);
+            try{
+            	oracle_dbConnection = ds.getConnection();
+                System.out.println("DB Connection intialized success, Details : "+oracle_dbConnection.getSchema());
+            } catch (SQLException e) {
+            	System.out.println("Failed to obtain a connection:");
+                e.printStackTrace();
+            }
+        } catch (NamingException e) {
+        	System.out.println("Failed to lookup the DataSource:");
+            e.printStackTrace();
+        }
+	}
+	
+	public static void closeOracleDBConnection() {
+		try {
+			if(oracle_dbConnection != null && !(oracle_dbConnection.isClosed())){
+				oracle_dbConnection.close();
+				System.out.println("DB Connection Closed success!");
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+	
+}
+
+
+=======
+
+/*
+ * Licensed Materials - Property of IBM (c) Copyright IBM Corp. 2012, 2013 All Rights Reserved.
+ * 
+ * US Government Users Restricted Rights - Use, duplication or disclosure restricted by GSA ADP Schedule Contract with
+ * IBM Corp.
+ * 
+ * DISCLAIMER OF WARRANTIES :
+ * 
+ * Permission is granted to copy and modify this Sample code, and to distribute modified versions provided that both the
+ * copyright notice, and this permission notice and warranty disclaimer appear in all copies and modified versions.
+ * 
+ * THIS SAMPLE CODE IS LICENSED TO YOU AS-IS. IBM AND ITS SUPPLIERS AND LICENSORS DISCLAIM ALL WARRANTIES, EITHER
+ * EXPRESS OR IMPLIED, IN SUCH SAMPLE CODE, INCLUDING THE WARRANTY OF NON-INFRINGEMENT AND THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT WILL IBM OR ITS LICENSORS OR SUPPLIERS BE LIABLE FOR
+ * ANY DAMAGES ARISING OUT OF THE USE OF OR INABILITY TO USE THE SAMPLE CODE, DISTRIBUTION OF THE SAMPLE CODE, OR
+ * COMBINATION OF THE SAMPLE CODE WITH ANY OTHER CODE. IN NO EVENT SHALL IBM OR ITS LICENSORS AND SUPPLIERS BE LIABLE
+ * FOR ANY LOST REVENUE, LOST PROFITS OR DATA, OR FOR DIRECT, INDIRECT, SPECIAL, CONSEQUENTIAL, INCIDENTAL OR PUNITIVE
+ * DAMAGES, HOWEVER CAUSED AND REGARDLESS OF THE THEORY OF LIABILITY, EVEN IF IBM OR ITS LICENSORS OR SUPPLIERS HAVE
+ * BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+ */
+
+package com.sample.editor.filters;
+
+import javax.servlet.http.HttpServletRequest;
+
+import com.ibm.ecm.extension.PluginResponseFilter;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.json.java.JSONArray;
+import com.ibm.json.java.JSONObject;
+
+public class SamplePluginOpenClassResponseFilter extends PluginResponseFilter {
+
+	public String[] getFilteredServices() {
+		return new String[] { "/p8/openContentClass","/p8/openItem"};
+	}
+
+	public void filter(String serverType, PluginServiceCallbacks callbacks, HttpServletRequest request, JSONObject jsonResponse) 
+			throws Exception {
+		String desktopId = request.getParameter("desktop");
+		String templateName = request.getParameter("template_name");
+		if (desktopId != null && desktopId.equals("WSSC")) {
+			JSONArray properties = (JSONArray) jsonResponse.get("criterias");
+			
+			if (templateName.equalsIgnoreCase("CustomerAccount")) {
+				for (int i = 0; i < properties.size(); i++) {
+					JSONObject jsonPropDef = (JSONObject) properties.get(i);
+					String name = (String) jsonPropDef.get("name");
+					if (name != null) {
+						// Set custom property editor for Account Number field
+						if (name.equals("CE_AccountNumber")) {
+							jsonPropDef.put("propertyEditor", "customEditorPluginDojo/SamplePropertyEditor");
+						}
+						
+					}
+				}
+			}
+		}
+	}
+
+}
+
+=======
+
+package com.sample.editor.service;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import com.ibm.ecm.extension.PluginService;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.json.java.JSONArray;
+import com.ibm.json.java.JSONObject;
+import com.sample.editor.connection.ConnectionManager;
+
+/**
+ * Provides an abstract class that is extended to create a class implementing
+ * each service provided by the plug-in. Services are actions, similar to
+ * servlets or Struts actions, that perform operations on the IBM Content
+ * Navigator server. A service can access content server application programming
+ * interfaces (APIs) and Java EE APIs.
+ * <p>
+ * Services are invoked from the JavaScript functions that are defined for the
+ * plug-in by using the <code>ecm.model.Request.invokePluginService</code>
+ * function.
+ * </p>
+ * Follow best practices for servlets when implementing an IBM Content Navigator
+ * plug-in service. In particular, always assume multi-threaded use and do not
+ * keep unshared information in instance variables.
+ */
+public class AccountLookupService extends PluginService {
+
+	
+	Connection dbConnection = null;
+	/**
+	 * Returns the unique identifier for this service.
+	 * <p>
+	 * <strong>Important:</strong> This identifier is used in URLs so it must
+	 * contain only alphanumeric characters.
+	 * </p>
+	 * 
+	 * @return A <code>String</code> that is used to identify the service.
+	 */
+	public String getId() {
+		return "AccountLookupService";
+	}
+
+	/**
+	 * Returns the name of the IBM Content Navigator service that this service
+	 * overrides. If this service does not override an IBM Content Navigator
+	 * service, this method returns <code>null</code>.
+	 * 
+	 * @returns The name of the service.
+	 */
+	public String getOverriddenService() {
+		return null;
+	}
+
+	/**
+	 * Performs the action of this service.
+	 * 
+	 * @param callbacks
+	 *            An instance of the <code>PluginServiceCallbacks</code> class
+	 *            that contains several functions that can be used by the
+	 *            service. These functions provide access to the plug-in
+	 *            configuration and content server APIs.
+	 * @param request
+	 *            The <code>HttpServletRequest</code> object that provides the
+	 *            request. The service can access the invocation parameters from
+	 *            the request.
+	 * @param response
+	 *            The <code>HttpServletResponse</code> object that is generated
+	 *            by the service. The service can get the output stream and
+	 *            write the response. The response must be in JSON format.
+	 * @throws Exception
+	 *             For exceptions that occur when the service is running. If the
+	 *             logging level is high enough to log errors, information about
+	 *             the exception is logged by IBM Content Navigator.
+	 */
+	public void execute(PluginServiceCallbacks callbacks,
+			HttpServletRequest request, HttpServletResponse response)
+			throws Exception {
+		 String search = request.getParameter("search");
+		 String limitParam = request.getParameter("limit");
+		 int limit = 50; // Default limit
+		 
+		 // Parse limit if provided
+		 if (limitParam != null && !limitParam.isEmpty()) {
+			 try {
+				 limit = Integer.parseInt(limitParam);
+				 // Ensure limit is within reasonable bounds
+				 if (limit < 1) limit = 50;
+				 if (limit > 200) limit = 200;
+			 } catch (NumberFormatException e) {
+				 limit = 50;
+			 }
+		 }
+		 
+	        JSONArray results = new JSONArray();
+
+	        dbConnection = ConnectionManager.getSQLServerDBConnection();
+            
+	        
+	        try {
+	        	PreparedStatement stmt = dbConnection.prepareStatement(
+	                    "SELECT TOP " + limit + " [CISNumber_Single], [CustomerName], [TaxIDNumber] " +
+	                    "FROM [RAMDB].[dbo].[CNB_Data_Table] " +
+	                    "WHERE [CISNumber_Single] LIKE ? ORDER BY [CISNumber_Single]");
+                stmt.setString(1, search + "%");
+                ResultSet rs = stmt.executeQuery();
+                while (rs.next()) {
+	                JSONObject obj = new JSONObject();
+	                obj.put("accountNumber", rs.getString("CISNumber_Single"));
+	                obj.put("firstName", rs.getString("CustomerName"));
+	                obj.put("lastName", rs.getString("TaxIDNumber"));
+	                results.add(obj);
+	            }
+                rs.close();
+                stmt.close();
+            } catch (Exception ex) {
+                System.err.println(">>> [ERROR] DB search failed: " + ex.getMessage());
+                ex.printStackTrace();
+            }
+	        
+
+	        JSONObject json = new JSONObject();
+	        json.put("results", results);
+	        json.put("count", results.size()+"");
+	        json.put("searchTerm", search);
+
+	        response.setContentType("application/json");
+	        json.serialize(response.getWriter());
+	}
+}
+
+=========
+
+.messagesDialog .dijitDialogPaneContent {
+	background-color: #efe;
+}
+
+.samplePropertyEditor,
+.sampleQueryInputArea {
+	display: table;
+}
+
+/* Combo Button Container */
+.accountLookupCombo {
+	display: inline-block !important;
+	position: relative;
+}
+
+.comboButtonContainer {
+	display: flex !important;
+	align-items: stretch;
+	border: 1px solid #b5bcc7;
+	border-radius: 3px;
+	background-color: #ffffff;
+}
+
+.comboButtonContainer:hover {
+	border-color: #759dc0;
+}
+
+.comboButtonArrow {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	background-color: #f2f2f2;
+	border-left: 1px solid #b5bcc7;
+	cursor: pointer;
+	transition: background-color 0.2s;
+}
+
+.comboButtonArrow:hover {
+	background-color: #e0e0e0;
+}
+
+.comboButtonArrow .dijitArrowButtonInner {
+	font-size: 10px;
+	color: #333;
+}
+
+.samplePropertyEditor .dijitTextBox,
+.sampleQueryInputArea .dijitTextBox {
+	display: table-cell;
+}
+
+.samplePropertyEditor .dijitButton,
+.sampleQueryInputArea .dijitButton {
+	display: table-cell;
+	width: 1px;
+	white-space: nowrap;
+	padding-left: 10px;
+}
+
+.dijitRtl .samplePropertyEditor .dijitButton,
+.dijitRtl .sampleQueryInputArea .dijitButton {
+	padding-left: 0px;
+	padding-right: 10px;
+}
+
+.samplePropertyEditor .dijitTextBox .dijitInputField,
+.sampleQueryInputArea .dijitTextBox .dijitInputField {
+	width: 100%;
+}
+
+/* Adjust the width of the sample property editor to fit two side-by-side in the search form when using the Between or Not Between operator */
+.ecmUnifiedSearchBuilder .attributeDefintionWidget .valueFieldContainer.multiValue .samplePropertyEditor,
+.ecmBasicSearchBuilder .attributeDefintionWidget .valueFieldContainer.multiValue .samplePropertyEditor,
+.ecmSearchFormFieldArea td.fieldValueCell.multiValue .samplePropertyEditor {
+	display: inline-table;
+	width: 45%;
+}
+
+.ecmUnifiedSearchBuilder .attributeDefintionWidget .valueFieldContainer.multiValue .samplePropertyEditor .dijitTextBox,
+.ecmBasicSearchBuilder .attributeDefintionWidget .valueFieldContainer.multiValue .samplePropertyEditor .dijitTextBox,
+.ecmSearchFormFieldArea td.fieldValueCell.multiValue .samplePropertyEditor .dijitTextBox {
+	width: 100%;
+}
+
+.ecmUnifiedSearchBuilder .attributeDefintionWidget .valueFieldContainer.multiValue .samplePropertyEditor .dijitTextBox .dijitInputField,
+.ecmBasicSearchBuilder .attributeDefintionWidget .valueFieldContainer.multiValue .samplePropertyEditor .dijitTextBox .dijitInputField,
+.ecmSearchFormFieldArea td.fieldValueCell.multiValue .samplePropertyEditor .dijitTextBox .dijitInputField {
+	width: auto;
+}
+
+.ecmCenterPane .sampleSearchArea {
+	background-color: #ddd;
+	padding: 20px !important;
+}
+
+.ecmCenterPane .sampleQueryInputArea {
+	width: 100%;
+}
+
+.ecmCenterPane .sampleSearchArea .searchButton .dijitButtonNode {
+	color: #00649d;
+	border: none !important;
+}
+
+.ecmCenterPane .sampleSearchArea .searchButtonDisabled .dijitButtonNode {
+	color: #818181;
+	border: none !important;
+}
+
+.ecmCenterPane .sampleSearchArea .searchButtonDisabled .dijitButtonText {
+	color: inherit !important;
+}
+
+.ecmCenterPane .sampleSearchArea .searchButton .dijitButtonText {
+	color: #00649d;
+}
+
+.ecmCenterPane .sampleSearchArea .searchButton .dijitButtonText:hover {
+	color: #05386B;
+    cursor: inherit !important;
+    text-decoration: inherit !important;
+}
+
+.ecmCenterPane .sampleRepositorySelectorArea {
+	padding-bottom: 10px;
+}
+
+/* Feature bar icon */
+.sampleFeatureLaunchIcon {
+	width: 32px;
+	height: 32px;
+	background-image: url('images/samplePlugin.svg');
+	background-repeat: no-repeat;
+	background-position: -16px -16px; 
+}
+
+/* Checked State */
+.ecmLaunchBarContainer .launchBarButton.dijitToggleButtonHover .sampleFeatureLaunchIcon,
+.launchBarButton.dijitChecked .sampleFeatureLaunchIcon, 
+.launchBarButton.dijitFocused .sampleFeatureLaunchIcon { 
+	background-position: -16px -80px;
+}
+
+/* For sample text box editor control */
+.ecmSampleTextBoxEditor {
+    box-shadow: 5px 5px 5px #C0C0C0;
+    font-style: italic;
+}
+
+/* Autocomplete Grid Styles */
+.autocompleteGrid {
+    position: absolute;
+    background-color: #ffffff;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+    max-height: 350px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    z-index: 1000;
+    margin-top: 2px;
+}
+
+.autocompleteTable {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+}
+
+.autocompleteTable thead {
+    position: sticky;
+    top: 0;
+    background-color: #f5f5f5;
+    z-index: 10;
+}
+
+.autocompleteTable thead th {
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: bold;
+    color: #333;
+    border-bottom: 2px solid #ddd;
+    background-color: #f5f5f5;
+}
+
+.autocompleteTable tbody tr {
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.autocompleteTable tbody tr:hover,
+.autocompleteTable tbody tr.hover {
+    background-color: #e3f2fd;
+}
+
+.autocompleteTable tbody tr.selected {
+    background-color: #bbdefb;
+}
+
+.autocompleteTable tbody td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #eee;
+    color: #555;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.autocompleteTable tbody tr:last-child td {
+    border-bottom: none;
+}
+
+/* Loading, No Results, and Error states */
+.loadingCell,
+.noResultsCell,
+.errorCell {
+    text-align: center;
+    padding: 16px 12px !important;
+    color: #666;
+    font-style: italic;
+}
+
+.loadingCell {
+    background-color: #f9f9f9;
+}
+
+.noResultsCell {
+    color: #999;
+}
+
+.errorCell {
+    color: #d32f2f;
+    background-color: #ffebee;
+}
+
+/* Scrollbar styling for webkit browsers */
+.autocompleteGrid::-webkit-scrollbar {
+    width: 8px;
+}
+
+.autocompleteGrid::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+.autocompleteGrid::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+}
+
+.autocompleteGrid::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* Adjust property editor when autocomplete is active */
+.samplePropertyEditor {
+    position: relative;
+}
+
+/* Make sure the textbox placeholder is visible */
+.samplePropertyEditor input::placeholder {
+    color: #999;
+    font-style: italic;
+}
+
+/* Lookup Popup Styles (Combo Button Dropdown) */
+.lookupPopupContent {
+    padding: 8px;
+    background-color: #ffffff;
+    border: 2px solid #4a90e2;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    min-width: 650px;
+    max-width: 750px;
+}
+
+.lookupSearchArea {
+    margin-bottom: 6px;
+    padding: 5px 8px;
+    background-color: #f5f5f5;
+    border-radius: 4px;
+}
+
+.lookupSearchLabel {
+    display: inline-block;
+    font-weight: bold;
+    margin-right: 8px;
+    color: #333;
+    font-size: 12px;
+}
+
+.lookupSearchInput {
+    width: 300px;
+}
+
+.lookupGridContainer {
+    border: 2px solid #4a90e2;
+    border-radius: 4px;
+    height: 240px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    margin-bottom: 6px;
+    background-color: #ffffff;
+}
+
+.lookupTable {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: Arial, sans-serif;
+    font-size: 11px;
+    table-layout: fixed;
+}
+
+.lookupTable thead {
+    position: sticky;
+    top: 0;
+    background-color: #4a90e2;
+    z-index: 10;
+}
+
+.lookupTable thead th {
+    padding: 4px 8px;
+    text-align: left;
+    font-weight: bold;
+    color: #ffffff;
+    border-right: 1px solid #3a7bc8;
+    border-bottom: 2px solid #3a7bc8;
+    background-color: #4a90e2;
+    font-size: 11px;
+}
+
+.lookupTable thead th:first-child {
+    width: 35%;
+}
+
+.lookupTable thead th:nth-child(2) {
+    width: 32%;
+}
+
+.lookupTable thead th:nth-child(3) {
+    width: 33%;
+}
+
+.lookupTable thead th:last-child {
+    border-right: none;
+}
+
+.lookupTable tbody tr {
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+    border-bottom: 1px solid #ddd;
+}
+
+.lookupTable tbody tr:hover {
+    background-color: #e3f2fd !important;
+}
+
+.lookupTable tbody tr.selected {
+    background-color: #bbdefb !important;
+    font-weight: bold;
+}
+
+.lookupTable tbody td {
+    padding: 4px 8px;
+    border-right: 1px solid #eee;
+    color: #333;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 11px;
+}
+
+.lookupTable tbody td:last-child {
+    border-right: none;
+}
+
+.lookupButtonArea {
+    text-align: right;
+    padding-top: 6px;
+    border-top: 1px solid #ddd;
+    margin-top: 0;
+}
+
+.lookupOkButton,
+.lookupCancelButton {
+    margin-left: 6px;
+}
+
+/* Dialog loading, no results, error states */
+.lookupTable .loadingCell,
+.lookupTable .noResultsCell,
+.lookupTable .errorCell {
+    text-align: center;
+    padding: 12px 8px !important;
+    color: #666;
+    font-style: italic;
+    font-size: 11px;
+}
+
+.lookupTable .loadingCell {
+    background-color: #f9f9f9;
+}
+
+.lookupTable .noResultsCell {
+    color: #999;
+}
+
+.lookupTable .errorCell {
+    color: #d32f2f;
+    background-color: #ffebee;
+}
+
+/* Scrollbar for lookup grid */
+.lookupGridContainer::-webkit-scrollbar {
+    width: 8px;
+}
+
+.lookupGridContainer::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+.lookupGridContainer::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+}
+
+.lookupGridContainer::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+======
+
+require(["dojo/_base/declare",
+         "dojo/_base/lang",  
+         "customEditorPluginDojo/SamplePropertyEditor"], 
+function(declare, lang, SamplePropertyEditor) {		
+	
+});
+
+=======
+
+
+define([
+		"dojo/_base/declare",
+		"dijit/_TemplatedMixin",
+		"dijit/_WidgetsInTemplateMixin",
+		"ecm/widget/admin/PluginConfigurationPane",
+		"ecm/widget/HoverHelp",
+		"ecm/widget/ValidationTextBox",
+		"dojo/text!./templates/ConfigurationPane.html"
+	],
+	function(declare, _TemplatedMixin, _WidgetsInTemplateMixin, PluginConfigurationPane, HoverHelp, ValidationTextBox, template) {
+
+		return declare("customEditorPluginDojo.ConfigurationPane", [ PluginConfigurationPane, _TemplatedMixin, _WidgetsInTemplateMixin], {
+		
+		templateString: template,
+		widgetsInTemplate: true,
+	
+		load: function(callback) {
+			console.log("ConfigurationPane load called");
+			console.log("configurationString:", this.configurationString);
+			
+			// Load configuration values
+			if (this.configurationString) {
+				try {
+					var configObj = JSON.parse(this.configurationString);
+					console.log("Parsed config:", configObj);
+					if (configObj.resultLimit) {
+						this.resultLimit.set("value", configObj.resultLimit);
+					}
+				} catch (e) {
+					console.error("Error parsing configuration:", e);
+				}
+			} else {
+				// Set default value
+				console.log("No configuration string, using default");
+				this.resultLimit.set("value", "50");
+			}
+			
+			if (callback) {
+				callback();
+			}
+		},
+		
+		_onFieldChange: function() {
+			console.log("Field changed");
+			// Notify that configuration has changed
+			this.onSaveNeeded(true);
+		},
+		
+		validate: function() {
+			console.log("Validating configuration");
+			// Validate the result limit field
+			if (!this.resultLimit || !this.resultLimit.isValid()) {
+				console.error("Result limit validation failed");
+				return false;
+			}
+			console.log("Validation passed");
+			return true;
+		},
+		
+		save: function() {
+			console.log("Saving configuration");
+			// Save configuration as JSON string
+			var configObj = {
+				resultLimit: parseInt(this.resultLimit.get("value") || "50", 10)
+			};
+			
+			this.configurationString = JSON.stringify(configObj);
+			console.log("Saved configuration:", this.configurationString);
+		}
+	});
+});
+
+
+
+========
+
+
+/*
+ * Licensed Materials - Property of IBM (c) Copyright IBM Corp. 2012, 2013 All Rights Reserved.
+ * 
+ * US Government Users Restricted Rights - Use, duplication or disclosure restricted by GSA ADP Schedule Contract with
+ * IBM Corp.
+ * 
+ * DISCLAIMER OF WARRANTIES :
+ * 
+ * Permission is granted to copy and modify this Sample code, and to distribute modified versions provided that both the
+ * copyright notice, and this permission notice and warranty disclaimer appear in all copies and modified versions.
+ * 
+ * THIS SAMPLE CODE IS LICENSED TO YOU AS-IS. IBM AND ITS SUPPLIERS AND LICENSORS DISCLAIM ALL WARRANTIES, EITHER
+ * EXPRESS OR IMPLIED, IN SUCH SAMPLE CODE, INCLUDING THE WARRANTY OF NON-INFRINGEMENT AND THE IMPLIED WARRANTIES OF
+ * MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT WILL IBM OR ITS LICENSORS OR SUPPLIERS BE LIABLE FOR
+ * ANY DAMAGES ARISING OUT OF THE USE OF OR INABILITY TO USE THE SAMPLE CODE, DISTRIBUTION OF THE SAMPLE CODE, OR
+ * COMBINATION OF THE SAMPLE CODE WITH ANY OTHER CODE. IN NO EVENT SHALL IBM OR ITS LICENSORS AND SUPPLIERS BE LIABLE
+ * FOR ANY LOST REVENUE, LOST PROFITS OR DATA, OR FOR DIRECT, INDIRECT, SPECIAL, CONSEQUENTIAL, INCIDENTAL OR PUNITIVE
+ * DAMAGES, HOWEVER CAUSED AND REGARDLESS OF THE THEORY OF LIABILITY, EVEN IF IBM OR ITS LICENSORS OR SUPPLIERS HAVE
+ * BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+ */
+
+define([
+	"dojo/_base/declare", 
+	"dojo/_base/lang",
+	"dojo/dom-class",
+	"dojo/dom-construct",
+	"dojo/dom-geometry",
+	"dojo/dom-style",
+	"dojo/on",
+	"dojo/keys",
+	"dijit/_WidgetsInTemplateMixin",
+	"dijit/form/Button",
+	"dijit/popup",
+	"dijit/_Widget",
+	"dijit/_TemplatedMixin",
+	"ecm/widget/ValidationTextBox",
+	"ecm/model/Request",
+	"dojo/text!./templates/SamplePropertyEditor.html"
+],
+function(declare, lang, domClass, domConstruct, domGeometry, domStyle, on, keys, _WidgetsInTemplateMixin, Button, popup, _Widget, _TemplatedMixin, ValidationTextBox, Request, template) { 
+	/**
+	 * @name customEditorPluginDojo.SamplePropertyEditor
+	 * @class Provides autocomplete functionality for account number lookup with database integration
+	 * @augments ValidationTextBox
+	 */
+	return declare("customEditorPluginDojo.SamplePropertyEditor", [
+	   ValidationTextBox,
+	   _WidgetsInTemplateMixin
+	], {
+		/** @lends customEditorPluginDojo.SamplePropertyEditor.prototype */
+
+		templateString: template,
+		widgetsInTemplate: true,
+		
+		// Configuration
+		minSearchLength: 2,
+		debounceDelay: 300,
+		resultLimit: 50,
+		
+	// Internal state
+	_debounceTimer: null,
+	_lastSearchValue: "",
+	_selectedRecord: null,
+	_lookupPopup: null,
+	_popupSearchField: null,
+	_popupGridBody: null,
+	_popupVisible: false,
+		
+		postCreate: function() {
+			this.inherited(arguments);
+			
+		// Load configuration from plugin
+		this._loadPluginConfiguration();
+		
+		// Make textbox readonly
+			this.set("readOnly", true);
+		
+			// Remove the base class from the domNode
+			domClass.remove(this.domNode, this.baseClass);
+			domClass.add(this.domNode, "samplePropertyEditor");
+		
+		// Add click handler to textbox to open popup
+		this.own(on(this.textbox, "click", lang.hitch(this, "_toggleLookupPopup")));
+		this.own(on(this.comboContainer, "click", lang.hitch(this, "_toggleLookupPopup")));
+	},
+		
+		_loadPluginConfiguration: function() {
+			// Try to load plugin configuration
+			try {
+				if (ecm && ecm.model && ecm.model.desktop && ecm.model.desktop.getPlugin) {
+					var plugin = ecm.model.desktop.getPlugin("CustomEditorPlugin");
+					if (plugin && plugin.configurationString) {
+						var config = JSON.parse(plugin.configurationString);
+						if (config.resultLimit) {
+							this.resultLimit = parseInt(config.resultLimit, 10);
+							console.log("Loaded result limit from configuration:", this.resultLimit);
+						}
+					}
+				}
+			} catch (e) {
+				console.log("Could not load plugin configuration, using defaults:", e);
+			}
+		},
+		
+	_toggleLookupPopup: function(evt) {
+		if (evt) {
+			evt.stopPropagation();
+		}
+		
+		console.log("Toggling lookup popup");
+		
+		if (this._popupVisible) {
+			this._closeLookupPopup();
+		} else {
+			this._openLookupPopup();
+		}
+	},
+	
+	_openLookupPopup: function() {
+		console.log("Opening lookup popup");
+		
+		// Create popup if it doesn't exist
+		if (!this._lookupPopup) {
+			this._createLookupPopup();
+		}
+		
+		// Clear previous selection and reset popup
+		this._selectedRecord = null;
+		this._lastSearchValue = "";
+		if (this._popupSearchField) {
+			this._popupSearchField.set("value", "");
+		}
+		if (this._popupGridBody) {
+			domConstruct.empty(this._popupGridBody);
+			this._showNoResultsInPopup();
+		}
+		
+		// Show popup below the combo button
+		popup.open({
+			popup: this._lookupPopup,
+			around: this.domNode,
+			orient: ["below-centered", "below", "above-centered", "above"]
+		});
+		
+		this._popupVisible = true;
+		
+		// Focus on search field
+		setTimeout(lang.hitch(this, function() {
+			if (this._popupSearchField) {
+				this._popupSearchField.focus();
+			}
+		}), 100);
+	},
+	
+	_closeLookupPopup: function() {
+		console.log("Closing lookup popup");
+		
+		if (this._lookupPopup) {
+			popup.close(this._lookupPopup);
+		}
+		this._popupVisible = false;
+	},
+	
+	_createLookupPopup: function() {
+		console.log("Creating lookup popup");
+		
+		// Create popup widget
+		var PopupWidget = declare([_Widget, _TemplatedMixin], {
+			templateString: '<div class="lookupPopupContent"></div>',
+			
+			buildRendering: function() {
+				this.inherited(arguments);
+			}
+		});
+		
+		this._lookupPopup = new PopupWidget();
+		this._lookupPopup.startup();
+		
+		// Create search area
+		var searchArea = domConstruct.create("div", {
+			"class": "lookupSearchArea"
+		}, this._lookupPopup.domNode);
+		
+		domConstruct.create("label", {
+			innerHTML: "Account Number: ",
+			"class": "lookupSearchLabel"
+		}, searchArea);
+		
+		// Create search input field
+		this._popupSearchField = new ValidationTextBox({
+			"class": "lookupSearchInput",
+			placeholder: "Type to search...",
+			intermediateChanges: true
+		});
+		this._popupSearchField.placeAt(searchArea);
+		
+		// Attach keyup handler for search
+		this.own(on(this._popupSearchField, "keyup", lang.hitch(this, function(evt) {
+			if (evt.keyCode === keys.ENTER || evt.keyCode === keys.ESCAPE) {
+				if (evt.keyCode === keys.ESCAPE) {
+					this._closeLookupPopup();
+				}
+				return;
+			}
+			this._handlePopupSearch();
+		})));
+		
+		// Create grid container
+		var gridContainer = domConstruct.create("div", {
+			"class": "lookupGridContainer"
+		}, this._lookupPopup.domNode);
+		
+		// Create table
+		var gridTable = domConstruct.create("table", {
+			"class": "lookupTable"
+		}, gridContainer);
+		
+		// Create header
+		var thead = domConstruct.create("thead", {}, gridTable);
+		var headerRow = domConstruct.create("tr", {}, thead);
+		domConstruct.create("th", { innerHTML: "Account Number" }, headerRow);
+		domConstruct.create("th", { innerHTML: "First Name" }, headerRow);
+		domConstruct.create("th", { innerHTML: "Last Name" }, headerRow);
+		
+		// Create tbody
+		this._popupGridBody = domConstruct.create("tbody", {}, gridTable);
+		
+		// Create button area
+		var buttonArea = domConstruct.create("div", {
+			"class": "lookupButtonArea"
+		}, this._lookupPopup.domNode);
+		
+		var okButton = new Button({
+			label: "OK",
+			"class": "lookupOkButton",
+			onClick: lang.hitch(this, function() {
+				this._handlePopupOk();
+			})
+		});
+		okButton.placeAt(buttonArea);
+		
+		var cancelButton = new Button({
+			label: "Cancel",
+			"class": "lookupCancelButton",
+			onClick: lang.hitch(this, function() {
+				this._handlePopupCancel();
+			})
+		});
+		cancelButton.placeAt(buttonArea);
+		
+		console.log("Lookup popup created");
+	},
+		
+	_handlePopupSearch: function() {
+		// Clear any existing timer
+		if (this._debounceTimer) {
+			clearTimeout(this._debounceTimer);
+		}
+		
+		var searchValue = this._popupSearchField.get("value") || "";
+		
+		// Check minimum length
+		if (searchValue.length < this.minSearchLength) {
+			domConstruct.empty(this._popupGridBody);
+			this._showNoResultsInPopup();
+			return;
+		}
+		
+		// Debounce the search
+		this._debounceTimer = setTimeout(lang.hitch(this, function() {
+			if (searchValue !== this._lastSearchValue) {
+				this._lastSearchValue = searchValue;
+				this._performPopupSearch(searchValue);
+			}
+		}), this.debounceDelay);
+	},
+		
+	_performPopupSearch: function(searchTerm) {
+		console.log("Searching in popup for: " + searchTerm);
+		
+		// Show loading indicator
+		this._showLoadingInPopup();
+		
+		// Call plugin service
+		Request.invokePluginService("CustomEditorPlugin", "AccountLookupService", {
+			requestParams: {
+				search: searchTerm,
+				limit: this.resultLimit
+			},
+			requestCompleteCallback: lang.hitch(this, function(response) {
+				this._handlePopupSearchResults(response);
+			}),
+			requestFailedCallback: lang.hitch(this, function(error) {
+				console.error("Search failed:", error);
+				this._showErrorInPopup("Search failed. Please try again.");
+			})
+		});
+	},
+		
+	_handlePopupSearchResults: function(response) {
+		console.log("Handling popup search results:", response);
+		
+		var results = response.results || [];
+		console.log("Results extracted:", results);
+		console.log("Results length:", results.length);
+		
+		if (results.length === 0) {
+			this._showNoResultsInPopup();
+		} else {
+			this._populatePopupGrid(results);
+		}
+	},
+	
+	_showLoadingInPopup: function() {
+		domConstruct.empty(this._popupGridBody);
+		var row = domConstruct.create("tr", {}, this._popupGridBody);
+		domConstruct.create("td", {
+			colspan: 3,
+			"class": "loadingCell",
+			innerHTML: "Searching..."
+		}, row);
+	},
+	
+	_showNoResultsInPopup: function() {
+		domConstruct.empty(this._popupGridBody);
+		var row = domConstruct.create("tr", {}, this._popupGridBody);
+		domConstruct.create("td", {
+			colspan: 3,
+			"class": "noResultsCell",
+			innerHTML: "No results found"
+		}, row);
+	},
+	
+	_showErrorInPopup: function(message) {
+		domConstruct.empty(this._popupGridBody);
+		var row = domConstruct.create("tr", {}, this._popupGridBody);
+		domConstruct.create("td", {
+			colspan: 3,
+			"class": "errorCell",
+			innerHTML: message
+		}, row);
+	},
+		
+	_populatePopupGrid: function(results) {
+		domConstruct.empty(this._popupGridBody);
+		
+		console.log("Populating popup grid with results:", results);
+		console.log("Results length:", results.length);
+		
+		// Convert to array if needed
+		var resultArray = results;
+		if (typeof results.length === 'undefined') {
+			console.error("Results is not an array!");
+			return;
+		}
+		
+		// Use traditional for loop for better compatibility with IBM ECM JSON responses
+		for (var i = 0; i < resultArray.length; i++) {
+			var record = resultArray[i];
+			
+			var row = domConstruct.create("tr", {
+				"class": "lookupRow"
+			}, this._popupGridBody);
+			
+			domConstruct.create("td", { innerHTML: record.accountNumber || "" }, row);
+			domConstruct.create("td", { innerHTML: record.firstName || "" }, row);
+			domConstruct.create("td", { innerHTML: record.lastName || "" }, row);
+			
+			// Add click handler - use closure to capture correct record and row
+			(function(currentRecord, currentRow) {
+				this.own(on(currentRow, "click", lang.hitch(this, function() {
+					this._selectPopupRecord(currentRecord, currentRow);
+				})));
+			}).call(this, record, row);
+		}
+		
+		console.log("Popup grid populated with " + resultArray.length + " rows");
+	},
+		
+	_selectPopupRecord: function(record, row) {
+		console.log("Selected record in popup:", record);
+		
+		// Store selected record
+		this._selectedRecord = record;
+		
+		// Remove previous selection highlight
+		var allRows = this._popupGridBody.getElementsByTagName("tr");
+		for (var i = 0; i < allRows.length; i++) {
+			domClass.remove(allRows[i], "selected");
+		}
+		
+		// Highlight selected row
+		domClass.add(row, "selected");
+	},
+	
+	_handlePopupOk: function() {
+	    console.log("Popup OK clicked");
+	    
+	    if (!this._selectedRecord) {
+	        alert("Please select an account from the list.");
+	        return;
+	    }
+	    
+	    // Set the account number value
+	    this.set("value", this._selectedRecord.accountNumber);
+	    
+	    // CRITICAL: Mark THIS field as touched and trigger its onChange
+	    this._hasBeenBlurred = true;
+	    this.focused = true;
+	    
+	    if (typeof this.onChange === "function") {
+	        console.log("Calling this.onChange()");
+	        this.onChange(this._selectedRecord.accountNumber);
+	    }
+	    
+	    // Get the properties pane and trigger its onChange
+	    var propertiesPane = this._getPropertiesPane();
+	    if (propertiesPane && typeof propertiesPane.onPropertyChanged === "function") {
+	        console.log("Calling propertiesPane.onPropertyChanged() for account field");
+	        propertiesPane.onPropertyChanged();
+	    }
+	    
+	    // Populate related fields
+	    this._populateRelatedFields(this._selectedRecord);
+	    
+	    // Close popup
+	    this._closeLookupPopup();
+	    
+	    console.log("Fields populated with selected record");
+	},
+	
+	_handlePopupCancel: function() {
+		console.log("Popup Cancel clicked");
+		
+		// Clear selection
+		this._selectedRecord = null;
+		
+		// Close popup
+		this._closeLookupPopup();
+	},
+	
+	setICNPropertyValue: function(propertiesPane, propertyName, newValue) {
+	    console.log("=== setICNPropertyValue ===");
+	    console.log("Property:", propertyName, "Value:", newValue);
+	    
+	    if (!propertiesPane) {
+	        console.error("propertiesPane is null!");
+	        return;
+	    }
+
+	    // Find the field by property name
+	    var field = null;
+	    
+	    if (propertiesPane._propertyEditors && propertiesPane._propertyEditors._fields) {
+	        for (var i = 0; i < propertiesPane._propertyEditors._fields.length; i++) {
+	            var f = propertiesPane._propertyEditors._fields[i];
+	            if (f && f.name === propertyName) {
+	                field = f;
+	                break;
+	            }
+	        }
+	    }
+	    
+	    if (!field) {
+	        console.error("Field not found:", propertyName);
+	        return;
+	    }
+	    
+	    console.log("Found field:", field.name);
+	    
+	    // Set the value
+	    field.set("value", newValue);
+	    
+	    // CRITICAL: Mark the field as "touched" (has been blurred)
+	    field._hasBeenBlurred = true;
+	    
+	    // CRITICAL: Mark the field as focused (changed by user)
+	    field.focused = true;
+	    
+	    // Trigger field onChange
+	    if (typeof field.onChange === "function") {
+	        console.log("Calling field.onChange()");
+	        field.onChange(newValue);
+	    }
+	    
+	    // CRITICAL: Call onPropertyChanged on the properties pane
+	    // This sets fieldschanged = true and triggers the parent onChange
+	    if (typeof propertiesPane.onPropertyChanged === "function") {
+	        console.log("Calling propertiesPane.onPropertyChanged()");
+	        propertiesPane.onPropertyChanged();
+	    }
+	    
+	    console.log("=== setICNPropertyValue complete ===");
+	},
+
+	_populateRelatedFields: function(record) {
+	    console.log("=== _populateRelatedFields ===");
+	    
+	    // Find the property pane
+	    var propertiesPane = this._getPropertiesPane();
+	    
+	    if (propertiesPane) {
+	        console.log("Properties pane found:", propertiesPane.declaredClass);
+	        
+	        // Populate FIRSTNAME
+	        this.setICNPropertyValue(propertiesPane, "FIRSTNAME", record.firstName || "");
+	        
+	        // Populate LASTNAME  
+	        this.setICNPropertyValue(propertiesPane, "LASTNAME", record.lastName || "");
+	        
+	        console.log("Fields populated successfully");
+	    } else {
+	        console.error("Properties pane not found!");
+	    }
+	    
+	    console.log("=== _populateRelatedFields complete ===");
+	},
+		
+	_getPropertiesPane: function() {
+	    console.log("=== Searching for Properties Pane ===");
+	    
+	    // Navigate up the widget hierarchy
+	    var widget = this.getParent();
+	    while (widget) {
+	        console.log("Checking widget:", widget.declaredClass);
+	        
+	        // Check for properties pane classes
+	        if (widget.declaredClass === "ecm.widget.CommonPropertiesPane" || 
+	            widget.declaredClass === "ecm.widget.AddContentItemPropertiesPane") {
+	            console.log("✓ Found properties pane:", widget.declaredClass);
+	            return widget;
+	        }
+	        
+	        // Check if this widget HAS a properties pane inside it (for dialogs)
+	        if (widget._propertiesPane) {
+	            console.log("✓ Found _propertiesPane inside:", widget.declaredClass);
+	            return widget._propertiesPane;
+	        }
+	        
+	        if (widget.propertiesPane) {
+	            console.log("✓ Found propertiesPane inside:", widget.declaredClass);
+	            return widget.propertiesPane;
+	        }
+	        
+	        widget = widget.getParent ? widget.getParent() : null;
+	    }
+	    
+	    console.error("✗ Properties pane not found!");
+	    return null;
+	},
+		
+	destroy: function() {
+		if (this._debounceTimer) {
+			clearTimeout(this._debounceTimer);
+		}
+		if (this._popupVisible) {
+			this._closeLookupPopup();
+		}
+		if (this._lookupPopup) {
+			this._lookupPopup.destroyRecursive();
+		}
+		if (this._popupSearchField) {
+			this._popupSearchField.destroyRecursive();
+		}
+		this.inherited(arguments);
+		}
+	});
+});
+
+
+==============
+<div>
+    <table class="propertyTable" role="presentation">
+        <tr>
+            <td class="propertyRowLabel">
+                <label for="${id}_resultLimit">Account Lookup Result Limit:</label>&nbsp;
+                <div data-dojo-type="ecm/widget/HoverHelp" data-dojo-attach-point="resultLimitHoverHelp" message="Specify the maximum number of results to return from account lookup queries (1-200, default: 50)."></div>
+            </td>
+            <td class="propertyRowValue">
+                <div id="${id}_resultLimit" 
+                     data-dojo-attach-point="resultLimit" 
+                     data-dojo-attach-event="onKeyUp: _onFieldChange" 
+                     data-dojo-type="ecm/widget/ValidationTextBox" 
+                     required="false" 
+                     trim="true" 
+                     value="50"
+                     regExp="^([1-9]|[1-9][0-9]|1[0-9][0-9]|200)$"
+                     invalidMessage="Please enter a number between 1 and 200"
+                     promptMessage="Enter result limit (1-200)"></div>
+            </td>
+        </tr>
+    </table>
+</div>
+
+
+==================
+
+<div class="dijit dijitReset dijitInline dijitLeft accountLookupCombo" id="widget_${id}" role="presentation">
+	<div class="dijit dijitReset dijitInline dijitLeft comboButtonContainer" data-dojo-attach-point="comboContainer">
+		<div class="dijit dijitReset dijitInline dijitLeft" data-dojo-attach-point="stateNode">
+			<div class='dijitReset dijitValidationContainer'>
+				<input class="dijitReset dijitInputField dijitValidationIcon dijitValidationInner" value="&#935; " type="text" tabIndex="-1" readonly="readonly" role="presentation"/>
+			</div>
+			<div class="dijitReset dijitInputField dijitInputContainer">
+				<input class="dijitReset dijitInputInner" data-dojo-attach-point='textbox,focusNode' autocomplete="off"
+					${!nameAttrSetting} type='${type}' readonly="readonly"/>
+			</div>
+		</div>
+		<div class="comboButtonArrow" data-dojo-attach-point="arrowButton" data-dojo-attach-event="onClick: _toggleLookupPopup">
+			<span class="dijitArrowButtonInner">â–¼</span>
+		</div>
+	</div>
+</div>
+
 
 
 
