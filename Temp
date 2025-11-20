@@ -1,1 +1,142 @@
-
+ setICNPropertyValue: function(propertiesPane, propertyName, newValue, cardinality) {
+            console.log("=== setICNPropertyValue ===");
+            console.log("Property:", propertyName);
+            console.log("Value:", newValue);
+            console.log("Cardinality:", cardinality);
+            
+            if (!propertiesPane || !propertiesPane._propertyEditors) {
+                console.error("Properties pane or property editors not found");
+                return;
+            }
+            
+            // Find the field
+            var field = null;
+            for (var i = 0; i < propertiesPane._propertyEditors._fields.length; i++) {
+                var f = propertiesPane._propertyEditors._fields[i];
+                if (f && f.name === propertyName) {
+                    field = f;
+                    break;
+                }
+            }
+            
+            if (!field) {
+                console.warn("Field not found:", propertyName);
+                return;
+            }
+            
+            console.log("Found field:", field.name);
+            console.log("Field type:", field.declaredClass);
+            console.log("Field dataType:", field.dataType);
+            
+            // Handle based on cardinality
+            if (cardinality === "LIST" || cardinality === "MULTI" || 
+                field.cardinality === "LIST" || field.cardinality === "MULTI") {
+                
+                console.log("Setting multi-value field");
+                var valueArray = Array.isArray(newValue) ? newValue : [newValue];
+                
+                // Check if this is a DropDownInput wrapping a MultiValueInputPane
+                if (field.declaredClass === "ecm.widget.DropDownInput") {
+                    console.log("Field is DropDownInput");
+                    
+                    // MultiValueInputPane can be accessed via:
+                    // 1. field._dropDownPane (direct reference)
+                    // 2. field.dropDown.content (if wrapped in DropDownDialog)
+                    var multiValuePane = null;
+                    
+                    if (field._dropDownPane && field._dropDownPane.declaredClass === "ecm.widget.MultiValueInputPane") {
+                        multiValuePane = field._dropDownPane;
+                        console.log("✓ Found MultiValueInputPane via _dropDownPane");
+                    } else if (field.dropDown && field.dropDown.declaredClass === "ecm.widget.DropDownDialog") {
+                        console.log("Field has DropDownDialog wrapper");
+                        if (field.dropDown.content && field.dropDown.content.declaredClass === "ecm.widget.MultiValueInputPane") {
+                            multiValuePane = field.dropDown.content;
+                            console.log("✓ Found MultiValueInputPane via dropDown.content");
+                        }
+                    } else if (field.dropDown && field.dropDown.declaredClass === "ecm.widget.MultiValueInputPane") {
+                        // Fallback: direct dropDown (older ICN versions or different configurations)
+                        multiValuePane = field.dropDown;
+                        console.log("✓ Found MultiValueInputPane via dropDown (direct)");
+                    }
+                    
+                    if (multiValuePane) {
+                        console.log("Updating MultiValueInputPane with values:", valueArray);
+                        
+                        // Get the field's dataType (for proper formatting in the grid)
+                        var fieldDataType = field.dataType || "xs:string";
+                        var fieldDataFormat = field.dataFormat || null;
+                        
+                        // Update the MultiValueInputPane's internal data
+                        multiValuePane.setDataValues(valueArray, fieldDataType, fieldDataFormat, null);
+                        
+                        // If the grid is already loaded, reload it to show the new values
+                        if (multiValuePane._valuesGrid) {
+                            console.log("Reloading values grid to display new values");
+                            multiValuePane._loadValuesGrid();
+                        }
+                        
+                        // Update the DropDownInput's value and label
+                        var updatedValues = multiValuePane.getValue();
+                        var updatedLabel = multiValuePane.getLabel();
+                        
+                        field.set("value", updatedValues);
+                        field.set("label", updatedLabel);
+                        field.set("displayedValue", updatedLabel);
+                        
+                        console.log("✓ MultiValueInputPane updated successfully");
+                        console.log("  Field dataType:", fieldDataType);
+                        console.log("  Field dataFormat:", fieldDataFormat);
+                        console.log("  Internal values:", updatedValues);
+                        console.log("  Display label:", updatedLabel);
+                    } else {
+                        console.warn("✗ Could not find MultiValueInputPane in field structure");
+                        console.log("  field.dropDown:", field.dropDown ? field.dropDown.declaredClass : "null");
+                        console.log("  field._dropDownPane:", field._dropDownPane ? field._dropDownPane.declaredClass : "null");
+                    }
+                } else {
+                    // Standard multi-value field or custom editor
+                    console.log("Standard multi-value field, using standard setValue");
+                    if (field.setValue) {
+                        field.setValue(valueArray);
+                    } else {
+                        field.set("value", valueArray);
+                        field.set("displayedValue", valueArray.join(", "));
+                    }
+                }
+            } else {
+                console.log("Setting single-value field");
+                var singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
+                
+                // Use ICN-compatible setValue method
+                if (field.setValue) {
+                    field.setValue(singleValue);
+                } else {
+                    // Fallback: set value and displayedValue manually
+                    field.set("value", singleValue);
+                    field.set("displayedValue", singleValue != null ? String(singleValue) : "");
+                }
+            }
+            
+            // Mark field as changed
+            field._hasBeenBlurred = true;
+            field.focused = true;
+            
+            // Trigger onChange
+            if (typeof field.onChange === "function") {
+                console.log("Calling field.onChange()");
+                try {
+                    var currentValue = field.getValue ? field.getValue() : field.get("value");
+                    field.onChange(currentValue);
+                } catch (e) {
+                    console.warn("onChange call failed:", e);
+                }
+            }
+            
+            // Notify properties pane
+            if (typeof propertiesPane.onPropertyChanged === "function") {
+                console.log("Calling propertiesPane.onPropertyChanged()");
+                propertiesPane.onPropertyChanged();
+            }
+            
+            console.log("=== setICNPropertyValue complete ===");
+        },
