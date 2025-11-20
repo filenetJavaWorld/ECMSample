@@ -1,1 +1,1109 @@
-temp
+define([
+    "dojo/_base/declare", 
+    "dojo/_base/lang",
+    "dojo/_base/array",
+    "dojo/dom-class",
+    "dojo/dom-construct",
+    "dojo/dom-geometry",
+    "dojo/dom-style",
+    "dojo/on",
+    "dojo/keys",
+    "dijit/_WidgetsInTemplateMixin",
+    "ecm/widget/ValidationTextBox",
+    "ecm/model/Request",
+    "dojo/text!./templates/InlineAutocompleteEditor.html"
+],
+function(declare, lang, array, domClass, domConstruct, domGeometry, domStyle, on, keys, 
+         _WidgetsInTemplateMixin, ValidationTextBox, Request, template) {
+    
+    /**
+     * @name cNBPropertyEditorEDSPluginDojo.InlineAutocompleteEditor
+     * @class Unified inline autocomplete editor supporting 3 use cases:
+     *        Case 1: Typeahead + populate-on-selection
+     *        Case 2: Full-load on open + choose to populate dependents
+     *        Case 3: Preload + single preselected value (editable)
+     * @augments ValidationTextBox
+     */
+    return declare("cNBPropertyEditorEDSPluginDojo.InlineAutocompleteEditor", [
+        ValidationTextBox,
+        _WidgetsInTemplateMixin
+    ], {
+        /** @lends cNBPropertyEditorEDSPluginDojo.InlineAutocompleteEditor.prototype */
+
+        templateString: template,
+        widgetsInTemplate: true,
+        
+        // Configuration (injected by response filter)
+        lookupConfig: null,
+        
+        // Configuration options
+        preloadMode: "none",           // "none", "top500", "preselected"
+        preselectedValue: null,        // Value to preselect (Case 3)
+        allowClear: true,              // Allow user to clear selection
+        allowEdit: true,               // Allow user to edit/type
+        clearAfterSelection: false,    // Clear field after populating dependencies
+        tooltipMessage: null,          // Tooltip message to show on hover
+        
+        // Internal state
+        _debounceTimer: null,
+        _lastSearchValue: "",
+        _selectedRecord: null,
+        _dropdownVisible: false,
+        _documentClickHandler: null,
+        _scrollHandler: null,
+        _resizeHandler: null,
+        _parentScrollHandlers: [],
+        _preloadedData: null,
+        _dataInitialized: false,
+        
+        constructor: function(params) {
+            console.log("=== InlineAutocompleteEditor constructor ===");
+            console.log("Constructor params:", params);
+            
+            // Check multiple paths for lookupConfig (order matters - most specific first)
+            // 1. Server-side filter sets: params.attributeDefinition.lookupConfig
+            if (params && params.attributeDefinition && params.attributeDefinition.lookupConfig) {
+                this.lookupConfig = params.attributeDefinition.lookupConfig;
+                console.log("✓ Extracted lookupConfig from params.attributeDefinition:", this.lookupConfig);
+            } 
+            // 2. Client-side aspect sets: params.editorParameters.lookupConfig
+            else if (params && params.editorParameters && params.editorParameters.lookupConfig) {
+                this.lookupConfig = params.editorParameters.lookupConfig;
+                console.log("✓ Extracted lookupConfig from params.editorParameters:", this.lookupConfig);
+            }
+            // 3. LayoutPropertiesPane aspect might set on propertyDef
+            else if (params && params.propertyDef && params.propertyDef.lookupConfig) {
+                this.lookupConfig = params.propertyDef.lookupConfig;
+                console.log("✓ Extracted lookupConfig from params.propertyDef:", this.lookupConfig);
+            } 
+            // 4. Direct in params (fallback)
+            else if (params && params.lookupConfig) {
+                this.lookupConfig = params.lookupConfig;
+                console.log("✓ Found lookupConfig directly in params:", this.lookupConfig);
+            }
+            // 5. Check if it's in params object itself with different key
+            else if (params) {
+                // Log all keys to help debug
+                console.warn("✗ No lookupConfig found in standard locations");
+                console.log("Available params keys:", Object.keys(params));
+                
+                // Last resort: check if params itself has the config properties
+                if (params.attributeDefinition) {
+                    console.log("params.attributeDefinition keys:", Object.keys(params.attributeDefinition));
+                }
+            } 
+            else {
+                console.error("✗ params is null or undefined");
+            }
+        },
+        
+        postCreate: function() {
+            this.inherited(arguments);
+            
+            // Initialize displayedValue for ICN compatibility
+            if (!this.displayedValue) {
+                var initialValue = this.get("value");
+                if (this.cardinality === "LIST" || this.cardinality === "MULTI") {
+                    this.displayedValue = Array.isArray(initialValue) ? initialValue.join(", ") : (initialValue || "");
+                } else {
+                    this.displayedValue = initialValue != null ? String(initialValue) : "";
+                }
+            }
+            
+            console.log("=== InlineAutocompleteEditor postCreate ===");
+            console.log("Property name:", this.name);
+            
+            // Try to extract lookupConfig from attributeDefinition if not already set
+            if (!this.lookupConfig && this.attributeDefinition && this.attributeDefinition.lookupConfig) {
+                this.lookupConfig = this.attributeDefinition.lookupConfig;
+                console.log("✓ Extracted lookupConfig from this.attributeDefinition in postCreate:", this.lookupConfig);
+            } else if (!this.lookupConfig && this.propertyDef && this.propertyDef.lookupConfig) {
+                this.lookupConfig = this.propertyDef.lookupConfig;
+                console.log("✓ Extracted lookupConfig from this.propertyDef in postCreate:", this.lookupConfig);
+            }
+            
+            if (this.lookupConfig) {
+                console.log("✓ Lookup config available:", this.lookupConfig);
+            } else {
+                console.error("✗ CRITICAL: No lookupConfig available!");
+                console.log("this.attributeDefinition:", this.attributeDefinition);
+                console.log("this.propertyDef:", this.propertyDef);
+            }
+            
+            // Load configuration from lookupConfig
+            this._loadConfiguration();
+            
+            // Make field editable (user can type)
+            this.set("readOnly", false);
+            
+            // Styling
+            domClass.remove(this.domNode, this.baseClass);
+            domClass.add(this.domNode, "inlineAutocompleteEditor");
+            
+            // Position dropdown container
+            domClass.add(this.dropdownNode, "inlineDropdown");
+            
+            // Add keyup handler to textbox for autocomplete
+            this.own(on(this.textbox, "keyup", lang.hitch(this, "_handleTextboxKeyup")));
+            
+            // Add focus handler to show dropdown if there's content
+            this.own(on(this.textbox, "focus", lang.hitch(this, "_handleTextboxFocus")));
+            
+            // Prevent dropdown from closing when clicking inside it
+            this.own(on(this.dropdownNode, "mousedown", function(evt) {
+                evt.stopPropagation();
+            }));
+            
+            // Document click handler to close dropdown when clicking outside
+            this._documentClickHandler = on(document, "click", lang.hitch(this, function(evt) {
+                if (this._dropdownVisible && !this.domNode.contains(evt.target)) {
+                    this._hideDropdown();
+                }
+            }));
+            this.own(this._documentClickHandler);
+            
+            // Window scroll handler to reposition dropdown
+            this._scrollHandler = on(window, "scroll", lang.hitch(this, function() {
+                if (this._dropdownVisible) {
+                    this._repositionDropdown();
+                }
+            }));
+            this.own(this._scrollHandler);
+            
+            // Window resize handler to reposition dropdown
+            this._resizeHandler = on(window, "resize", lang.hitch(this, function() {
+                if (this._dropdownVisible) {
+                    this._repositionDropdown();
+                }
+            }));
+            this.own(this._resizeHandler);
+            
+            // Add scroll listeners to all parent scrollable containers
+            this._attachParentScrollHandlers();
+            
+            // Populate table headers from displayColumns config
+            this._populateTableHeaders();
+            
+            // Initialize based on preload mode
+            this._initializeEditor();
+        },
+        
+        startup: function() {
+            this.inherited(arguments);
+            
+            console.log("=== InlineAutocompleteEditor startup ===");
+            
+            // Apply tooltip AFTER ICN finishes its initialization
+            // Use setTimeout to ensure it runs after all framework code
+            var self = this;
+            setTimeout(function() {
+                if (self.tooltipMessage === "auto") {
+                    self._generateAutoTooltip();
+                } else if (self.tooltipMessage) {
+                    self._setTooltip(self.tooltipMessage);
+                }
+                console.log("Tooltip applied in startup()");
+            }, 100);
+        },
+        
+        _generateAutoTooltip: function() {
+            console.log("Generating auto tooltip");
+            
+            if (!this.lookupConfig || !this.lookupConfig.queryConfig) {
+                return;
+            }
+            
+            var filterColumns = this.lookupConfig.queryConfig.filterColumns;
+            var displayColumns = this.lookupConfig.displayColumns;
+            
+            if (!filterColumns || filterColumns.length === 0) {
+                return;
+            }
+            
+            // Build user-friendly tooltip message from filter columns
+            var columnNames = [];
+            
+            for (var i = 0; i < filterColumns.length; i++) {
+                var colKey = filterColumns[i];
+                // Use display name if available, otherwise use column key
+                var displayName = (displayColumns && displayColumns[colKey]) || colKey;
+                columnNames.push(displayName);
+            }
+            
+            // Create message: "Enter Model Name / Make / Year"
+            var message = "Enter " + columnNames.join(" / ");
+            console.log("Auto-generated tooltip:", message);
+            this._setTooltip(message);
+        },
+        
+        _setTooltip: function(message) {
+            if (!message || !this.textbox) {
+                return;
+            }
+            
+            // Set title attribute for native browser tooltip
+            this.textbox.setAttribute("title", message);
+            
+            // Also set on the container for better UX
+            if (this.comboContainer) {
+                this.comboContainer.setAttribute("title", message);
+            }
+            
+            console.log("Tooltip set:", message);
+        },
+        
+        _populateTableHeaders: function() {
+            console.log("Populating table headers");
+            
+            if (!this.lookupConfig || !this.lookupConfig.queryConfig) {
+                console.warn("No queryConfig in lookupConfig");
+                return;
+            }
+            
+            domConstruct.empty(this.dropdownHeader);
+            
+            // Use resultColumns array to maintain column order (arrays preserve order, objects don't)
+            var resultColumns = this.lookupConfig.queryConfig.resultColumns || [];
+            var displayColumns = this.lookupConfig.displayColumns || {};
+            
+            console.log("Creating headers for columns:", resultColumns);
+            
+            // Iterate through resultColumns to preserve order
+            for (var i = 0; i < resultColumns.length; i++) {
+                var columnKey = resultColumns[i];
+                // Look up display name from displayColumns, fallback to column key
+                var displayName = displayColumns[columnKey] || columnKey;
+                
+                domConstruct.create("th", { 
+                    innerHTML: displayName 
+                }, this.dropdownHeader);
+                
+                console.log("Header created:", columnKey, "→", displayName);
+            }
+            
+            console.log("Table headers populated in correct order");
+        },
+        
+        _loadConfiguration: function() {
+            console.log("Loading configuration");
+            
+            if (!this.lookupConfig) {
+                console.warn("No lookup config provided");
+                return;
+            }
+            
+            // Load preload mode (Case 1, 2, or 3)
+            this.preloadMode = this.lookupConfig.preloadMode || "none";
+            this.preselectedValue = this.lookupConfig.preselectedValue || null;
+            this.allowClear = this.lookupConfig.allowClear !== false;
+            this.allowEdit = this.lookupConfig.allowEdit !== false;
+            this.clearAfterSelection = this.lookupConfig.clearAfterSelection || false;
+            this.tooltipMessage = this.lookupConfig.tooltipMessage || null;
+            
+            console.log("Preload mode:", this.preloadMode);
+            console.log("Preselected value:", this.preselectedValue);
+            console.log("Allow clear:", this.allowClear);
+            console.log("Allow edit:", this.allowEdit);
+            console.log("Clear after selection:", this.clearAfterSelection);
+            console.log("Tooltip message config:", this.tooltipMessage);
+            
+            // Apply placeholder from searchConfig
+            if (this.lookupConfig.searchConfig && this.lookupConfig.searchConfig.placeholder) {
+                var placeholder = this.lookupConfig.searchConfig.placeholder;
+                if (this.textbox) {
+                    this.textbox.setAttribute("placeholder", placeholder);
+                    console.log("Placeholder set to:", placeholder);
+                }
+            }
+            
+            // NOTE: Tooltip will be applied in startup() to ensure ICN doesn't override it
+        },
+        
+        _initializeEditor: function() {
+            console.log("=== Initializing editor ===");
+            console.log("Preload mode:", this.preloadMode);
+            
+            if (this.preloadMode === "top500") {
+                // Case 2: Load top 500 on init
+                console.log("Case 2: Loading top 500 results");
+                this._preloadTopResults();
+                
+            } else if (this.preloadMode === "preselected" && this.preselectedValue) {
+                // Case 3: Set preselected value
+                console.log("Case 3: Setting preselected value:", this.preselectedValue);
+                this.set("value", this.preselectedValue);
+                this._preloadTopResults(); // Also load top results for search
+                
+            } else {
+                // Case 1: No preload, pure typeahead
+                console.log("Case 1: Pure typeahead mode");
+                this._dataInitialized = true;
+            }
+        },
+        
+        _preloadTopResults: function() {
+            console.log("Preloading top results");
+            
+            var serviceName = (this.lookupConfig && this.lookupConfig.serviceName) || "CustomEditorGenericLookupService";
+            var searchConfig = (this.lookupConfig && this.lookupConfig.searchConfig) || {};
+            
+            Request.invokePluginService("CNBPropertyEditorEDSPlugin", serviceName, {
+                requestParams: {
+                    search: "",  // Empty search for top results
+                    propertyName: this.name,
+                    lookupConfig: JSON.stringify(this.lookupConfig),
+                    limit: searchConfig.limit || 500,
+                    loadAll: "true"
+                },
+                requestCompleteCallback: lang.hitch(this, function(response) {
+                    this._handlePreloadComplete(response);
+                }),
+                requestFailedCallback: lang.hitch(this, function(error) {
+                    console.error("Preload failed:", error);
+                    this._dataInitialized = true; // Continue anyway
+                })
+            });
+        },
+        
+        _handlePreloadComplete: function(response) {
+            console.log("Preload complete:", response);
+            
+            var results = response.results || [];
+            this._preloadedData = results;
+            this._dataInitialized = true;
+            
+            console.log("Preloaded", results.length, "results");
+            
+            // If in top500 mode and field is empty, show results immediately
+            if (this.preloadMode === "top500" && !this.get("value")) {
+                this._populateDropdown(results);
+                // Don't show dropdown automatically, wait for focus/click
+            }
+        },
+        
+        _attachParentScrollHandlers: function() {
+            // Find all scrollable parent elements
+            var node = this.domNode.parentNode;
+            while (node && node !== document.body) {
+                var overflow = domStyle.get(node, "overflow");
+                var overflowY = domStyle.get(node, "overflowY");
+                
+                if (overflow === "auto" || overflow === "scroll" || overflowY === "auto" || overflowY === "scroll") {
+                    var handler = on(node, "scroll", lang.hitch(this, function() {
+                        if (this._dropdownVisible) {
+                            this._repositionDropdown();
+                        }
+                    }));
+                    this._parentScrollHandlers.push(handler);
+                    this.own(handler);
+                }
+                
+                node = node.parentNode;
+            }
+        },
+        
+        _toggleDropdown: function(evt) {
+            if (evt) {
+                evt.stopPropagation();
+            }
+            
+            console.log("Toggling dropdown");
+            
+            if (this._dropdownVisible) {
+                this._hideDropdown();
+            } else {
+                this._showDropdown();
+                // Show preloaded data or trigger search
+                this._handleDropdownOpen();
+            }
+        },
+        
+        _handleDropdownOpen: function() {
+            // If we have preloaded data, show it
+            if (this._preloadedData && this._preloadedData.length > 0) {
+                console.log("Showing preloaded data");
+                this._populateDropdown(this._preloadedData);
+            } else {
+                // Trigger search with current value if any
+                var currentValue = this.get("value") || "";
+                var searchConfig = (this.lookupConfig && this.lookupConfig.searchConfig) || {};
+                var minLength = searchConfig.minLength || 2;
+                
+                if (currentValue.length >= minLength) {
+                    this._performSearch(currentValue);
+                } else {
+                    this._showNoResults();
+                }
+            }
+        },
+        
+        _showDropdown: function() {
+            console.log("Showing dropdown");
+            domStyle.set(this.dropdownNode, "display", "block");
+            this._dropdownVisible = true;
+            this._repositionDropdown();
+        },
+        
+        _repositionDropdown: function() {
+            if (!this._dropdownVisible) {
+                return;
+            }
+            
+            // Calculate position relative to the textbox
+            var textboxPos = domGeometry.position(this.comboContainer, true);
+            
+            // Get viewport height
+            var viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+            
+            // Estimate dropdown height (max-height is 100px + borders/padding ~= 110px)
+            var dropdownHeight = 110;
+            
+            // Calculate space below and above the textbox
+            var spaceBelow = viewportHeight - (textboxPos.y + textboxPos.h);
+            var spaceAbove = textboxPos.y;
+            
+            // Determine if dropdown should appear above or below
+            var positionAbove = false;
+            if (spaceBelow < dropdownHeight && spaceAbove > spaceBelow) {
+                positionAbove = true;
+            }
+            
+            // Remove previous position classes
+            domClass.remove(this.dropdownNode, "position-below");
+            domClass.remove(this.dropdownNode, "position-above");
+            
+            // Set position and styling
+            if (positionAbove) {
+                // Position above the textbox
+                domStyle.set(this.dropdownNode, {
+                    "top": (textboxPos.y - dropdownHeight) + "px",
+                    "left": textboxPos.x + "px",
+                    "min-width": textboxPos.w + "px"
+                });
+                domClass.add(this.dropdownNode, "position-above");
+            } else {
+                // Position below the textbox
+                domStyle.set(this.dropdownNode, {
+                    "top": (textboxPos.y + textboxPos.h) + "px",
+                    "left": textboxPos.x + "px",
+                    "min-width": textboxPos.w + "px"
+                });
+                domClass.add(this.dropdownNode, "position-below");
+            }
+        },
+        
+        _hideDropdown: function() {
+            console.log("Hiding dropdown");
+            domStyle.set(this.dropdownNode, "display", "none");
+            this._dropdownVisible = false;
+        },
+        
+        _handleTextboxFocus: function(evt) {
+            console.log("Textbox focused");
+            
+            // Show dropdown with preloaded data or current search
+            if (this._dataInitialized) {
+                if (this._preloadedData && this._preloadedData.length > 0) {
+                    this._showDropdown();
+                    this._populateDropdown(this._preloadedData);
+                } else {
+                    var value = this.get("value") || "";
+                    var searchConfig = (this.lookupConfig && this.lookupConfig.searchConfig) || {};
+                    var minLength = searchConfig.minLength || 2;
+                    
+                    if (value.length >= minLength) {
+                        this._showDropdown();
+                        this._performSearch(value);
+                    }
+                }
+            }
+        },
+        
+        _handleTextboxKeyup: function(evt) {
+            // Handle special keys
+            if (evt.keyCode === keys.ESCAPE) {
+                this._hideDropdown();
+                return;
+            }
+            
+            if (evt.keyCode === keys.ENTER) {
+                // If dropdown is visible and there's a selection, select it
+                if (this._dropdownVisible && this._selectedRecord) {
+                    this._selectRecord(this._selectedRecord);
+                }
+                return;
+            }
+            
+            // Clear any existing timer
+            if (this._debounceTimer) {
+                clearTimeout(this._debounceTimer);
+            }
+            
+            var searchValue = this.get("value") || "";
+            var searchConfig = (this.lookupConfig && this.lookupConfig.searchConfig) || {};
+            var minLength = searchConfig.minLength || 2;
+            
+            // Check minimum length
+            if (searchValue.length < minLength) {
+                // If we have preloaded data, filter it even below minLength
+                if (this._preloadedData && (this.preloadMode === "top500" || this.preloadMode === "preselected")) {
+                    this._showDropdown();
+                    if (searchValue.length > 0) {
+                        console.log("Filtering preloaded data (below minLength)");
+                        this._filterPreloadedData(searchValue);
+                    } else {
+                        // Show all preloaded data if search is empty
+                        this._populateDropdown(this._preloadedData);
+                    }
+                } else {
+                    this._hideDropdown();
+                }
+                return;
+            }
+            
+            // Show dropdown
+            this._showDropdown();
+            
+            // Check preload mode to decide filtering strategy
+            if (this.preloadMode === "top500" || this.preloadMode === "preselected") {
+                // Client-side filtering: Filter preloaded data locally
+                if (this._preloadedData && this._preloadedData.length > 0) {
+                    console.log("Client-side filtering (preloadMode: " + this.preloadMode + ")");
+                    this._filterPreloadedData(searchValue);
+                } else if (searchValue.length > 0) {
+                    // Preload data not loaded yet, show "loading"
+                    this._showLoading();
+                }
+            } else {
+                // Server-side filtering: Search on server
+                console.log("Server-side filtering (preloadMode: " + this.preloadMode + ")");
+                this._debounceSearch(searchValue);
+            }
+        },
+        
+        _debounceSearch: function(searchValue) {
+            // Debounce the search
+            this._debounceTimer = setTimeout(lang.hitch(this, function() {
+                if (searchValue !== this._lastSearchValue) {
+                    this._lastSearchValue = searchValue;
+                    this._performSearch(searchValue);
+                }
+            }), (this.lookupConfig && this.lookupConfig.searchConfig && this.lookupConfig.searchConfig.debounceDelay) || 300);
+        },
+        
+        _filterPreloadedData: function(searchTerm) {
+            console.log("Filtering preloaded data for:", searchTerm);
+            
+            if (!this._preloadedData) {
+                return [];
+            }
+            
+            var searchLower = searchTerm.toLowerCase();
+            
+            // Get filter columns from config (or fallback to all result columns)
+            var filterColumns = (this.lookupConfig && this.lookupConfig.queryConfig && this.lookupConfig.queryConfig.filterColumns);
+            if (!filterColumns || filterColumns.length === 0) {
+                // If no filterColumns specified, use all resultColumns
+                filterColumns = (this.lookupConfig && this.lookupConfig.queryConfig && this.lookupConfig.queryConfig.resultColumns) || [];
+                console.log("No filterColumns specified, using all resultColumns:", filterColumns);
+            } else {
+                console.log("Filtering on configured columns:", filterColumns);
+            }
+            
+            // Filter based on specified columns containing the search term
+            var filtered = array.filter(this._preloadedData, function(record) {
+                for (var i = 0; i < filterColumns.length; i++) {
+                    var colValue = String(record[filterColumns[i]] || "").toLowerCase();
+                    if (colValue.indexOf(searchLower) !== -1) {
+                        return true;
+                    }
+                }
+                return false;
+            });
+            
+            console.log("Filtered to", filtered.length, "results");
+            this._populateDropdown(filtered);
+            
+            return filtered;
+        },
+        
+        _performSearch: function(searchTerm) {
+            console.log("Searching for: " + searchTerm);
+            
+            // Show loading indicator
+            this._showLoading();
+            
+            var serviceName = (this.lookupConfig && this.lookupConfig.serviceName) || "CustomEditorGenericLookupService";
+            var searchConfig = (this.lookupConfig && this.lookupConfig.searchConfig) || {};
+            
+            // Call plugin service
+            Request.invokePluginService("CNBPropertyEditorEDSPlugin", serviceName, {
+                requestParams: {
+                    search: searchTerm,
+                    propertyName: this.name,
+                    lookupConfig: JSON.stringify(this.lookupConfig),
+                    limit: searchConfig.limit || 500
+                },
+                requestCompleteCallback: lang.hitch(this, function(response) {
+                    this._handleSearchResults(response);
+                }),
+                requestFailedCallback: lang.hitch(this, function(error) {
+                    console.error("Search failed:", error);
+                    this._showError("Search failed. Please try again.");
+                })
+            });
+        },
+        
+        _handleSearchResults: function(response) {
+            console.log("Handling search results:", response);
+            
+            var results = response.results || [];
+            console.log("Results extracted:", results);
+            console.log("Results length:", results.length);
+            
+            if (results.length === 0) {
+                this._showNoResults();
+            } else {
+                this._populateDropdown(results);
+            }
+        },
+        
+        _showLoading: function() {
+            domConstruct.empty(this.dropdownBody);
+            var row = domConstruct.create("tr", {}, this.dropdownBody);
+            domConstruct.create("td", {
+                colspan: 3,
+                "class": "loadingCell",
+                innerHTML: "Searching..."
+            }, row);
+        },
+        
+        _showNoResults: function() {
+            domConstruct.empty(this.dropdownBody);
+            var row = domConstruct.create("tr", {}, this.dropdownBody);
+            domConstruct.create("td", {
+                colspan: 3,
+                "class": "noResultsCell",
+                innerHTML: "No results found"
+            }, row);
+        },
+        
+        _showError: function(message) {
+            domConstruct.empty(this.dropdownBody);
+            var row = domConstruct.create("tr", {}, this.dropdownBody);
+            domConstruct.create("td", {
+                colspan: 3,
+                "class": "errorCell",
+                innerHTML: message
+            }, row);
+        },
+        
+        _populateDropdown: function(results) {
+            domConstruct.empty(this.dropdownBody);
+            
+            console.log("Populating dropdown with results:", results);
+            console.log("Results length:", results.length);
+            
+            // Convert to array if needed
+            var resultArray = results;
+            if (typeof results.length === 'undefined') {
+                console.error("Results is not an array!");
+                return;
+            }
+            
+            var resultColumns = (this.lookupConfig && this.lookupConfig.queryConfig && this.lookupConfig.queryConfig.resultColumns) || [];
+            
+            // Use traditional for loop for better compatibility with IBM ECM JSON responses
+            for (var i = 0; i < resultArray.length; i++) {
+                var record = resultArray[i];
+                
+                var row = domConstruct.create("tr", {
+                    "class": "dropdownRow"
+                }, this.dropdownBody);
+                
+                // Create cells for each column
+                for (var j = 0; j < resultColumns.length; j++) {
+                    var colName = resultColumns[j];
+                    domConstruct.create("td", { 
+                        innerHTML: record[colName] || "" 
+                    }, row);
+                }
+                
+                // Add click handler - use closure to capture correct record
+                (function(currentRecord) {
+                    this.own(on(row, "click", lang.hitch(this, function() {
+                        this._selectRecord(currentRecord);
+                    })));
+                }).call(this, record);
+            }
+            
+            console.log("Dropdown populated with " + resultArray.length + " rows");
+        },
+        
+        _selectRecord: function(record) {
+            console.log("Selected record:", record);
+            
+            // Store selected record
+            this._selectedRecord = record;
+            
+            // Get the primary key column (first in resultColumns)
+            var resultColumns = (this.lookupConfig && this.lookupConfig.queryConfig && this.lookupConfig.queryConfig.resultColumns) || [];
+            var primaryKey = resultColumns[0];
+            var primaryValue = record[primaryKey];
+            
+            // Set the account number value
+            this.set("value", primaryValue);
+            
+            // CRITICAL: Mark THIS field as touched and trigger its onChange
+            this._hasBeenBlurred = true;
+            this.focused = true;
+            
+            if (typeof this.onChange === "function") {
+                console.log("Calling this.onChange()");
+                this.onChange(primaryValue);
+            }
+            
+            // Get the properties pane and trigger its onChange
+            var propertiesPane = this._getPropertiesPane();
+            if (propertiesPane && typeof propertiesPane.onPropertyChanged === "function") {
+                console.log("Calling propertiesPane.onPropertyChanged() for field");
+                propertiesPane.onPropertyChanged();
+            }
+            
+            // Populate related fields
+            this._populateRelatedFields(record);
+            
+            // Clear field after selection if configured
+            if (this.clearAfterSelection) {
+                console.log("Clearing field after selection (clearAfterSelection: true)");
+                setTimeout(lang.hitch(this, function() {
+                    this.set("value", "");
+                    console.log("Field cleared");
+                }), 100); // Small delay to ensure dependent fields are populated first
+            }
+            
+            // Hide dropdown
+            this._hideDropdown();
+            
+            console.log("Fields populated with selected record");
+        },
+        
+        _populateRelatedFields: function(record) {
+            console.log("=== Populating related fields ===");
+            console.log("Record:", record);
+            
+            var propertiesPane = this._getPropertiesPane();
+            if (!propertiesPane) {
+                console.error("Properties pane not found");
+                return;
+            }
+            
+            var fieldMappings = (this.lookupConfig && this.lookupConfig.fieldMappings) || {};
+            
+            for (var sourceField in fieldMappings) {
+                var mappingConfig = fieldMappings[sourceField];
+                
+                // Support both old format (string) and new format (object)
+                var targetField, dataType, cardinality, separator, format;
+                
+                if (typeof mappingConfig === "string") {
+                    // Old format: "fieldMappings": { "customerName": "CustomerName" }
+                    targetField = mappingConfig;
+                    dataType = "xs:string";
+                    cardinality = "SINGLE";
+                } else {
+                    // New format with metadata
+                    targetField = mappingConfig.targetProperty;
+                    dataType = mappingConfig.dataType || "xs:string";
+                    cardinality = mappingConfig.cardinality || "SINGLE";
+                    separator = mappingConfig.separator || ",";
+                    format = mappingConfig.format;
+                }
+                
+                var sourceValue = record[sourceField];
+                
+                console.log("Mapping:", sourceField, "→", targetField);
+                console.log("  Source value:", sourceValue);
+                console.log("  Data type:", dataType);
+                console.log("  Cardinality:", cardinality);
+                
+                // Convert and format the value
+                var formattedValue = this._formatValue(sourceValue, dataType, cardinality, separator, format);
+                
+                console.log("  Formatted value:", formattedValue);
+                
+                // Set the value (fields remain editable)
+                this.setICNPropertyValue(propertiesPane, targetField, formattedValue, cardinality);
+            }
+            
+            console.log("=== Field population complete ===");
+        },
+        
+        _formatValue: function(value, dataType, cardinality, separator, format) {
+            if (value == null || value === "") {
+                return cardinality === "LIST" ? [] : "";
+            }
+            
+            // Handle multi-value properties
+            if (cardinality === "LIST" || cardinality === "MULTI") {
+                var values;
+                
+                if (Array.isArray(value)) {
+                    values = value;
+                } else if (typeof value === "string") {
+                    values = value.split(separator).map(function(v) { 
+                        return v.trim(); 
+                    }).filter(function(v) { 
+                        return v.length > 0; 
+                    });
+                } else {
+                    values = [value];
+                }
+                
+                return array.map(values, lang.hitch(this, function(v) {
+                    return this._formatSingleValue(v, dataType, format);
+                }));
+            } else {
+                return this._formatSingleValue(value, dataType, format);
+            }
+        },
+        
+        _formatSingleValue: function(value, dataType, format) {
+            if (value == null || value === "") {
+                return "";
+            }
+            
+            switch (dataType) {
+                case "xs:string":
+                    return String(value);
+                    
+                case "xs:integer":
+                case "xs:int":
+                case "xs:long":
+                    return parseInt(value, 10);
+                    
+                case "xs:double":
+                case "xs:decimal":
+                case "xs:float":
+                    return parseFloat(value);
+                    
+                case "xs:boolean":
+                    if (typeof value === "boolean") return value;
+                    if (typeof value === "string") {
+                        return value.toLowerCase() === "true" || value === "1";
+                    }
+                    return Boolean(value);
+                    
+                case "xs:date":
+                case "xs:timestamp":
+                case "xs:time":
+                    return this._formatDateValue(value, format);
+                    
+                default:
+                    return String(value);
+            }
+        },
+        
+        _formatDateValue: function(value, format) {
+            if (value instanceof Date) {
+                return value.getTime();
+            }
+            
+            if (typeof value === "string") {
+                try {
+                    var date = new Date(value);
+                    if (!isNaN(date.getTime())) {
+                        return date.getTime();
+                    }
+                } catch (e) {
+                    console.error("Error parsing date:", value, e);
+                }
+            }
+            
+            if (typeof value === "number") {
+                return value;
+            }
+            
+            return value;
+        },
+        
+        setICNPropertyValue: function(propertiesPane, propertyName, newValue, cardinality) {
+            console.log("=== setICNPropertyValue ===");
+            console.log("Property:", propertyName);
+            console.log("Value:", newValue);
+            console.log("Cardinality:", cardinality);
+            
+            if (!propertiesPane || !propertiesPane._propertyEditors) {
+                console.error("Properties pane or property editors not found");
+                return;
+            }
+            
+            // Find the field
+            var field = null;
+            for (var i = 0; i < propertiesPane._propertyEditors._fields.length; i++) {
+                var f = propertiesPane._propertyEditors._fields[i];
+                if (f && f.name === propertyName) {
+                    field = f;
+                    break;
+                }
+            }
+            
+            if (!field) {
+                console.warn("Field not found:", propertyName);
+                return;
+            }
+            
+            console.log("Found field:", field.name);
+            
+            // Handle based on cardinality
+            if (cardinality === "LIST" || cardinality === "MULTI" || 
+                field.cardinality === "LIST" || field.cardinality === "MULTI") {
+                
+                console.log("Setting multi-value field");
+                var valueArray = Array.isArray(newValue) ? newValue : [newValue];
+                
+                // Use ICN-compatible setValue method
+                if (field.setValue) {
+                    field.setValue(valueArray);
+                } else {
+                    // Fallback: set value and displayedValue manually
+                    field.set("value", valueArray);
+                    field.set("displayedValue", valueArray.join(", "));
+                }
+            } else {
+                console.log("Setting single-value field");
+                var singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
+                
+                // Use ICN-compatible setValue method
+                if (field.setValue) {
+                    field.setValue(singleValue);
+                } else {
+                    // Fallback: set value and displayedValue manually
+                    field.set("value", singleValue);
+                    field.set("displayedValue", singleValue != null ? String(singleValue) : "");
+                }
+            }
+            
+            // Mark field as changed
+            field._hasBeenBlurred = true;
+            field.focused = true;
+            
+            // Trigger onChange
+            if (typeof field.onChange === "function") {
+                console.log("Calling field.onChange()");
+                try {
+                    var currentValue = field.getValue ? field.getValue() : field.get("value");
+                    field.onChange(currentValue);
+                } catch (e) {
+                    console.warn("onChange call failed:", e);
+                }
+            }
+            
+            // Notify properties pane
+            if (typeof propertiesPane.onPropertyChanged === "function") {
+                console.log("Calling propertiesPane.onPropertyChanged()");
+                propertiesPane.onPropertyChanged();
+            }
+            
+            console.log("=== setICNPropertyValue complete ===");
+        },
+        
+        _getPropertiesPane: function() {
+            var widget = this.getParent();
+            while (widget) {
+                if (widget.declaredClass === "ecm.widget.CommonPropertiesPane" || 
+                    widget.declaredClass === "ecm.widget.AddContentItemPropertiesPane") {
+                    return widget;
+                }
+                if (widget._propertiesPane) return widget._propertiesPane;
+                if (widget.propertiesPane) return widget.propertiesPane;
+                
+                widget = widget.getParent ? widget.getParent() : null;
+            }
+            return null;
+        },
+        
+        destroy: function() {
+            if (this._debounceTimer) {
+                clearTimeout(this._debounceTimer);
+            }
+            if (this._dropdownVisible) {
+                this._hideDropdown();
+            }
+            this._preloadedData = null;
+            this.inherited(arguments);
+        },
+        
+        // ===== ICN MULTI-VALUE COMPATIBILITY METHODS =====
+        
+        /**
+         * Returns the editor's value. Required by ICN for property editors.
+         * For multi-value fields, returns an array. For single-value, returns the value.
+         */
+        getValue: function() {
+            var value = this.get("value");
+            
+            // If cardinality is LIST or MULTI, ensure we return an array
+            if (this.cardinality === "LIST" || this.cardinality === "MULTI") {
+                if (value == null || value === "") {
+                    return [];
+                }
+                return Array.isArray(value) ? value : [value];
+            }
+            
+            // Single value
+            return value;
+        },
+        
+        /**
+         * Returns the editor's value as an array. Required by ICN's _SinglePropertyEditorMixin.
+         * This is called by ICN when processing property values for submission.
+         */
+        getValueAsArray: function() {
+            var v = this.getValue();
+            
+            if (v instanceof Array) {
+                if (v.length == 0) {
+                    v.push("");
+                }
+                return v;
+            } else if (v == null || v === "") {
+                return [];
+            } else {
+                return [v + ""];
+            }
+        },
+        
+        /**
+         * Sets the value with proper handling for multi-value properties.
+         * Also sets the displayedValue for ICN compatibility.
+         */
+        setValue: function(value) {
+            console.log("[InlineAutocompleteEditor] setValue called with:", value);
+            
+            // Store both value and displayedValue
+            if (this.cardinality === "LIST" || this.cardinality === "MULTI") {
+                var valueArray = Array.isArray(value) ? value : (value ? [value] : []);
+                
+                // Set the actual value as an array
+                this.set("value", valueArray);
+                
+                // Set displayedValue as a comma-separated string (ICN convention)
+                var displayValue = valueArray.join(", ");
+                this.set("displayedValue", displayValue);
+                
+                console.log("[InlineAutocompleteEditor] Multi-value set:", valueArray, "Display:", displayValue);
+            } else {
+                // Single value
+                var singleValue = Array.isArray(value) ? value[0] : value;
+                this.set("value", singleValue);
+                this.set("displayedValue", singleValue != null ? String(singleValue) : "");
+                
+                console.log("[InlineAutocompleteEditor] Single-value set:", singleValue);
+            }
+        }
+        
+        // ===== END OF ICN COMPATIBILITY METHODS =====
+    });
+});
+
