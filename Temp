@@ -1,142 +1,175 @@
- setICNPropertyValue: function(propertiesPane, propertyName, newValue, cardinality) {
-            console.log("=== setICNPropertyValue ===");
-            console.log("Property:", propertyName);
-            console.log("Value:", newValue);
-            console.log("Cardinality:", cardinality);
-            
-            if (!propertiesPane || !propertiesPane._propertyEditors) {
-                console.error("Properties pane or property editors not found");
-                return;
-            }
-            
-            // Find the field
-            var field = null;
-            for (var i = 0; i < propertiesPane._propertyEditors._fields.length; i++) {
-                var f = propertiesPane._propertyEditors._fields[i];
-                if (f && f.name === propertyName) {
-                    field = f;
-                    break;
+require([
+    "dojo/_base/declare",
+         "dojo/_base/lang",
+    "dojo/aspect",
+    "ecm/model/Request",
+    "cNBPropertyEditorEDSPluginDojo/InlineAutocompleteEditor"
+], 
+function(declare, lang, aspect, Request, InlineAutocompleteEditor) {
+    
+    console.log("[CNBPropertyEditorEDSPlugin] ====================================");
+    console.log("[CNBPropertyEditorEDSPlugin] Initializing plugin...");
+    
+    var editorConfig = null;
+    var configLoaded = false;
+    var configLoading = false;
+    
+    /**
+     * Load configuration from backend using ICN Request API
+     */
+    function loadConfiguration() {
+        if (configLoaded || configLoading) {
+            return;
+        }
+        
+        configLoading = true;
+        console.log("[CNBPropertyEditorEDSPlugin] Loading configuration from backend...");
+        
+        // Use ICN's Request.invokePluginService() - the correct way!
+        Request.invokePluginService("CNBPropertyEditorEDSPlugin", "GetLookupConfigService", {
+            requestParams: {},
+            requestCompleteCallback: function(response) {
+                console.log("[CNBPropertyEditorEDSPlugin] Service response:", response);
+                
+                editorConfig = response.documentClasses || {};
+                configLoaded = true;
+                configLoading = false;
+                
+                var classCount = Object.keys(editorConfig).length;
+                console.log("[CNBPropertyEditorEDSPlugin] ✓ Configuration loaded successfully");
+                console.log("[CNBPropertyEditorEDSPlugin] ✓ Loaded " + classCount + " document class(es):");
+                
+                for (var className in editorConfig) {
+                    var propsCount = editorConfig[className].properties ? 
+                                    Object.keys(editorConfig[className].properties).length : 0;
+                    console.log("[CNBPropertyEditorEDSPlugin]   - " + className + " (" + propsCount + " properties)");
                 }
+            },
+            requestFailedCallback: function(error) {
+                console.error("[CNBPropertyEditorEDSPlugin] ✗ Failed to load configuration:", error);
+                editorConfig = {};
+                configLoaded = true;
+                configLoading = false;
             }
+        });
+    }
+    
+    // Load configuration on plugin startup
+    loadConfiguration();
+    
+    // ========================================================================
+    // PROPERTY DISPLAY ORDER: Intercept CommonPropertiesPane.renderAttributes
+    // to reorder properties according to configuration
+    // ========================================================================
+    require(["ecm/widget/CommonPropertiesPane"], function(CommonPropertiesPane) {
+        try {
+            console.log("[CNBPropertyEditorEDSPlugin] Setting up property display order interception...");
             
-            if (!field) {
-                console.warn("Field not found:", propertyName);
-                return;
-            }
-            
-            console.log("Found field:", field.name);
-            console.log("Field type:", field.declaredClass);
-            console.log("Field dataType:", field.dataType);
-            
-            // Handle based on cardinality
-            if (cardinality === "LIST" || cardinality === "MULTI" || 
-                field.cardinality === "LIST" || field.cardinality === "MULTI") {
-                
-                console.log("Setting multi-value field");
-                var valueArray = Array.isArray(newValue) ? newValue : [newValue];
-                
-                // Check if this is a DropDownInput wrapping a MultiValueInputPane
-                if (field.declaredClass === "ecm.widget.DropDownInput") {
-                    console.log("Field is DropDownInput");
+            aspect.around(CommonPropertiesPane.prototype, "renderAttributes", function(original) {
+                return function(attributeDefinitions, item, reason, isReadOnly, params) {
+                    console.log("[CNBPropertyEditorEDSPlugin] ========================================");
+                    console.log("[CNBPropertyEditorEDSPlugin] >>> Intercepting renderAttributes");
+                    console.log("[CNBPropertyEditorEDSPlugin] Reason:", reason);
+                    console.log("[CNBPropertyEditorEDSPlugin] Number of properties:", attributeDefinitions ? attributeDefinitions.length : 0);
                     
-                    // MultiValueInputPane can be accessed via:
-                    // 1. field._dropDownPane (direct reference)
-                    // 2. field.dropDown.content (if wrapped in DropDownDialog)
-                    var multiValuePane = null;
-                    
-                    if (field._dropDownPane && field._dropDownPane.declaredClass === "ecm.widget.MultiValueInputPane") {
-                        multiValuePane = field._dropDownPane;
-                        console.log("✓ Found MultiValueInputPane via _dropDownPane");
-                    } else if (field.dropDown && field.dropDown.declaredClass === "ecm.widget.DropDownDialog") {
-                        console.log("Field has DropDownDialog wrapper");
-                        if (field.dropDown.content && field.dropDown.content.declaredClass === "ecm.widget.MultiValueInputPane") {
-                            multiValuePane = field.dropDown.content;
-                            console.log("✓ Found MultiValueInputPane via dropDown.content");
+                    // Only reorder for document creation
+                    if (configLoaded && editorConfig && attributeDefinitions && attributeDefinitions.length > 0) {
+                        try {
+                            // Get document class name
+                            var documentClass = null;
+                            
+                            if (attributeDefinitions[0] && attributeDefinitions[0].contentClass) {
+                                documentClass = attributeDefinitions[0].contentClass.id;
+                            } else if (item && item.contentClass) {
+                                documentClass = item.contentClass.name;
+                            }
+                            
+                            console.log("[CNBPropertyEditorEDSPlugin] Document class:", documentClass);
+                            
+                            if (documentClass && editorConfig[documentClass]) {
+                                var classConfig = editorConfig[documentClass];
+                                
+                                // STEP 1: Hide properties if hideProperties is configured
+                                if (classConfig.hideProperties && classConfig.hideProperties.length > 0) {
+                                    console.log("[CNBPropertyEditorEDSPlugin] ✓ Hide properties configured:", classConfig.hideProperties);
+                                    
+                                    var visibleAttributes = [];
+                                    
+                                    attributeDefinitions.forEach(function(attr) {
+                                        var propertyName = attr.id || attr.name;
+                                        
+                                        // Check if this property should be hidden
+                                        var shouldHide = classConfig.hideProperties.indexOf(propertyName) !== -1;
+                                        
+                                        if (shouldHide) {
+                                            console.log("[CNBPropertyEditorEDSPlugin]   ✗ Hiding property:", propertyName);
+                                        } else {
+                                            visibleAttributes.push(attr);
+                                        }
+                                    });
+                                    
+                                    console.log("[CNBPropertyEditorEDSPlugin] ✓ Properties filtered successfully");
+                                    console.log("[CNBPropertyEditorEDSPlugin]   Before hiding: " + attributeDefinitions.length + " properties");
+                                    console.log("[CNBPropertyEditorEDSPlugin]   After hiding: " + visibleAttributes.length + " properties");
+                                    
+                                    // Replace attributeDefinitions with filtered version
+                                    attributeDefinitions = visibleAttributes;
+                                }
+                                
+                                // STEP 2: Reorder properties if propertyDisplayOrder is configured
+                                if (classConfig.propertyDisplayOrder && classConfig.propertyDisplayOrder.length > 0) {
+                                    console.log("[CNBPropertyEditorEDSPlugin] ✓ Property display order configured:", classConfig.propertyDisplayOrder);
+                                    
+                                    // Reorder attributeDefinitions based on propertyDisplayOrder
+                                    var orderedAttributes = [];
+                                    var remainingAttributes = [].concat(attributeDefinitions); // Clone array
+                                    
+                                    // First, add properties in the specified order
+                                    classConfig.propertyDisplayOrder.forEach(function(propertyName) {
+                                        for (var i = 0; i < remainingAttributes.length; i++) {
+                                            var attr = remainingAttributes[i];
+                                            if (attr.id === propertyName || attr.name === propertyName) {
+                                                orderedAttributes.push(attr);
+                                                remainingAttributes.splice(i, 1);
+                                                console.log("[CNBPropertyEditorEDSPlugin]   ✓ Ordered property:", propertyName);
+                                                break;
+                                            }
+                                        }
+                                    });
+                                    
+                                    // Then, add any remaining properties not in the display order (at the end)
+                                    remainingAttributes.forEach(function(attr) {
+                                        orderedAttributes.push(attr);
+                                        console.log("[CNBPropertyEditorEDSPlugin]   + Added remaining property:", attr.id || attr.name);
+                                    });
+                                    
+                                    console.log("[CNBPropertyEditorEDSPlugin] ✓ Properties reordered successfully");
+                                    console.log("[CNBPropertyEditorEDSPlugin]   Original order: " + 
+                                               attributeDefinitions.map(function(a) { return a.id || a.name; }).join(", "));
+                                    console.log("[CNBPropertyEditorEDSPlugin]   New order: " + 
+                                               orderedAttributes.map(function(a) { return a.id || a.name; }).join(", "));
+                                    
+                                    // Replace attributeDefinitions with ordered version
+                                    attributeDefinitions = orderedAttributes;
+                                }
+                            }
+                        } catch (e) {
+                            console.error("[CNBPropertyEditorEDSPlugin] Error reordering properties:", e);
                         }
-                    } else if (field.dropDown && field.dropDown.declaredClass === "ecm.widget.MultiValueInputPane") {
-                        // Fallback: direct dropDown (older ICN versions or different configurations)
-                        multiValuePane = field.dropDown;
-                        console.log("✓ Found MultiValueInputPane via dropDown (direct)");
                     }
                     
-                    if (multiValuePane) {
-                        console.log("Updating MultiValueInputPane with values:", valueArray);
-                        
-                        // Get the field's dataType (for proper formatting in the grid)
-                        var fieldDataType = field.dataType || "xs:string";
-                        var fieldDataFormat = field.dataFormat || null;
-                        
-                        // Update the MultiValueInputPane's internal data
-                        multiValuePane.setDataValues(valueArray, fieldDataType, fieldDataFormat, null);
-                        
-                        // If the grid is already loaded, reload it to show the new values
-                        if (multiValuePane._valuesGrid) {
-                            console.log("Reloading values grid to display new values");
-                            multiValuePane._loadValuesGrid();
-                        }
-                        
-                        // Update the DropDownInput's value and label
-                        var updatedValues = multiValuePane.getValue();
-                        var updatedLabel = multiValuePane.getLabel();
-                        
-                        field.set("value", updatedValues);
-                        field.set("label", updatedLabel);
-                        field.set("displayedValue", updatedLabel);
-                        
-                        console.log("✓ MultiValueInputPane updated successfully");
-                        console.log("  Field dataType:", fieldDataType);
-                        console.log("  Field dataFormat:", fieldDataFormat);
-                        console.log("  Internal values:", updatedValues);
-                        console.log("  Display label:", updatedLabel);
-                    } else {
-                        console.warn("✗ Could not find MultiValueInputPane in field structure");
-                        console.log("  field.dropDown:", field.dropDown ? field.dropDown.declaredClass : "null");
-                        console.log("  field._dropDownPane:", field._dropDownPane ? field._dropDownPane.declaredClass : "null");
-                    }
-                } else {
-                    // Standard multi-value field or custom editor
-                    console.log("Standard multi-value field, using standard setValue");
-                    if (field.setValue) {
-                        field.setValue(valueArray);
-                    } else {
-                        field.set("value", valueArray);
-                        field.set("displayedValue", valueArray.join(", "));
-                    }
-                }
-            } else {
-                console.log("Setting single-value field");
-                var singleValue = Array.isArray(newValue) ? newValue[0] : newValue;
-                
-                // Use ICN-compatible setValue method
-                if (field.setValue) {
-                    field.setValue(singleValue);
-                } else {
-                    // Fallback: set value and displayedValue manually
-                    field.set("value", singleValue);
-                    field.set("displayedValue", singleValue != null ? String(singleValue) : "");
-                }
-            }
+                    // Call original renderAttributes with (possibly reordered) attributeDefinitions
+                    return original.call(this, attributeDefinitions, item, reason, isReadOnly, params);
+                };
+            });
             
-            // Mark field as changed
-            field._hasBeenBlurred = true;
-            field.focused = true;
+            console.log("[CNBPropertyEditorEDSPlugin] ✓ Property display order interception set up successfully");
             
-            // Trigger onChange
-            if (typeof field.onChange === "function") {
-                console.log("Calling field.onChange()");
-                try {
-                    var currentValue = field.getValue ? field.getValue() : field.get("value");
-                    field.onChange(currentValue);
-                } catch (e) {
-                    console.warn("onChange call failed:", e);
-                }
-            }
-            
-            // Notify properties pane
-            if (typeof propertiesPane.onPropertyChanged === "function") {
-                console.log("Calling propertiesPane.onPropertyChanged()");
-                propertiesPane.onPropertyChanged();
-            }
-            
-            console.log("=== setICNPropertyValue complete ===");
-        },
+        } catch (e) {
+            console.error("[CNBPropertyEditorEDSPlugin] Failed to set up property display order:", e);
+        }
+    });
+    
+    console.log("[CNBPropertyEditorEDSPlugin] Plugin initialized successfully");
+    console.log("[CNBPropertyEditorEDSPlugin] ====================================");
+});
