@@ -1,1 +1,642 @@
-temp
+define([
+	"dojo/_base/declare",
+	"dojo/_base/lang",
+	"dojo/_base/array",
+	"dojo/aspect",
+	"dojo/on",
+	"dojo/dom-class",
+	"dojo/dom-style",
+	"dojo/dom-construct",
+	"dojo/data/ItemFileWriteStore",
+	"dojo/store/DataStore",
+	"dijit/form/Button",
+	"dijit/form/FilteringSelect",
+	"dijit/layout/BorderContainer",
+	"dijit/layout/ContentPane",
+	"ecm/widget/layout/_LaunchBarPane",
+	"ecm/widget/CommonPropertiesPane",
+	"ecm/widget/viewer/ContentViewerPane",
+	"ecm/widget/viewer/model/ViewerItem",
+	"ecm/model/Desktop",
+	"ecm/model/EntryTemplate",
+	"ecm/Messages",
+	"dojo/text!./templates/DocumentUploadUsingFeature.html"
+],
+function(declare, lang, array, aspect, on, domClass, domStyle, domConstruct, 
+	ItemFileWriteStore, DataStore, Button, FilteringSelect, BorderContainer, ContentPane, 
+	_LaunchBarPane, CommonPropertiesPane, ContentViewerPane, ViewerItem, Desktop, 
+	EntryTemplate, Messages, template) {
+	
+	/**
+	 * @name mutiRepoSearchPluginDojo.DocumentUploadUsingFeature
+	 * @class Feature with 3-column layout: Document List | Entry Template Selection + Properties | Document Viewer
+	 * @augments ecm.widget.layout._LaunchBarPane
+	 */
+	return declare("mutiRepoSearchPluginDojo.DocumentUploadUsingFeature", [
+		_LaunchBarPane
+	], {
+		/** @lends mutiRepoSearchPluginDojo.DocumentUploadUsingFeature.prototype */
+
+		templateString: template,
+		widgetsInTemplate: true,
+		
+		// Repository reference
+		repository: null,
+		
+		// Entry template selector widget
+		_entryTemplateSelector: null,
+		
+		// Common properties pane widget
+		_commonPropertiesPane: null,
+		
+		// Content viewer pane reference
+		_contentViewerPane: null,
+		
+		// Currently selected entry template
+		_selectedEntryTemplate: null,
+		
+		// Currently selected content class
+		_selectedContentClass: null,
+		
+		// List of available entry templates
+		_entryTemplates: null,
+		
+		// Reference document GUID (for testing)
+		_referenceDocumentGuid: "{795EA3F5-C370-4A4D-AC5F-AEBCFF693055}",
+		
+		// Message reference
+		_messages: ecm.messages,
+
+		postCreate: function() {
+			this.logEntry("postCreate");
+			this.inherited(arguments);
+			this.logExit("postCreate");
+		},
+		
+		/**
+		 * Called when feature is selected/loaded
+		 */
+		loadContent: function() {
+			this.logEntry("loadContent");
+			
+			if (!this.isLoaded) {
+				// Get the default repository
+				this.repository = ecm.model.desktop.getDefaultRepository();
+				
+				if (this.repository) {
+					if (this.repository.connected) {
+						this._initializeFeature();
+					} else {
+						// Connect to repository first
+						this.repository.logon(null, lang.hitch(this, function() {
+							this._initializeFeature();
+						}));
+					}
+				} else {
+					console.error("No repository available");
+					this._showMessage(this.entryTemplatePropertiesPane, "Please configure a repository first.");
+				}
+				
+				this.isLoaded = true;
+				this.needReset = false;
+			}
+			
+			this.logExit("loadContent");
+		},
+
+		/**
+		 * Initialize the feature components
+		 */
+		_initializeFeature: function() {
+			this.logEntry("_initializeFeature");
+			
+			// Initialize document list (placeholder for now)
+			this._initializeDocumentList();
+			
+			// Initialize entry template selector and properties pane
+			this._initializeEntryTemplateSelector();
+			
+			// Initialize document viewer
+			this._initializeViewer();
+			
+			this.logExit("_initializeFeature");
+		},
+		
+		/**
+		 * Initialize document list (Column 1) - Placeholder
+		 */
+		_initializeDocumentList: function() {
+			this.logEntry("_initializeDocumentList");
+			
+			if (this.documentListPane) {
+				this.documentListPane.set("content", 
+					"<div style='padding: 10px;'>" +
+					"<h4>Document List</h4>" +
+					"<p style='color: #666;'>Document list will be displayed here.</p>" +
+					"<p style='color: #666;'>Select a document to view its content.</p>" +
+					"</div>"
+				);
+			}
+			
+			this.logExit("_initializeDocumentList");
+		},
+		
+		/**
+		 * Initialize entry template selector and properties pane (Column 2)
+		 */
+		_initializeEntryTemplateSelector: function() {
+			this.logEntry("_initializeEntryTemplateSelector");
+			
+			if (!this.repository) {
+				console.error("Repository not available");
+				return;
+			}
+			
+			// Show loading message
+			if (this.entryTemplateSelectorContainer) {
+				this.entryTemplateSelectorContainer.innerHTML = "<p style='color: #666;'>Loading entry templates...</p>";
+			}
+			
+			// Retrieve entry templates from the repository
+			this.repository.retrieveEntryTemplates(lang.hitch(this, function(entryTemplates) {
+				console.log("Entry templates retrieved: " + entryTemplates.length);
+				this._entryTemplates = entryTemplates;
+				this._createEntryTemplateSelector(entryTemplates);
+			}), "Document");  // Filter for Document entry templates
+			
+			// Note: CommonPropertiesPane will be created when entry template is selected
+			// to ensure it's fresh for each selection
+			
+			this.logExit("_initializeEntryTemplateSelector");
+		},
+		
+		/**
+		 * Create the entry template selector dropdown
+		 */
+		_createEntryTemplateSelector: function(entryTemplates) {
+			this.logEntry("_createEntryTemplateSelector");
+			
+			// Build the store for the FilteringSelect
+			var templateItems = [];
+			for (var i = 0; i < entryTemplates.length; i++) {
+				templateItems.push({
+					label: entryTemplates[i].name || "",
+					value: String(i),
+					entryTemplate: entryTemplates[i]
+				});
+			}
+			
+			var templateItemsStore = new DataStore({
+				store: new ItemFileWriteStore({
+					data: {
+						identifier: "value",
+						label: "label",
+						items: templateItems
+					}
+				})
+			});
+			
+			// Destroy existing selector if any
+			if (this._entryTemplateSelector) {
+				this._entryTemplateSelector.destroy();
+			}
+			
+			// Create the FilteringSelect for entry templates
+			this._entryTemplateSelector = new FilteringSelect({
+				store: templateItemsStore,
+				searchAttr: "label",
+				labelAttr: "label",
+				style: "width: 100%;",
+				placeHolder: this._messages.add_document_select_entry_template || "Select an entry template...",
+				required: false
+			});
+			
+			// Connect to selection change event
+			on(this._entryTemplateSelector, "change", lang.hitch(this, function(value) {
+				if (value !== null && value !== "" && value !== undefined) {
+					var index = parseInt(value, 10);
+					if (!isNaN(index) && this._entryTemplates[index]) {
+						this._onEntryTemplateSelected(this._entryTemplates[index]);
+					}
+				}
+			}));
+			
+			// Place the selector in the container
+			if (this.entryTemplateSelectorContainer) {
+				domConstruct.empty(this.entryTemplateSelectorContainer);
+				this.entryTemplateSelectorContainer.appendChild(this._entryTemplateSelector.domNode);
+				this._entryTemplateSelector.startup();
+			}
+			
+			this.logExit("_createEntryTemplateSelector");
+		},
+		
+		/**
+		 * Handle entry template selection
+		 */
+		_onEntryTemplateSelected: function(entryTemplate) {
+			this.logEntry("_onEntryTemplateSelected");
+			console.log("Entry template selected: " + entryTemplate.name);
+			console.log("Entry template id: " + entryTemplate.id);
+			
+			this._selectedEntryTemplate = entryTemplate;
+			
+			// Show loading message in properties container
+			if (this.propertiesContainer) {
+				domConstruct.empty(this.propertiesContainer);
+				this.propertiesContainer.innerHTML = "<div style='padding: 10px;'>Loading entry template properties...</div>";
+			}
+			
+			// Retrieve the full entry template details
+			entryTemplate.retrieveEntryTemplate(lang.hitch(this, function(retrievedEntryTemplate) {
+				console.log("Entry template retrieved successfully");
+				console.log("Entry template name: " + retrievedEntryTemplate.name);
+				console.log("Class name (addClassName): " + retrievedEntryTemplate.addClassName);
+				console.log("Class label (addClassLabel): " + retrievedEntryTemplate.addClassLabel);
+				console.log("Object store: ", retrievedEntryTemplate.objectStore);
+				
+				// Get the content class from the entry template
+				var className = retrievedEntryTemplate.addClassName;
+				
+				if (!className) {
+					console.error("Entry template has no addClassName");
+					this._showMessage(this.propertiesContainer, "Error: Entry template has no associated class.");
+					return;
+				}
+				
+				// Try to get the content class
+				var contentClass = this.repository.getContentClass(className, retrievedEntryTemplate.objectStore);
+				console.log("Content class retrieved: ", contentClass);
+				
+				if (contentClass) {
+					this._selectedContentClass = contentClass;
+					this._renderPropertiesFromEntryTemplate(contentClass, retrievedEntryTemplate);
+				} else {
+					// If getContentClass returns null, try to retrieve it
+					console.log("Content class not in cache, will retrieve during renderProperties");
+					// Create a temporary content class object
+					contentClass = this.repository.getContentClass(className, retrievedEntryTemplate.objectStore);
+					if (!contentClass) {
+						console.error("Content class not found: " + className);
+						this._showMessage(this.propertiesContainer, "Error: Content class '" + className + "' not found.");
+						return;
+					}
+					this._selectedContentClass = contentClass;
+					this._renderPropertiesFromEntryTemplate(contentClass, retrievedEntryTemplate);
+				}
+				
+				// Fire event
+				this.onEntryTemplateSelected(retrievedEntryTemplate);
+				
+			}), false, false);
+			
+			this.logExit("_onEntryTemplateSelected");
+		},
+		
+		/**
+		 * Render properties for the selected entry template's class
+		 */
+		_renderPropertiesFromEntryTemplate: function(contentClass, entryTemplate) {
+			this.logEntry("_renderPropertiesFromEntryTemplate");
+			
+			if (!contentClass) {
+				console.log("No content class provided");
+				this._showMessage(this.propertiesContainer, "Error: No content class available.");
+				return;
+			}
+			
+			console.log("Rendering properties for class: " + contentClass.name);
+			console.log("Content class id: " + contentClass.id);
+			console.log("Entry template: " + entryTemplate.name);
+			
+			// Destroy existing CommonPropertiesPane to get a fresh one
+			if (this._commonPropertiesPane) {
+				try {
+					this._commonPropertiesPane.clearRendering();
+					this._commonPropertiesPane.destroy();
+				} catch (e) {
+					console.log("Error destroying previous pane: " + e);
+				}
+				this._commonPropertiesPane = null;
+			}
+			
+			// Create new CommonPropertiesPane
+			console.log("Creating new CommonPropertiesPane");
+			this._commonPropertiesPane = new CommonPropertiesPane({
+				repository: this.repository,
+				style: "width: 100%;"
+			});
+			
+			// Clear the properties container and add the pane
+			if (this.propertiesContainer) {
+				domConstruct.empty(this.propertiesContainer);
+				this.propertiesContainer.appendChild(this._commonPropertiesPane.domNode);
+				this._commonPropertiesPane.startup();
+			}
+			
+			// Retrieve attribute definitions for the content class
+			console.log("Retrieving attribute definitions for class: " + contentClass.id);
+			
+			contentClass.retrieveAttributeDefinitions(lang.hitch(this, function(attributeDefinitions) {
+				console.log("Attribute definitions retrieved: " + attributeDefinitions.length + " attributes");
+				
+				// Log first few attributes for debugging
+				for (var i = 0; i < Math.min(3, attributeDefinitions.length); i++) {
+					console.log("  Attribute " + i + ": " + attributeDefinitions[i].id + " - " + attributeDefinitions[i].name);
+				}
+				
+				// Apply entry template property options if available
+				var modifiedAttributeDefinitions = this._applyEntryTemplateOptions(attributeDefinitions, entryTemplate);
+				
+				// Render properties in the CommonPropertiesPane
+				console.log("Calling renderAttributes with " + modifiedAttributeDefinitions.length + " attributes");
+				
+				try {
+					this._commonPropertiesPane.renderAttributes(
+						modifiedAttributeDefinitions,
+						null,      // item (null for new document)
+						"create",  // reason
+						false      // isReadOnly
+					);
+					
+					console.log("renderAttributes completed successfully");
+					
+					// Resize after rendering
+					this._commonPropertiesPane.resize();
+					
+					// Fire event
+					this.onPropertiesRendered(contentClass, modifiedAttributeDefinitions, entryTemplate);
+					
+				} catch (e) {
+					console.error("Error in renderAttributes: ", e);
+					this._showMessage(this.propertiesContainer, "Error rendering properties: " + e.message);
+				}
+				
+			}), lang.hitch(this, function(error) {
+				console.error("Error retrieving attribute definitions: ", error);
+				this._showMessage(this.propertiesContainer, "Error loading properties: " + (error.message || error));
+			}));
+			
+			this.logExit("_renderPropertiesFromEntryTemplate");
+		},
+		
+		/**
+		 * Apply entry template options to attribute definitions
+		 * (e.g., hidden, readOnly, default values from entry template)
+		 */
+		_applyEntryTemplateOptions: function(attributeDefinitions, entryTemplate) {
+			// If entry template has property options, apply them
+			if (entryTemplate.propertiesOptions && entryTemplate.propertiesOptions.length > 0) {
+				var optionsById = {};
+				array.forEach(entryTemplate.propertiesOptions, function(option) {
+					optionsById[option.id] = option;
+				});
+				
+				array.forEach(attributeDefinitions, function(attrDef) {
+					var option = optionsById[attrDef.id];
+					if (option) {
+						if (option.hidden !== undefined) {
+							attrDef.hidden = option.hidden;
+						}
+						if (option.readOnly !== undefined) {
+							attrDef.readOnly = option.readOnly;
+						}
+						if (option.required !== undefined) {
+							attrDef.required = option.required;
+						}
+						if (option.defaultValue !== undefined) {
+							attrDef.defaultValue = option.defaultValue;
+						}
+					}
+				});
+			}
+			
+			return attributeDefinitions;
+		},
+		
+		/**
+		 * Initialize document viewer (Column 3)
+		 */
+		_initializeViewer: function() {
+			this.logEntry("_initializeViewer");
+			
+			if (this._referenceDocumentGuid && this.repository) {
+				this._loadReferenceDocument();
+			} else {
+				if (this.viewerPane) {
+					this.viewerPane.set("content", 
+						"<div style='padding: 20px; text-align: center;'>" +
+						"<p>Document Viewer</p>" +
+						"<p style='color: #666;'>Select a document to view its content.</p>" +
+						"</div>"
+					);
+				}
+			}
+			
+			this.logExit("_initializeViewer");
+		},
+		
+		/**
+		 * Load and display a document in the viewer
+		 */
+		_loadReferenceDocument: function() {
+			var methodName = "_loadReferenceDocument";
+			console.log(methodName + ": Loading document with GUID: " + this._referenceDocumentGuid);
+			
+			if (!this._referenceDocumentGuid || !this.repository) {
+				console.error(methodName + ": Missing documentGuid or repository");
+				return;
+			}
+			
+			if (this.viewerPane) {
+				this.viewerPane.set("content", "<p style='padding:20px;'>Loading document...</p>");
+			}
+			
+			this.repository.retrieveItem(this._referenceDocumentGuid, lang.hitch(this, function(contentItem) {
+				console.log(methodName + ": Document retrieved: " + contentItem.name);
+				
+				var viewerItem = new ViewerItem(contentItem);
+				
+				if (this._contentViewerPane) {
+					this._contentViewerPane.destroyRecursive();
+					this._contentViewerPane = null;
+				}
+				
+				this._contentViewerPane = new ContentViewerPane({
+					style: "width: 100%; height: 100%;",
+					preview: true
+				});
+				
+				if (this.viewerPane) {
+					this.viewerPane.set("content", this._contentViewerPane);
+					this._contentViewerPane.openItem(viewerItem, 1);
+					
+					setTimeout(lang.hitch(this, function() {
+						if (this._contentViewerPane) {
+							this._contentViewerPane.activateViewer();
+							this._contentViewerPane.resize();
+						}
+					}), 500);
+				}
+				
+			}), lang.hitch(this, function(error) {
+				console.error(methodName + ": Error retrieving document: ", error);
+				if (this.viewerPane) {
+					this.viewerPane.set("content", 
+						"<p style='padding:20px;color:red;'>Error loading document.</p>"
+					);
+				}
+			}));
+		},
+		
+		/**
+		 * Load a document in the viewer by GUID
+		 */
+		loadDocumentInViewer: function(documentGuid) {
+			this._referenceDocumentGuid = documentGuid;
+			if (this.repository && this.repository.connected) {
+				this._loadReferenceDocument();
+			}
+		},
+		
+		/**
+		 * Get the current property values from the properties pane
+		 */
+		getPropertyValues: function() {
+			if (this._commonPropertiesPane) {
+				return this._commonPropertiesPane.getPropertyValues();
+			}
+			return null;
+		},
+		
+		/**
+		 * Get the selected entry template
+		 */
+		getSelectedEntryTemplate: function() {
+			return this._selectedEntryTemplate;
+		},
+		
+		/**
+		 * Get the selected content class
+		 */
+		getSelectedContentClass: function() {
+			return this._selectedContentClass;
+		},
+		
+		/**
+		 * Show a message in a container
+		 */
+		_showMessage: function(container, message) {
+			if (container) {
+				if (container.set) {
+					container.set("content", "<div style='padding: 10px;'>" + message + "</div>");
+				} else if (container.innerHTML !== undefined) {
+					container.innerHTML = "<div style='padding: 10px;'>" + message + "</div>";
+				}
+			}
+		},
+		
+		/**
+		 * Event fired when an entry template is selected
+		 */
+		onEntryTemplateSelected: function(entryTemplate) {
+			console.log("Entry template selected event: " + entryTemplate.name);
+		},
+		
+		/**
+		 * Event fired when properties are rendered
+		 */
+		onPropertiesRendered: function(contentClass, attributeDefinitions, entryTemplate) {
+			console.log("Properties rendered for class: " + contentClass.name + " (entry template: " + entryTemplate.name + ")");
+		},
+		
+		/**
+		 * Reset the feature
+		 */
+		reset: function() {
+			this.logEntry("reset");
+			this.needReset = false;
+			this.logExit("reset");
+		},
+		
+		/**
+		 * Cleanup on destroy
+		 */
+		destroy: function() {
+			if (this._entryTemplateSelector) {
+				this._entryTemplateSelector.destroy();
+				this._entryTemplateSelector = null;
+			}
+			if (this._commonPropertiesPane) {
+				this._commonPropertiesPane.destroy();
+				this._commonPropertiesPane = null;
+			}
+			if (this._contentViewerPane) {
+				this._contentViewerPane.destroyRecursive();
+				this._contentViewerPane = null;
+			}
+			this.inherited(arguments);
+		}
+	});
+});
+
+<div class="ecmCenterPane documentUploadUsingFeature" style="width: 100%; height: 100%;">
+	<div data-dojo-type="dijit/layout/BorderContainer" 
+		 data-dojo-props="gutters: true, liveSplitters: true" 
+		 style="width: 100%; height: 100%;">
+		
+		<!-- Column 1: Document List (Left) -->
+		<div data-dojo-type="dijit/layout/ContentPane" 
+			 data-dojo-props="region: 'left', splitter: true"
+			 data-dojo-attach-point="documentListPane"
+			 class="documentListColumn"
+			 style="width: 25%; min-width: 200px; overflow: auto; border-right: 1px solid #ccc;">
+			<div style="padding: 10px;">
+				<h4 style="margin: 0 0 10px 0; color: #333;">Document List</h4>
+				<p style="color: #666; font-size: 12px;">Loading documents...</p>
+			</div>
+		</div>
+		
+		<!-- Column 2: Entry Template Selection + Properties (Center) -->
+		<div data-dojo-type="dijit/layout/ContentPane" 
+			 data-dojo-props="region: 'center'"
+			 data-dojo-attach-point="entryTemplatePropertiesPane"
+			 class="entryTemplatePropertiesColumn"
+			 style="overflow: auto; padding: 0;">
+			
+			<div style="padding: 10px; border-bottom: 1px solid #ddd; background: #f9f9f9;">
+				<h4 style="margin: 0 0 10px 0; color: #333;">Entry Template</h4>
+				<div data-dojo-attach-point="entryTemplateSelectorContainer" 
+					 style="margin-bottom: 10px;">
+					<!-- Entry Template Selector will be placed here -->
+					<p style="color: #666; font-size: 12px;">Loading entry templates...</p>
+				</div>
+			</div>
+			
+			<div style="padding: 10px; height: calc(100% - 100px); overflow: auto;">
+				<h4 style="margin: 0 0 10px 0; color: #333;">Properties</h4>
+				<div data-dojo-attach-point="propertiesContainer" style="min-height: 200px;">
+					<!-- CommonPropertiesPane will be placed here -->
+					<p style="color: #666; font-size: 12px;">Select an entry template to view properties.</p>
+				</div>
+			</div>
+			
+		</div>
+		
+		<!-- Column 3: Document Viewer (Right) -->
+		<div data-dojo-type="dijit/layout/ContentPane" 
+			 data-dojo-props="region: 'right', splitter: true"
+			 data-dojo-attach-point="viewerPane"
+			 class="documentViewerColumn"
+			 style="width: 35%; min-width: 300px; overflow: hidden; border-left: 1px solid #ccc; padding: 0;">
+			<div style="padding: 20px; text-align: center;">
+				<h4 style="margin: 0 0 10px 0; color: #333;">Document Viewer</h4>
+				<p style="color: #666; font-size: 12px;">Select a document to view its content.</p>
+			</div>
+		</div>
+		
+	</div>
+</div>
+
+
+
