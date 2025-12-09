@@ -1,1 +1,72 @@
-temp
+<div class="ecmCenterPane documentUploadUsingFeature" style="width: 100%; height: 100%;">
+	<style>
+		/* Ensure dropdowns and popups appear above the viewer pane */
+		.documentUploadUsingFeature .entryTemplatePropertiesColumn {
+			position: relative;
+			z-index: 100;
+		}
+		.documentUploadUsingFeature .documentViewerColumn {
+			position: relative;
+			z-index: 1;
+		}
+		/* Ensure EDS popups and dijit dropdowns have high z-index */
+		.dijitPopup, .dijitComboBoxMenu, .dijitTooltipDialog, .edsPopup {
+			z-index: 10000 !important;
+		}
+	</style>
+	<div data-dojo-type="dijit/layout/BorderContainer" 
+		 data-dojo-props="gutters: true, liveSplitters: true" 
+		 style="width: 100%; height: 100%;">
+		
+		<!-- Column 1: Document List (Left) -->
+		<div data-dojo-type="dijit/layout/ContentPane" 
+			 data-dojo-props="region: 'left', splitter: true"
+			 data-dojo-attach-point="documentListPane"
+			 class="documentListColumn"
+			 style="width: 25%; min-width: 200px; overflow: auto; border-right: 1px solid #ccc;">
+			<div style="padding: 10px;">
+				<h4 style="margin: 0 0 10px 0; color: #333;">Document List</h4>
+				<p style="color: #666; font-size: 12px;">Loading documents...</p>
+			</div>
+		</div>
+		
+		<!-- Column 2: Entry Template Selection + Properties (Center) -->
+		<div data-dojo-type="dijit/layout/ContentPane" 
+			 data-dojo-props="region: 'center'"
+			 data-dojo-attach-point="entryTemplatePropertiesPane"
+			 class="entryTemplatePropertiesColumn"
+			 style="overflow: visible; padding: 0; position: relative; z-index: 100;">
+			
+			<div style="padding: 10px; border-bottom: 1px solid #ddd; background: #f9f9f9;">
+				<h4 style="margin: 0 0 10px 0; color: #333;">Entry Template</h4>
+				<div data-dojo-attach-point="entryTemplateSelectorContainer" 
+					 style="margin-bottom: 10px;">
+					<!-- Entry Template Selector will be placed here -->
+					<p style="color: #666; font-size: 12px;">Loading entry templates...</p>
+				</div>
+			</div>
+			
+			<div style="padding: 10px; height: calc(100% - 100px); overflow: auto;">
+				<h4 style="margin: 0 0 10px 0; color: #333;">Properties</h4>
+				<div data-dojo-attach-point="propertiesContainer" style="min-height: 200px; overflow: visible;">
+					<!-- CommonPropertiesPane will be placed here -->
+					<p style="color: #666; font-size: 12px;">Select an entry template to view properties.</p>
+				</div>
+			</div>
+			
+		</div>
+		
+		<!-- Column 3: Document Viewer (Right) - Lower z-index -->
+		<div data-dojo-type="dijit/layout/ContentPane" 
+			 data-dojo-props="region: 'right', splitter: true"
+			 data-dojo-attach-point="viewerPane"
+			 class="documentViewerColumn"
+			 style="width: 35%; min-width: 300px; overflow: hidden; border-left: 1px solid #ccc; padding: 0; position: relative; z-index: 1;">
+			<div style="padding: 20px; text-align: center;">
+				<h4 style="margin: 0 0 10px 0; color: #333;">Document Viewer</h4>
+				<p style="color: #666; font-size: 12px;">Select a document to view its content.</p>
+			</div>
+		</div>
+		
+	</div>
+</div>
