@@ -1,1 +1,531 @@
-temp
+package com.wawanesa.ace.merge.utils;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.sql.CallableStatement;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Types;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.wawanesa.ace.merge.configuration.PropertiesConfigLoader;
+import com.wawanesa.ace.merge.connection.ConnectionManager;
+import com.wawanesa.ace.merge.constants.Constants;
+
+/**
+ * Fast staging-based merge utility - modeled after DataTransformUtility's approach.
+ * 
+ * APPROACH:
+ * 1. Batch INSERT into CC_Extract_Staging table (fast - same as DataTransformUtility)
+ * 2. Call sp_SyncStagingToMain stored procedure (all UPDATE logic runs on DB server)
+ * 
+ * BENEFITS:
+ * - No BULK INSERT permission needed
+ * - No long-running UPDATE queries from Java
+ * - Same fast batch insert pattern as DataTransformUtility
+ */
+public class StagingBasedMergeUtils {
+    
+    private static final Logger logger = LogManager.getLogger(StagingBasedMergeUtils.class);
+    
+    // SQL for upserting into staging table (MERGE handles duplicates on EXTERNALID)
+    // If EXTERNALID exists, update the row; otherwise insert new row
+    private static final String UPSERT_STAGING_SQL = 
+        "MERGE [dbo].[CC_Extract_Staging] AS target " +
+        "USING (SELECT ? AS [NAME], ? AS [DOCUMENT_TYPE], ? AS [CLAIM_NUMBER], ? AS [POLICY_NUMBER], " +
+        "? AS [DOCUMENT_SUBTYPE], ? AS [AUTHOR], ? AS [DOCUMENT_DESCRIPTION], ? AS [STATUS], " +
+        "? AS [EXTERNALID], ? AS [ID], ? AS [CLAIMID], ? AS [SourceFileName]) AS source " +
+        "ON target.[EXTERNALID] = source.[EXTERNALID] " +
+        "WHEN MATCHED THEN UPDATE SET " +
+        "  target.[NAME] = source.[NAME], target.[DOCUMENT_TYPE] = source.[DOCUMENT_TYPE], " +
+        "  target.[CLAIM_NUMBER] = source.[CLAIM_NUMBER], target.[POLICY_NUMBER] = source.[POLICY_NUMBER], " +
+        "  target.[DOCUMENT_SUBTYPE] = source.[DOCUMENT_SUBTYPE], target.[AUTHOR] = source.[AUTHOR], " +
+        "  target.[DOCUMENT_DESCRIPTION] = source.[DOCUMENT_DESCRIPTION], target.[STATUS] = source.[STATUS], " +
+        "  target.[ID] = source.[ID], target.[CLAIMID] = source.[CLAIMID], " +
+        "  target.[SourceFileName] = source.[SourceFileName], target.[LoadedDate] = GETDATE(), " +
+        "  target.[SyncStatus] = NULL, target.[IsSynced] = 0 " +
+        "WHEN NOT MATCHED THEN INSERT " +
+        "  ([NAME], [DOCUMENT_TYPE], [CLAIM_NUMBER], [POLICY_NUMBER], [DOCUMENT_SUBTYPE], " +
+        "   [AUTHOR], [DOCUMENT_DESCRIPTION], [STATUS], [EXTERNALID], [ID], [CLAIMID], " +
+        "   [SourceFileName], [LoadedDate]) " +
+        "  VALUES (source.[NAME], source.[DOCUMENT_TYPE], source.[CLAIM_NUMBER], source.[POLICY_NUMBER], " +
+        "   source.[DOCUMENT_SUBTYPE], source.[AUTHOR], source.[DOCUMENT_DESCRIPTION], source.[STATUS], " +
+        "   source.[EXTERNALID], source.[ID], source.[CLAIMID], source.[SourceFileName], GETDATE());";
+    
+    // SQL for calling the sync procedure
+    private static final String CALL_SYNC_PROC = 
+        "{CALL [dbo].[sp_SyncStagingToMain](?, ?, ?, ?, ?)}";
+    
+    private ConnectionManager connectionManager;
+    private String basePath;
+    private int batchSize;
+    private boolean skipHeaderRow;
+    private boolean archiveAfterProcessing;
+    
+    public StagingBasedMergeUtils(PropertiesConfigLoader config, ConnectionManager connectionManager) {
+        this.connectionManager = connectionManager;
+        this.basePath = config.getProperty("app.base_path");
+        
+        // Skip header row setting
+        String skipHeaderStr = config.getProperty("app.skipHeaderRow");
+        this.skipHeaderRow = (skipHeaderStr == null) || Boolean.parseBoolean(skipHeaderStr);
+        
+        // Archive after processing setting
+        String archiveStr = config.getProperty("app.archive.after.processing");
+        this.archiveAfterProcessing = (archiveStr != null) && Boolean.parseBoolean(archiveStr);
+        
+        // Use same batch size pattern as DataTransformUtility
+        String batchSizeStr = config.getProperty("db.batch.insert.size");
+        if (batchSizeStr == null) {
+            batchSizeStr = config.getProperty("db.batch.update.size");
+        }
+        this.batchSize = (batchSizeStr != null) ? Integer.parseInt(batchSizeStr) : 1000;
+        
+        logger.info("StagingBasedMergeUtils initialized - Batch size: {}, Skip header: {}, Archive: {}", 
+                   batchSize, skipHeaderRow, archiveAfterProcessing);
+    }
+    
+    /**
+     * Result class for processing (matches Utils.ProcessingResult structure)
+     */
+    public static class ProcessingResult {
+        public int totalRows = 0;
+        public int successCount = 0;       // Rows loaded to staging
+        public int failureCount = 0;       // Parse errors
+        public int skippedEmptyLines = 0;
+        public int rowsUpdatedInMain = 0;  // Rows synced to main table
+        public int rowsNotMatched = 0;     // Rows with no matching externalID
+        public String batchRunId = null;
+    }
+    
+    /**
+     * Process a CSV file using the fast staging approach
+     */
+    public ProcessingResult processCSVFile(Path csvFilePath) {
+        String csvFileName = csvFilePath.getFileName().toString();
+        logger.info("===== Starting STAGING-BASED processing of: {} =====", csvFileName);
+        
+        Path inprogressDir = Paths.get(basePath, Constants.INPROGRESS_FOLDER);
+        Path inprogressFile = inprogressDir.resolve(csvFileName);
+        ProcessingResult result = new ProcessingResult();
+        
+        try {
+            // Move file to Inprogress folder
+            logger.info("Moving {} to Inprogress folder", csvFileName);
+            Files.move(csvFilePath, inprogressFile, StandardCopyOption.REPLACE_EXISTING);
+            
+            // STEP 1: Load CSV into staging table using fast batch insert
+            logger.info("[STEP 1] Loading CSV into staging table...");
+            loadCSVToStagingBatch(inprogressFile, csvFileName, result);
+            logger.info("[STEP 1] Complete - Loaded: {}, Failed: {}", result.successCount, result.failureCount);
+            
+            // STEP 2: Call stored procedure to sync staging -> main
+            if (result.successCount > 0) {
+                logger.info("[STEP 2] Calling sync procedure...");
+                callSyncProcedure(csvFileName, result);
+                logger.info("[STEP 2] Complete - Updated: {}, Not Matched: {}", 
+                           result.rowsUpdatedInMain, result.rowsNotMatched);
+            }
+            
+            // STEP 3: Handle file lifecycle
+            handleFileLifecycle(inprogressFile, csvFileName, result);
+            
+            logFinalSummary(csvFileName, result);
+            return result;
+            
+        } catch (Exception e) {
+            logger.error("Critical error processing: {}", csvFileName, e);
+            moveToFailed(inprogressFile, csvFileName, e.getMessage());
+            return result;
+        }
+    }
+    
+    /**
+     * STEP 1: Fast batch INSERT into staging table
+     * Same approach as DataTransformUtility.insertClaimCenterRowsBatch()
+     */
+    private void loadCSVToStagingBatch(Path csvFilePath, String csvFileName, ProcessingResult result) 
+            throws IOException, SQLException {
+        
+        List<String[]> batchData = new ArrayList<>(batchSize);
+        List<String> batchLines = new ArrayList<>(batchSize);
+        List<String> failedRows = new ArrayList<>();
+        String headerLine = null;
+        
+        try (Connection conn = connectionManager.getConnection();
+             BufferedReader reader = new BufferedReader(new FileReader(csvFilePath.toFile()))) {
+            
+            conn.setAutoCommit(false);
+            
+            // Read header
+            headerLine = reader.readLine();
+            if (headerLine == null || headerLine.trim().isEmpty()) {
+                throw new IOException("Empty CSV file or missing header");
+            }
+            
+            Map<String, Integer> headerIndex = buildHeaderIndex(headerLine);
+            if (!validateRequiredColumns(headerIndex)) {
+                throw new IOException("Missing required columns in CSV");
+            }
+            
+            String line;
+            int rowNum = 1;
+            
+            while ((line = reader.readLine()) != null) {
+                rowNum++;
+                
+                if (line.trim().isEmpty()) {
+                    result.skippedEmptyLines++;
+                    continue;
+                }
+                
+                result.totalRows++;
+                
+                try {
+                    String[] cells = line.split("\\|", -1);
+                    
+                    // Build data array for batch insert
+                    String[] rowData = new String[12]; // 11 columns + filename
+                    rowData[0] = getCell(cells, headerIndex, "NAME");
+                    rowData[1] = getCell(cells, headerIndex, "DOCUMENT_TYPE");
+                    rowData[2] = getCell(cells, headerIndex, "CLAIM_NUMBER");
+                    rowData[3] = getCell(cells, headerIndex, "POLICY_NUMBER");
+                    rowData[4] = getCell(cells, headerIndex, "DOCUMENT_SUBTYPE");
+                    rowData[5] = getCell(cells, headerIndex, "AUTHOR");
+                    rowData[6] = getCell(cells, headerIndex, "DOCUMENT_DESCRIPTION");
+                    rowData[7] = getCell(cells, headerIndex, "STATUS");
+                    rowData[8] = getCell(cells, headerIndex, "EXTERNALID");
+                    rowData[9] = getCell(cells, headerIndex, "ID");
+                    rowData[10] = getCell(cells, headerIndex, "CLAIMID");
+                    rowData[11] = csvFileName;
+                    
+                    batchData.add(rowData);
+                    batchLines.add(line);
+                    
+                    // Execute batch when full (same pattern as DataTransformUtility)
+                    if (batchData.size() >= batchSize) {
+                        int inserted = executeBatchInsert(conn, batchData);
+                        result.successCount += inserted;
+                        
+                        logger.debug("Batch committed: {} rows (total: {})", inserted, result.successCount);
+                        batchData.clear();
+                        batchLines.clear();
+                    }
+                    
+                } catch (Exception e) {
+                    result.failureCount++;
+                    String errorMsg = e.getMessage().replace("\"", "'").replace("|", ";");
+                    failedRows.add(line + "|" + errorMsg);
+                    logger.warn("Row {} parse error: {}", rowNum, e.getMessage());
+                }
+            }
+            
+            // Execute remaining batch
+            if (!batchData.isEmpty()) {
+                int inserted = executeBatchInsert(conn, batchData);
+                result.successCount += inserted;
+                logger.debug("Final batch committed: {} rows", inserted);
+            }
+            
+            conn.commit();
+            logger.info("Staging load complete: {} rows inserted", result.successCount);
+        }
+        
+        // Write failed rows file if any failures
+        if (!failedRows.isEmpty()) {
+            writeFailedFile(csvFileName, headerLine, failedRows);
+        }
+    }
+    
+    /**
+     * Execute batch upsert - inserts new rows or updates existing ones (by EXTERNALID)
+     */
+    private int executeBatchInsert(Connection conn, List<String[]> batchData) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(UPSERT_STAGING_SQL)) {
+            
+            for (String[] rowData : batchData) {
+                for (int i = 0; i < 12; i++) {
+                    ps.setString(i + 1, rowData[i]);
+                }
+                ps.addBatch();
+            }
+            
+            int[] results = ps.executeBatch();
+            conn.commit();
+            return results.length;
+            
+        } catch (SQLException e) {
+            conn.rollback();
+            throw e;
+        }
+    }
+    
+    /**
+     * STEP 2: Call stored procedure to sync staging -> main table
+     */
+    private void callSyncProcedure(String csvFileName, ProcessingResult result) throws SQLException {
+        try (Connection conn = connectionManager.getConnection();
+             CallableStatement stmt = conn.prepareCall(CALL_SYNC_PROC)) {
+            
+            // Input parameter
+            stmt.setString(1, csvFileName);
+            
+            // Output parameters
+            stmt.registerOutParameter(2, Types.INTEGER);  // @RowsToProcess
+            stmt.registerOutParameter(3, Types.INTEGER);  // @RowsUpdated
+            stmt.registerOutParameter(4, Types.INTEGER);  // @RowsNotMatched
+            stmt.registerOutParameter(5, Types.VARCHAR);  // @BatchRunID
+            
+            stmt.execute();
+            
+            // Get output values
+            result.rowsUpdatedInMain = stmt.getInt(3);
+            result.rowsNotMatched = stmt.getInt(4);
+            result.batchRunId = stmt.getString(5);
+            
+            logger.info("Sync procedure completed - Updated: {}, Not Matched: {}, BatchID: {}", 
+                       result.rowsUpdatedInMain, result.rowsNotMatched, result.batchRunId);
+        }
+    }
+    
+    /**
+     * Handle file lifecycle after processing
+     */
+    private void handleFileLifecycle(Path inprogressFile, String csvFileName, ProcessingResult result) {
+        try {
+            Path targetDir;
+            String summaryStatus;
+            boolean isSuccess = false;
+            
+            if (result.failureCount == 0 && result.rowsNotMatched == 0) {
+                // Complete success
+                targetDir = Paths.get(basePath, Constants.COMPLETED_FOLDER);
+                summaryStatus = "SUCCESS";
+                isSuccess = true;
+            } else if (result.rowsUpdatedInMain > 0) {
+                // Partial success
+                targetDir = Paths.get(basePath, Constants.COMPLETED_FOLDER);
+                summaryStatus = "PARTIAL";
+                isSuccess = true;
+            } else {
+                // Complete failure
+                targetDir = Paths.get(basePath, Constants.FAILED_FOLDER);
+                summaryStatus = "FAILED";
+            }
+            
+            Files.createDirectories(targetDir);
+            Path targetFile = targetDir.resolve(csvFileName);
+            Files.move(inprogressFile, targetFile, StandardCopyOption.REPLACE_EXISTING);
+            logger.info("File moved to {} folder", targetDir.getFileName());
+            
+            // Write summary
+            writeSummaryFile(targetDir, csvFileName, result, summaryStatus);
+            
+            // Archive successful files if configured
+            if (isSuccess && archiveAfterProcessing) {
+                Path archiveDir = Paths.get(basePath, Constants.ARCHIVE_FOLDER);
+                Files.createDirectories(archiveDir);
+                Path archiveFile = archiveDir.resolve(csvFileName);
+                Files.move(targetFile, archiveFile, StandardCopyOption.REPLACE_EXISTING);
+                logger.info("File archived to {} folder", Constants.ARCHIVE_FOLDER);
+            }
+            
+        } catch (IOException e) {
+            logger.error("Error handling file lifecycle: {}", e.getMessage());
+        }
+    }
+    
+    private void moveToFailed(Path inprogressFile, String csvFileName, String errorMessage) {
+        try {
+            Path failedDir = Paths.get(basePath, Constants.FAILED_FOLDER);
+            Files.createDirectories(failedDir);
+            
+            if (Files.exists(inprogressFile)) {
+                Path failedFile = failedDir.resolve(csvFileName);
+                Files.move(inprogressFile, failedFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+            
+            // Write error log
+            Path errorLogPath = failedDir.resolve(csvFileName.replace(".csv", "_ERROR.log"));
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(errorLogPath.toFile()))) {
+                writer.write("Error: " + errorMessage);
+                writer.newLine();
+                writer.write("Timestamp: " + java.time.LocalDateTime.now());
+            }
+        } catch (IOException e) {
+            logger.error("Error moving to failed: {}", e.getMessage());
+        }
+    }
+    
+    private void writeFailedFile(String csvFileName, String headerLine, List<String> failedRows) {
+        try {
+            Path failedDir = Paths.get(basePath, Constants.FAILED_FOLDER);
+            Files.createDirectories(failedDir);
+            
+            String baseFileName = csvFileName.replaceAll("(?i)\\.csv$", "");
+            Path failedFile = failedDir.resolve(baseFileName + "_PARSE_ERRORS.csv");
+            
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(failedFile.toFile()))) {
+                writer.write(headerLine + "|ERROR_MESSAGE");
+                writer.newLine();
+                for (String row : failedRows) {
+                    writer.write(row);
+                    writer.newLine();
+                }
+            }
+            logger.info("Created parse errors file: {}", failedFile);
+        } catch (IOException e) {
+            logger.error("Error writing failed file: {}", e.getMessage());
+        }
+    }
+    
+    private void writeSummaryFile(Path dir, String csvFileName, ProcessingResult result, String status) {
+        Path summaryPath = dir.resolve(csvFileName.replace(".csv", "_SUMMARY.txt"));
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(summaryPath.toFile()))) {
+            writer.write("============================================================");
+            writer.newLine();
+            writer.write("CLAIM CENTER DATA MERGE - SUMMARY");
+            writer.newLine();
+            writer.write("============================================================");
+            writer.newLine();
+            writer.write("File: " + csvFileName);
+            writer.newLine();
+            writer.write("Status: " + status);
+            writer.newLine();
+            writer.write("Batch Run ID: " + result.batchRunId);
+            writer.newLine();
+            writer.write("Timestamp: " + java.time.LocalDateTime.now());
+            writer.newLine();
+            writer.write("------------------------------------------------------------");
+            writer.newLine();
+            writer.write("Total Rows in CSV: " + result.totalRows);
+            writer.newLine();
+            writer.write("Loaded to Staging: " + result.successCount);
+            writer.newLine();
+            writer.write("Parse Errors: " + result.failureCount);
+            writer.newLine();
+            writer.write("Updated in Main Table: " + result.rowsUpdatedInMain + " (isDataMerged=1)");
+            writer.newLine();
+            writer.write("Not Matched (externalID not found): " + result.rowsNotMatched);
+            writer.newLine();
+            writer.write("Empty Lines Skipped: " + result.skippedEmptyLines);
+            writer.newLine();
+            writer.write("============================================================");
+        } catch (IOException e) {
+            logger.error("Error writing summary: {}", e.getMessage());
+        }
+    }
+    
+    private void logFinalSummary(String csvFileName, ProcessingResult result) {
+        logger.info("============================================================");
+        logger.info("PROCESSING COMPLETE: {}", csvFileName);
+        logger.info("============================================================");
+        logger.info("Total Rows: {}", result.totalRows);
+        logger.info("Loaded to Staging: {}", result.successCount);
+        logger.info("Parse Errors: {}", result.failureCount);
+        logger.info("Updated in Main: {} (isDataMerged=1)", result.rowsUpdatedInMain);
+        logger.info("Not Matched: {}", result.rowsNotMatched);
+        logger.info("Batch Run ID: {}", result.batchRunId);
+        logger.info("============================================================");
+    }
+    
+    // ========== Helper Methods ==========
+    
+    private Map<String, Integer> buildHeaderIndex(String headerLine) {
+        Map<String, Integer> index = new HashMap<>();
+        String[] headers = headerLine.split("\\|", -1);
+        for (int i = 0; i < headers.length; i++) {
+            String header = headers[i].trim().replace("\"", "");
+            index.put(header, i);
+        }
+        return index;
+    }
+    
+    private boolean validateRequiredColumns(Map<String, Integer> headerIndex) {
+        String[] required = {"NAME", "DOCUMENT_TYPE", "CLAIM_NUMBER", "POLICY_NUMBER", 
+                            "DOCUMENT_SUBTYPE", "AUTHOR", "DOCUMENT_DESCRIPTION", 
+                            "STATUS", "EXTERNALID", "ID", "CLAIMID"};
+        
+        List<String> missing = new ArrayList<>();
+        for (String col : required) {
+            if (!headerIndex.containsKey(col)) {
+                missing.add(col);
+            }
+        }
+        
+        if (!missing.isEmpty()) {
+            logger.error("Missing required columns: {}", missing);
+            return false;
+        }
+        return true;
+    }
+    
+    private String getCell(String[] cells, Map<String, Integer> headerIndex, String columnName) {
+        Integer idx = headerIndex.get(columnName);
+        if (idx == null || idx >= cells.length) {
+            return null;
+        }
+        String value = cells[idx].trim().replace("\"", "");
+        return value.isEmpty() ? null : value;
+    }
+}
+
+
+
+
+
+
+
+# ===========================================================
+# CCDataMergeUtility - Configuration
+# ===========================================================
+# Uses STAGING-BASED approach:
+#   1. Java batch INSERT into CC_Extract_Staging table
+#   2. Stored procedure syncs to main table
+# ===========================================================
+
+# ===== APPLICATION SETTINGS =====
+# Base path for Input/Inprogress/Completed/Failed/Archive folders
+app.base_path=D:/Rameshwar/ClaimCenterDataMerge/
+
+# Skip first row of CSV (header row)
+app.skipHeaderRow=true
+
+# Archive source files after successful processing (true/false)
+# If true: moves to Archive folder after processing
+# If false: files stay in Completed folder
+app.archive.after.processing=true
+
+# Thread Pool Size: Number of parallel CSV file processors
+# Recommended: 5-10 for most cases
+app.thread.pool.size=5
+
+# Progress Monitoring: Log progress every N minutes (0 = disabled)
+app.progress.log.interval.minutes=5
+
+# ===== DATABASE CONNECTION =====
+db.serverName=RAMESHWAR\\SQLEXPRESS
+db.port=1433
+db.dbName=Wawa_DMS_Conversion_UAT
+
+# Connection Pool Size (should be >= thread.pool.size + 5)
+db.pool.size=10
+
+# ===== BATCH PROCESSING =====
+# Batch INSERT size for staging table (rows per batch)
+# Recommended: 500-1000
+db.batch.insert.size=1000
