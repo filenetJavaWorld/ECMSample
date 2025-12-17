@@ -1,1 +1,579 @@
-temp
+-- ============================================================================
+-- CCDataMergeUtility - Staging Table Creation Script
+-- Purpose: Create staging table to hold CSV extract data before merging
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- Drop existing staging table if exists
+IF OBJECT_ID('dbo.CC_Extract_Staging', 'U') IS NOT NULL
+    DROP TABLE [dbo].[CC_Extract_Staging];
+GO
+
+-- Create staging table matching CSV structure
+-- CSV Header: NAME|DOCUMENT_TYPE|CLAIM_NUMBER|POLICY_NUMBER|DOCUMENT_SUBTYPE|AUTHOR|DOCUMENT_DESCRIPTION|STATUS|EXTERNALID|ID|CLAIMID
+CREATE TABLE [dbo].[CC_Extract_Staging] (
+    [StagingID] INT IDENTITY(1,1) PRIMARY KEY,
+    [NAME] NVARCHAR(500) NULL,                    -- Maps to documentTitle
+    [DOCUMENT_TYPE] NVARCHAR(255) NULL,           -- Maps to documentType
+    [CLAIM_NUMBER] NVARCHAR(50) NULL,             -- Maps to claimNumber
+    [POLICY_NUMBER] NVARCHAR(50) NULL,            -- Maps to policyNumber
+    [DOCUMENT_SUBTYPE] NVARCHAR(255) NULL,        -- Maps to documentSubtype
+    [AUTHOR] NVARCHAR(255) NULL,                  -- Maps to author
+    [DOCUMENT_DESCRIPTION] NVARCHAR(MAX) NULL,    -- Maps to documentDescription
+    [STATUS] NVARCHAR(50) NULL,                   -- Maps to claimType
+    [EXTERNALID] NVARCHAR(255) NOT NULL,          -- Key for matching
+    [ID] NVARCHAR(100) NULL,                      -- Maps to gwDocumentID
+    [CLAIMID] NVARCHAR(100) NULL,                 -- Maps to claimID
+    
+    -- Tracking columns
+    [LoadedDate] DATETIME DEFAULT GETDATE(),
+    [SourceFileName] NVARCHAR(500) NULL,
+    [IsSynced] BIT DEFAULT 0,                     -- 1 = Successfully synced to main table
+    [SyncDate] DATETIME NULL,
+    [SyncStatus] NVARCHAR(50) NULL,               -- 'SUCCESS', 'NOT_FOUND', 'ERROR'
+    [SyncMessage] NVARCHAR(MAX) NULL
+);
+GO
+
+-- Create index on EXTERNALID for fast joins
+CREATE NONCLUSTERED INDEX IX_CC_Extract_Staging_ExternalID 
+ON [dbo].[CC_Extract_Staging] ([EXTERNALID]);
+GO
+
+-- Create index on SyncStatus for reporting
+CREATE NONCLUSTERED INDEX IX_CC_Extract_Staging_SyncStatus 
+ON [dbo].[CC_Extract_Staging] ([SyncStatus]);
+GO
+
+PRINT 'Staging table [CC_Extract_Staging] created successfully.';
+GO
+
+-- ============================================================================
+-- Create Merge Results Log Table (for historical tracking)
+-- ============================================================================
+
+IF OBJECT_ID('dbo.CC_Merge_Results_Log', 'U') IS NOT NULL
+    DROP TABLE [dbo].[CC_Merge_Results_Log];
+GO
+
+CREATE TABLE [dbo].[CC_Merge_Results_Log] (
+    [LogID] INT IDENTITY(1,1) PRIMARY KEY,
+    [BatchRunID] UNIQUEIDENTIFIER NOT NULL,
+    [SourceFileName] NVARCHAR(500) NOT NULL,
+    [EXTERNALID] NVARCHAR(255) NOT NULL,
+    [SyncStatus] NVARCHAR(50) NOT NULL,           -- 'SUCCESS', 'NOT_FOUND', 'ERROR'
+    [SyncMessage] NVARCHAR(MAX) NULL,
+    [CreatedDate] DATETIME DEFAULT GETDATE()
+);
+GO
+
+-- Create indexes for reporting
+CREATE NONCLUSTERED INDEX IX_CC_Merge_Results_Log_BatchRunID 
+ON [dbo].[CC_Merge_Results_Log] ([BatchRunID]);
+
+CREATE NONCLUSTERED INDEX IX_CC_Merge_Results_Log_Status 
+ON [dbo].[CC_Merge_Results_Log] ([SyncStatus], [SourceFileName]);
+GO
+
+PRINT 'Results log table [CC_Merge_Results_Log] created successfully.';
+GO
+
+
+
+==========================================================================================================
+
+-- ============================================================================
+-- CCDataMergeUtility - Merge Stored Procedure
+-- Purpose: Load CSV data into staging and sync to main table
+-- Includes: Full tracking of success/failed rows
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+CREATE OR ALTER PROCEDURE [dbo].[sp_MergeClaimCenterData]
+    @SourceFilePath NVARCHAR(1000),
+    @RowsLoaded INT OUTPUT,
+    @RowsUpdated INT OUTPUT,
+    @RowsNotMatched INT OUTPUT,
+    @BatchRunID UNIQUEIDENTIFIER OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @FileName NVARCHAR(500);
+    DECLARE @ErrorMessage NVARCHAR(MAX);
+    DECLARE @StartTime DATETIME = GETDATE();
+    DECLARE @EndTime DATETIME;
+    
+    -- Generate unique batch run ID for this execution
+    SET @BatchRunID = NEWID();
+    
+    -- Initialize output parameters
+    SET @RowsLoaded = 0;
+    SET @RowsUpdated = 0;
+    SET @RowsNotMatched = 0;
+    
+    BEGIN TRY
+        -- Extract filename from path
+        SET @FileName = RIGHT(@SourceFilePath, CHARINDEX('\', REVERSE(@SourceFilePath)) - 1);
+        
+        PRINT '============================================================';
+        PRINT 'CLAIM CENTER DATA MERGE - STARTED';
+        PRINT 'Batch Run ID: ' + CAST(@BatchRunID AS VARCHAR(50));
+        PRINT 'Source File: ' + @FileName;
+        PRINT 'Start Time: ' + CONVERT(VARCHAR, @StartTime, 120);
+        PRINT '============================================================';
+        
+        BEGIN TRANSACTION;
+        
+        -- ================================================================
+        -- STEP 1: Clear staging table
+        -- ================================================================
+        TRUNCATE TABLE [dbo].[CC_Extract_Staging];
+        PRINT '[STEP 1] Staging table cleared.';
+        
+        -- ================================================================
+        -- STEP 2: Bulk insert CSV into staging table
+        -- ================================================================
+        DECLARE @BulkSQL NVARCHAR(MAX);
+        SET @BulkSQL = N'
+            BULK INSERT [dbo].[CC_Extract_Staging]
+            FROM ''' + @SourceFilePath + '''
+            WITH (
+                FIELDTERMINATOR = ''|'',
+                ROWTERMINATOR = ''\n'',
+                FIRSTROW = 2,
+                TABLOCK,
+                MAXERRORS = 0,
+                KEEPNULLS
+            );';
+        
+        EXEC sp_executesql @BulkSQL;
+        
+        -- Get rows loaded count
+        SELECT @RowsLoaded = COUNT(*) FROM [dbo].[CC_Extract_Staging];
+        PRINT '[STEP 2] Loaded ' + CAST(@RowsLoaded AS VARCHAR) + ' rows into staging table.';
+        
+        -- Update source filename in staging
+        UPDATE [dbo].[CC_Extract_Staging] 
+        SET SourceFileName = @FileName,
+            LoadedDate = GETDATE();
+        
+        -- ================================================================
+        -- STEP 3: Mark rows that WILL be matched (pre-check)
+        -- ================================================================
+        UPDATE stg
+        SET stg.SyncStatus = 'PENDING'
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE EXISTS (
+            SELECT 1 FROM [dbo].[Wawa_Doc_Migration_Transit_Data] main
+            WHERE main.[externalID] = stg.[EXTERNALID]
+        );
+        
+        -- Mark rows that will NOT match
+        UPDATE stg
+        SET stg.SyncStatus = 'NOT_FOUND',
+            stg.SyncMessage = 'No matching externalID found in main table',
+            stg.SyncDate = GETDATE()
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE NOT EXISTS (
+            SELECT 1 FROM [dbo].[Wawa_Doc_Migration_Transit_Data] main
+            WHERE main.[externalID] = stg.[EXTERNALID]
+        );
+        
+        SELECT @RowsNotMatched = COUNT(*) 
+        FROM [dbo].[CC_Extract_Staging] 
+        WHERE SyncStatus = 'NOT_FOUND';
+        
+        PRINT '[STEP 3] Pre-check: ' + CAST(@RowsNotMatched AS VARCHAR) + ' rows will NOT match (externalID not found).';
+        
+        -- ================================================================
+        -- STEP 4: Update main table from staging using externalID match
+        -- This mirrors exactly what the Java code was doing:
+        --   - documentTitle = NAME
+        --   - documentType = DOCUMENT_TYPE
+        --   - documentSubtype = DOCUMENT_SUBTYPE
+        --   - claimNumber = CLAIM_NUMBER
+        --   - policyNumber = POLICY_NUMBER
+        --   - author = AUTHOR
+        --   - documentDescription = DOCUMENT_DESCRIPTION
+        --   - claimType = STATUS
+        --   - gwDocumentID = ID
+        --   - claimID = CLAIMID
+        --   - isDataMerged = 1 (TRUE)
+        --   - CC_Extract_file_Name = source file name
+        --   - CC_Extract_file_loaded_date = current timestamp
+        -- ================================================================
+        UPDATE main
+        SET 
+            -- Core document metadata from CSV
+            main.[documentTitle] = stg.[NAME],
+            main.[documentType] = stg.[DOCUMENT_TYPE],
+            main.[documentSubtype] = stg.[DOCUMENT_SUBTYPE],
+            main.[claimNumber] = stg.[CLAIM_NUMBER],
+            main.[policyNumber] = stg.[POLICY_NUMBER],
+            main.[author] = stg.[AUTHOR],
+            main.[documentDescription] = stg.[DOCUMENT_DESCRIPTION],
+            main.[claimType] = stg.[STATUS],
+            main.[gwDocumentID] = stg.[ID],
+            main.[claimID] = stg.[CLAIMID],
+            
+            -- Post-processing flags (same as Java code)
+            main.[isDataMerged] = 1,                              -- Mark as merged
+            main.[CC_Extract_file_Name] = @FileName,              -- Track source file
+            main.[CC_Extract_file_loaded_date] = GETDATE()        -- Track merge timestamp
+            
+        FROM [dbo].[Wawa_Doc_Migration_Transit_Data] main
+        INNER JOIN [dbo].[CC_Extract_Staging] stg
+            ON main.[externalID] = stg.[EXTERNALID]
+        WHERE stg.SyncStatus = 'PENDING';
+        
+        SET @RowsUpdated = @@ROWCOUNT;
+        PRINT '[STEP 4] Updated ' + CAST(@RowsUpdated AS VARCHAR) + ' rows in main table.';
+        
+        -- ================================================================
+        -- STEP 5: Mark successfully synced rows in staging
+        -- ================================================================
+        UPDATE stg
+        SET stg.IsSynced = 1,
+            stg.SyncStatus = 'SUCCESS',
+            stg.SyncDate = GETDATE(),
+            stg.SyncMessage = 'Successfully merged to main table'
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE stg.SyncStatus = 'PENDING';
+        
+        PRINT '[STEP 5] Marked ' + CAST(@RowsUpdated AS VARCHAR) + ' rows as SUCCESS in staging.';
+        
+        -- ================================================================
+        -- STEP 6: Log results to history table
+        -- ================================================================
+        INSERT INTO [dbo].[CC_Merge_Results_Log] 
+            ([BatchRunID], [SourceFileName], [EXTERNALID], [SyncStatus], [SyncMessage], [CreatedDate])
+        SELECT 
+            @BatchRunID,
+            SourceFileName,
+            EXTERNALID,
+            SyncStatus,
+            SyncMessage,
+            GETDATE()
+        FROM [dbo].[CC_Extract_Staging];
+        
+        PRINT '[STEP 6] Logged ' + CAST(@RowsLoaded AS VARCHAR) + ' results to history table.';
+        
+        COMMIT TRANSACTION;
+        
+        SET @EndTime = GETDATE();
+        
+        -- ================================================================
+        -- FINAL SUMMARY
+        -- ================================================================
+        PRINT '';
+        PRINT '============================================================';
+        PRINT 'CLAIM CENTER DATA MERGE - COMPLETED';
+        PRINT '============================================================';
+        PRINT 'Batch Run ID    : ' + CAST(@BatchRunID AS VARCHAR(50));
+        PRINT 'Source File     : ' + @FileName;
+        PRINT 'Start Time      : ' + CONVERT(VARCHAR, @StartTime, 120);
+        PRINT 'End Time        : ' + CONVERT(VARCHAR, @EndTime, 120);
+        PRINT 'Duration        : ' + CAST(DATEDIFF(SECOND, @StartTime, @EndTime) AS VARCHAR) + ' seconds';
+        PRINT '------------------------------------------------------------';
+        PRINT 'Rows Loaded     : ' + CAST(@RowsLoaded AS VARCHAR);
+        PRINT 'Rows Updated    : ' + CAST(@RowsUpdated AS VARCHAR) + ' (SUCCESS)';
+        PRINT 'Rows Not Matched: ' + CAST(@RowsNotMatched AS VARCHAR) + ' (NOT_FOUND)';
+        PRINT '============================================================';
+        
+        -- Return success/failed details
+        PRINT '';
+        PRINT '--- SUCCESS ROWS (first 10) ---';
+        SELECT TOP 10 EXTERNALID, [NAME], CLAIM_NUMBER, SyncStatus, SyncMessage
+        FROM [dbo].[CC_Extract_Staging]
+        WHERE SyncStatus = 'SUCCESS';
+        
+        IF @RowsNotMatched > 0
+        BEGIN
+            PRINT '';
+            PRINT '--- FAILED ROWS (NOT_FOUND) ---';
+            SELECT EXTERNALID, [NAME], CLAIM_NUMBER, SyncStatus, SyncMessage
+            FROM [dbo].[CC_Extract_Staging]
+            WHERE SyncStatus = 'NOT_FOUND';
+        END
+        
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0
+            ROLLBACK TRANSACTION;
+            
+        SET @ErrorMessage = ERROR_MESSAGE();
+        
+        PRINT '';
+        PRINT '============================================================';
+        PRINT 'CLAIM CENTER DATA MERGE - FAILED';
+        PRINT 'Error: ' + @ErrorMessage;
+        PRINT '============================================================';
+        
+        -- Log error
+        INSERT INTO [dbo].[CC_Merge_Results_Log] 
+            ([BatchRunID], [SourceFileName], [EXTERNALID], [SyncStatus], [SyncMessage], [CreatedDate])
+        VALUES 
+            (@BatchRunID, @FileName, 'N/A', 'ERROR', @ErrorMessage, GETDATE());
+        
+        -- Re-throw the error
+        THROW;
+    END CATCH
+END;
+GO
+
+PRINT 'Stored procedure [sp_MergeClaimCenterData] created successfully.';
+GO
+
+======================================================================================================
+
+-- ============================================================================
+-- CCDataMergeUtility - Execute Merge Script
+-- Purpose: Run the merge procedure and view results
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- ============================================================================
+-- EXECUTE THE MERGE
+-- Change @SourceFilePath to your actual CSV file path
+-- ============================================================================
+
+DECLARE @Loaded INT;
+DECLARE @Updated INT;
+DECLARE @NotMatched INT;
+DECLARE @BatchID UNIQUEIDENTIFIER;
+
+EXEC [dbo].[sp_MergeClaimCenterData]
+    @SourceFilePath = 'D:\Rameshwar\ClaimCenterDataMerge\Input\conv_claims_extract_10222025_1214.csv',
+    @RowsLoaded = @Loaded OUTPUT,
+    @RowsUpdated = @Updated OUTPUT,
+    @RowsNotMatched = @NotMatched OUTPUT,
+    @BatchRunID = @BatchID OUTPUT;
+
+-- Display summary
+SELECT 
+    @BatchID AS BatchRunID,
+    @Loaded AS TotalRowsInCSV,
+    @Updated AS RowsSuccessfullyMerged,
+    @NotMatched AS RowsNotFound;
+
+GO
+
+-- ============================================================================
+-- VIEW CURRENT STAGING DATA (After merge)
+-- ============================================================================
+
+-- View all rows with their sync status
+SELECT 
+    StagingID,
+    EXTERNALID,
+    [NAME] AS DocumentTitle,
+    CLAIM_NUMBER,
+    SyncStatus,
+    SyncMessage,
+    SyncDate
+FROM [dbo].[CC_Extract_Staging]
+ORDER BY SyncStatus, StagingID;
+
+GO
+
+-- ============================================================================
+-- VIEW SUCCESS ROWS ONLY
+-- ============================================================================
+
+SELECT 
+    EXTERNALID,
+    [NAME] AS DocumentTitle,
+    DOCUMENT_TYPE,
+    CLAIM_NUMBER,
+    POLICY_NUMBER,
+    SyncStatus,
+    SyncDate
+FROM [dbo].[CC_Extract_Staging]
+WHERE SyncStatus = 'SUCCESS'
+ORDER BY StagingID;
+
+GO
+
+-- ============================================================================
+-- VIEW FAILED ROWS ONLY (NOT FOUND in main table)
+-- ============================================================================
+
+SELECT 
+    EXTERNALID,
+    [NAME] AS DocumentTitle,
+    DOCUMENT_TYPE,
+    CLAIM_NUMBER,
+    POLICY_NUMBER,
+    SyncStatus,
+    SyncMessage
+FROM [dbo].[CC_Extract_Staging]
+WHERE SyncStatus = 'NOT_FOUND'
+ORDER BY StagingID;
+
+GO
+
+-- ============================================================================
+-- EXPORT FAILED ROWS TO CSV (Run in SSMS with "Results to File")
+-- ============================================================================
+
+-- Copy this query and run with "Results to File" to export failed rows
+/*
+SELECT 
+    EXTERNALID,
+    [NAME],
+    DOCUMENT_TYPE,
+    CLAIM_NUMBER,
+    POLICY_NUMBER,
+    DOCUMENT_SUBTYPE,
+    AUTHOR,
+    DOCUMENT_DESCRIPTION,
+    [STATUS],
+    [ID],
+    CLAIMID,
+    'NOT_FOUND - externalID does not exist in main table' AS ErrorMessage
+FROM [dbo].[CC_Extract_Staging]
+WHERE SyncStatus = 'NOT_FOUND';
+*/
+
+GO
+
+==========================================================================================================
+
+-- ============================================================================
+-- CCDataMergeUtility - Reporting Queries
+-- Purpose: View merge history, success/failure statistics
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- ============================================================================
+-- 1. VIEW ALL MERGE BATCHES (History)
+-- ============================================================================
+
+SELECT 
+    BatchRunID,
+    SourceFileName,
+    MIN(CreatedDate) AS MergeStartTime,
+    COUNT(*) AS TotalRows,
+    SUM(CASE WHEN SyncStatus = 'SUCCESS' THEN 1 ELSE 0 END) AS SuccessCount,
+    SUM(CASE WHEN SyncStatus = 'NOT_FOUND' THEN 1 ELSE 0 END) AS NotFoundCount,
+    SUM(CASE WHEN SyncStatus = 'ERROR' THEN 1 ELSE 0 END) AS ErrorCount
+FROM [dbo].[CC_Merge_Results_Log]
+GROUP BY BatchRunID, SourceFileName
+ORDER BY MIN(CreatedDate) DESC;
+
+GO
+
+-- ============================================================================
+-- 2. VIEW DETAILS FOR A SPECIFIC BATCH
+-- Replace 'YOUR-BATCH-ID-HERE' with actual BatchRunID
+-- ============================================================================
+
+/*
+DECLARE @BatchID UNIQUEIDENTIFIER = 'YOUR-BATCH-ID-HERE';
+
+SELECT 
+    LogID,
+    EXTERNALID,
+    SyncStatus,
+    SyncMessage,
+    CreatedDate
+FROM [dbo].[CC_Merge_Results_Log]
+WHERE BatchRunID = @BatchID
+ORDER BY SyncStatus, LogID;
+*/
+
+GO
+
+-- ============================================================================
+-- 3. VIEW ALL FAILED RECORDS ACROSS ALL BATCHES
+-- ============================================================================
+
+SELECT 
+    BatchRunID,
+    SourceFileName,
+    EXTERNALID,
+    SyncStatus,
+    SyncMessage,
+    CreatedDate
+FROM [dbo].[CC_Merge_Results_Log]
+WHERE SyncStatus IN ('NOT_FOUND', 'ERROR')
+ORDER BY CreatedDate DESC;
+
+GO
+
+-- ============================================================================
+-- 4. DAILY MERGE STATISTICS
+-- ============================================================================
+
+SELECT 
+    CAST(CreatedDate AS DATE) AS MergeDate,
+    COUNT(DISTINCT BatchRunID) AS BatchCount,
+    COUNT(*) AS TotalRows,
+    SUM(CASE WHEN SyncStatus = 'SUCCESS' THEN 1 ELSE 0 END) AS SuccessCount,
+    SUM(CASE WHEN SyncStatus = 'NOT_FOUND' THEN 1 ELSE 0 END) AS NotFoundCount,
+    CAST(
+        SUM(CASE WHEN SyncStatus = 'SUCCESS' THEN 1.0 ELSE 0 END) / COUNT(*) * 100 
+        AS DECIMAL(5,2)
+    ) AS SuccessRate
+FROM [dbo].[CC_Merge_Results_Log]
+GROUP BY CAST(CreatedDate AS DATE)
+ORDER BY MergeDate DESC;
+
+GO
+
+-- ============================================================================
+-- 5. VERIFY MERGED DATA IN MAIN TABLE
+-- Check records that were merged from a specific file
+-- ============================================================================
+
+SELECT TOP 100
+    externalID,
+    documentTitle,
+    documentType,
+    claimNumber,
+    policyNumber,
+    isDataMerged,
+    CC_Extract_file_Name,
+    CC_Extract_file_loaded_date
+FROM [dbo].[Wawa_Doc_Migration_Transit_Data]
+WHERE isDataMerged = 1
+  AND CC_Extract_file_loaded_date >= DATEADD(DAY, -1, GETDATE())
+ORDER BY CC_Extract_file_loaded_date DESC;
+
+GO
+
+-- ============================================================================
+-- 6. COUNT RECORDS BY MERGE STATUS IN MAIN TABLE
+-- ============================================================================
+
+SELECT 
+    CASE WHEN isDataMerged = 1 THEN 'Merged' ELSE 'Not Merged' END AS MergeStatus,
+    COUNT(*) AS RecordCount
+FROM [dbo].[Wawa_Doc_Migration_Transit_Data]
+GROUP BY isDataMerged;
+
+GO
+
+-- ============================================================================
+-- 7. CLEANUP OLD LOG DATA (Optional - run periodically)
+-- Keeps last 30 days of history
+-- ============================================================================
+
+/*
+DELETE FROM [dbo].[CC_Merge_Results_Log]
+WHERE CreatedDate < DATEADD(DAY, -30, GETDATE());
+
+PRINT 'Cleaned up ' + CAST(@@ROWCOUNT AS VARCHAR) + ' old log records.';
+*/
+
+GO
+
