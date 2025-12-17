@@ -1,1 +1,1590 @@
-temp
+-- ============================================================================
+-- CCDataMergeUtility - Staging Table Creation Script
+-- Purpose: Create staging table to hold CSV extract data before merging
+-- EXTERNALID is UNIQUE - no duplicates allowed
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- Drop existing staging table if exists
+IF OBJECT_ID('dbo.CC_Extract_Staging', 'U') IS NOT NULL
+    DROP TABLE [dbo].[CC_Extract_Staging];
+GO
+
+-- Create staging table matching CSV structure
+-- EXTERNALID is UNIQUE to prevent duplicates
+CREATE TABLE [dbo].[CC_Extract_Staging] (
+    [NAME] NVARCHAR(500) NULL,                    -- Maps to documentTitle
+    [DOCUMENT_TYPE] NVARCHAR(255) NULL,           -- Maps to documentType
+    [CLAIM_NUMBER] NVARCHAR(50) NULL,             -- Maps to claimNumber
+    [POLICY_NUMBER] NVARCHAR(50) NULL,            -- Maps to policyNumber
+    [DOCUMENT_SUBTYPE] NVARCHAR(255) NULL,        -- Maps to documentSubtype
+    [AUTHOR] NVARCHAR(255) NULL,                  -- Maps to author
+    [DOCUMENT_DESCRIPTION] NVARCHAR(MAX) NULL,    -- Maps to documentDescription
+    [STATUS] NVARCHAR(50) NULL,                   -- Maps to claimType
+    [EXTERNALID] NVARCHAR(255) NOT NULL PRIMARY KEY,  -- Key for matching (UNIQUE)
+    [ID] NVARCHAR(100) NULL,                      -- Maps to gwDocumentID
+    [CLAIMID] NVARCHAR(100) NULL,                 -- Maps to claimID
+    
+    -- Tracking columns
+    [LoadedDate] DATETIME DEFAULT GETDATE(),
+    [SourceFileName] NVARCHAR(500) NULL,
+    [IsSynced] BIT DEFAULT 0,                     -- 1 = Successfully synced to main table
+    [SyncDate] DATETIME NULL,
+    [SyncStatus] NVARCHAR(50) NULL,               -- 'SUCCESS', 'NOT_FOUND', 'ERROR'
+    [SyncMessage] NVARCHAR(MAX) NULL
+);
+GO
+
+-- Create index on SourceFileName for filtering
+CREATE NONCLUSTERED INDEX IX_CC_Extract_Staging_SourceFileName 
+ON [dbo].[CC_Extract_Staging] ([SourceFileName]);
+GO
+
+-- Create index on SyncStatus for reporting
+CREATE NONCLUSTERED INDEX IX_CC_Extract_Staging_SyncStatus 
+ON [dbo].[CC_Extract_Staging] ([SyncStatus]);
+GO
+
+PRINT 'Staging table [CC_Extract_Staging] created successfully.';
+PRINT 'EXTERNALID is PRIMARY KEY - duplicates will be rejected.';
+GO
+
+-- ============================================================================
+-- Create Merge Results Log Table (for historical tracking)
+-- ============================================================================
+
+IF OBJECT_ID('dbo.CC_Merge_Results_Log', 'U') IS NOT NULL
+    DROP TABLE [dbo].[CC_Merge_Results_Log];
+GO
+
+CREATE TABLE [dbo].[CC_Merge_Results_Log] (
+    [LogID] INT IDENTITY(1,1) PRIMARY KEY,
+    [BatchRunID] UNIQUEIDENTIFIER NOT NULL,
+    [SourceFileName] NVARCHAR(500) NOT NULL,
+    [EXTERNALID] NVARCHAR(255) NOT NULL,
+    [SyncStatus] NVARCHAR(50) NOT NULL,           -- 'SUCCESS', 'NOT_FOUND', 'ERROR'
+    [SyncMessage] NVARCHAR(MAX) NULL,
+    [CreatedDate] DATETIME DEFAULT GETDATE()
+);
+GO
+
+-- Create indexes for reporting
+CREATE NONCLUSTERED INDEX IX_CC_Merge_Results_Log_BatchRunID 
+ON [dbo].[CC_Merge_Results_Log] ([BatchRunID]);
+
+CREATE NONCLUSTERED INDEX IX_CC_Merge_Results_Log_Status 
+ON [dbo].[CC_Merge_Results_Log] ([SyncStatus], [SourceFileName]);
+GO
+
+PRINT 'Results log table [CC_Merge_Results_Log] created successfully.';
+GO
+
+
+
+
+
+======================**********************=============================
+
+
+-- ============================================================================
+-- CCDataMergeUtility - Merge Stored Procedure (NO BULK INSERT VERSION)
+-- Purpose: Sync data from staging table to main table
+-- NOTE: This version does NOT use BULK INSERT - Java will load staging table
+--       Can be run multiple times - will re-sync all rows for the file
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- ============================================================================
+-- Create the SYNC procedure (called AFTER Java loads staging)
+-- Can be run multiple times - no "already processed" restriction
+-- ============================================================================
+CREATE OR ALTER PROCEDURE [dbo].[sp_SyncStagingToMain]
+    @SourceFileName NVARCHAR(500),
+    @RowsToProcess INT OUTPUT,
+    @RowsUpdated INT OUTPUT,
+    @RowsNotMatched INT OUTPUT,
+    @BatchRunID UNIQUEIDENTIFIER OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @ErrorMessage NVARCHAR(MAX);
+    DECLARE @StartTime DATETIME = GETDATE();
+    DECLARE @EndTime DATETIME;
+    
+    -- Generate unique batch run ID for this execution
+    SET @BatchRunID = NEWID();
+    
+    -- Initialize output parameters
+    SET @RowsToProcess = 0;
+    SET @RowsUpdated = 0;
+    SET @RowsNotMatched = 0;
+    
+    BEGIN TRY
+        PRINT '============================================================';
+        PRINT 'CLAIM CENTER DATA SYNC - STARTED';
+        PRINT 'Batch Run ID: ' + CAST(@BatchRunID AS VARCHAR(50));
+        PRINT 'Source File: ' + @SourceFileName;
+        PRINT 'Start Time: ' + CONVERT(VARCHAR, @StartTime, 120);
+        PRINT '============================================================';
+        
+        -- Count ALL rows for this file (no status filter - can re-run)
+        SELECT @RowsToProcess = COUNT(*) 
+        FROM [dbo].[CC_Extract_Staging] 
+        WHERE SourceFileName = @SourceFileName;
+        
+        PRINT '[INFO] Found ' + CAST(@RowsToProcess AS VARCHAR) + ' rows to process.';
+        
+        IF @RowsToProcess = 0
+        BEGIN
+            PRINT '[WARNING] No rows found for this file. Exiting.';
+            RETURN;
+        END
+        
+        BEGIN TRANSACTION;
+        
+        -- ================================================================
+        -- STEP 1: Reset status for all rows (allows re-run)
+        -- ================================================================
+        UPDATE [dbo].[CC_Extract_Staging]
+        SET SyncStatus = NULL, SyncDate = NULL, SyncMessage = NULL, IsSynced = 0
+        WHERE SourceFileName = @SourceFileName;
+        
+        PRINT '[STEP 1] Reset status for all rows.';
+        
+        -- ================================================================
+        -- STEP 2: Mark rows that WILL be matched (pre-check)
+        -- ================================================================
+        UPDATE stg
+        SET stg.SyncStatus = 'PENDING'
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE stg.SourceFileName = @SourceFileName
+          AND EXISTS (
+              SELECT 1 FROM [dbo].[Wawa_Doc_Migration_Transit_Data] main
+              WHERE main.[externalID] = stg.[EXTERNALID]
+          );
+        
+        -- Mark rows that will NOT match
+        UPDATE stg
+        SET stg.SyncStatus = 'NOT_FOUND',
+            stg.SyncMessage = 'No matching externalID found in main table',
+            stg.SyncDate = GETDATE()
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE stg.SourceFileName = @SourceFileName
+          AND stg.SyncStatus IS NULL;
+        
+        SELECT @RowsNotMatched = COUNT(*) 
+        FROM [dbo].[CC_Extract_Staging] 
+        WHERE SourceFileName = @SourceFileName 
+          AND SyncStatus = 'NOT_FOUND';
+        
+        PRINT '[STEP 2] Pre-check: ' + CAST(@RowsNotMatched AS VARCHAR) + ' rows will NOT match.';
+        
+        -- ================================================================
+        -- STEP 3: Update main table from staging using externalID match
+        -- This mirrors exactly what the Java code was doing:
+        --   - documentTitle = NAME
+        --   - documentType = DOCUMENT_TYPE
+        --   - documentSubtype = DOCUMENT_SUBTYPE
+        --   - claimNumber = CLAIM_NUMBER
+        --   - policyNumber = POLICY_NUMBER
+        --   - author = AUTHOR
+        --   - documentDescription = DOCUMENT_DESCRIPTION
+        --   - claimType = STATUS
+        --   - gwDocumentID = ID
+        --   - claimID = CLAIMID
+        --   - isDataMerged = 1 (TRUE)
+        --   - CC_Extract_file_Name = source file name
+        --   - CC_Extract_file_loaded_date = current timestamp
+        -- ================================================================
+        UPDATE main
+        SET 
+            -- Core document metadata from CSV
+            main.[documentTitle] = stg.[NAME],
+            main.[documentType] = stg.[DOCUMENT_TYPE],
+            main.[documentSubtype] = stg.[DOCUMENT_SUBTYPE],
+            main.[claimNumber] = stg.[CLAIM_NUMBER],
+            main.[policyNumber] = stg.[POLICY_NUMBER],
+            main.[author] = stg.[AUTHOR],
+            main.[documentDescription] = stg.[DOCUMENT_DESCRIPTION],
+            main.[claimType] = stg.[STATUS],
+            main.[gwDocumentID] = stg.[ID],
+            main.[claimID] = stg.[CLAIMID],
+            
+            -- Post-processing flags (same as Java code)
+            main.[isDataMerged] = 1,                              -- Mark as merged
+            main.[CC_Extract_file_Name] = @SourceFileName,        -- Track source file
+            main.[CC_Extract_file_loaded_date] = GETDATE()        -- Track merge timestamp
+            
+        FROM [dbo].[Wawa_Doc_Migration_Transit_Data] main
+        INNER JOIN [dbo].[CC_Extract_Staging] stg
+            ON main.[externalID] = stg.[EXTERNALID]
+        WHERE stg.SourceFileName = @SourceFileName
+          AND stg.SyncStatus = 'PENDING';
+        
+        SET @RowsUpdated = @@ROWCOUNT;
+        PRINT '[STEP 3] Updated ' + CAST(@RowsUpdated AS VARCHAR) + ' rows in main table.';
+        
+        -- ================================================================
+        -- STEP 4: Mark successfully synced rows in staging
+        -- ================================================================
+        UPDATE stg
+        SET stg.IsSynced = 1,
+            stg.SyncStatus = 'SUCCESS',
+            stg.SyncDate = GETDATE(),
+            stg.SyncMessage = 'Successfully merged to main table'
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE stg.SourceFileName = @SourceFileName
+          AND stg.SyncStatus = 'PENDING';
+        
+        PRINT '[STEP 4] Marked ' + CAST(@RowsUpdated AS VARCHAR) + ' rows as SUCCESS.';
+        
+        -- ================================================================
+        -- STEP 5: Log results to history table
+        -- ================================================================
+        INSERT INTO [dbo].[CC_Merge_Results_Log] 
+            ([BatchRunID], [SourceFileName], [EXTERNALID], [SyncStatus], [SyncMessage], [CreatedDate])
+        SELECT 
+            @BatchRunID,
+            SourceFileName,
+            EXTERNALID,
+            SyncStatus,
+            SyncMessage,
+            GETDATE()
+        FROM [dbo].[CC_Extract_Staging]
+        WHERE SourceFileName = @SourceFileName;
+        
+        PRINT '[STEP 5] Logged results to history table.';
+        
+        COMMIT TRANSACTION;
+        
+        SET @EndTime = GETDATE();
+        
+        -- ================================================================
+        -- FINAL SUMMARY
+        -- ================================================================
+        PRINT '';
+        PRINT '============================================================';
+        PRINT 'CLAIM CENTER DATA SYNC - COMPLETED';
+        PRINT '============================================================';
+        PRINT 'Batch Run ID    : ' + CAST(@BatchRunID AS VARCHAR(50));
+        PRINT 'Source File     : ' + @SourceFileName;
+        PRINT 'Duration        : ' + CAST(DATEDIFF(SECOND, @StartTime, @EndTime) AS VARCHAR) + ' seconds';
+        PRINT '------------------------------------------------------------';
+        PRINT 'Rows Processed  : ' + CAST(@RowsToProcess AS VARCHAR);
+        PRINT 'Rows Updated    : ' + CAST(@RowsUpdated AS VARCHAR) + ' (SUCCESS)';
+        PRINT 'Rows Not Matched: ' + CAST(@RowsNotMatched AS VARCHAR) + ' (NOT_FOUND)';
+        PRINT '============================================================';
+        
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0
+            ROLLBACK TRANSACTION;
+            
+        SET @ErrorMessage = ERROR_MESSAGE();
+        
+        PRINT '';
+        PRINT '============================================================';
+        PRINT 'CLAIM CENTER DATA SYNC - FAILED';
+        PRINT 'Error: ' + @ErrorMessage;
+        PRINT '============================================================';
+        
+        -- Log error
+        INSERT INTO [dbo].[CC_Merge_Results_Log] 
+            ([BatchRunID], [SourceFileName], [EXTERNALID], [SyncStatus], [SyncMessage], [CreatedDate])
+        VALUES 
+            (@BatchRunID, @SourceFileName, 'N/A', 'ERROR', @ErrorMessage, GETDATE());
+        
+        -- Re-throw the error
+        THROW;
+    END CATCH
+END;
+GO
+
+PRINT '';
+PRINT '============================================================';
+PRINT 'Stored procedure [sp_SyncStagingToMain] created successfully.';
+PRINT '';
+PRINT 'FEATURES:';
+PRINT '  - Can be run MULTIPLE TIMES for the same file';
+PRINT '  - EXTERNALID must be unique in staging table';
+PRINT '  - Sets isDataMerged=1 for matched rows';
+PRINT '============================================================';
+GO
+
+
+
+==================================**************************=========================================
+
+
+
+package com.wawanesa.ace.merge;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.wawanesa.ace.merge.configuration.PropertiesConfigLoader;
+import com.wawanesa.ace.merge.connection.ConnectionManager;
+import com.wawanesa.ace.merge.constants.Constants;
+import com.wawanesa.ace.merge.utils.GlobalProcessingReport;
+import com.wawanesa.ace.merge.utils.StagingBasedMergeUtils;
+
+
+public class ClaimCenterDataMergeService {
+
+    private static final Logger Logger = LogManager.getLogger(ClaimCenterDataMergeService.class);
+
+    public static void main(String[] args) {
+
+        Logger.info("Application started");
+        ExecutorService executor = null;
+        ScheduledExecutorService progressMonitor = null;
+        final ConnectionManager[] connManagerRef = new ConnectionManager[1];
+        
+        // Initialize global processing report
+        GlobalProcessingReport report = new GlobalProcessingReport();
+        AtomicInteger totalFilesQueued = new AtomicInteger(0);
+
+        try {
+            PropertiesConfigLoader config = PropertiesConfigLoader.getInstance();
+            
+            // Configure thread pool size from properties
+            String threadPoolSizeStr = config.getProperty("app.thread.pool.size");
+            int threadPoolSize = (threadPoolSizeStr != null) ? Integer.parseInt(threadPoolSizeStr) : 5;
+            ExecutorService executorService = Executors.newFixedThreadPool(threadPoolSize);
+            executor = executorService; // Assign to non-final variable for shutdown hook
+            
+            Logger.info("Thread pool initialized with {} threads", threadPoolSize);
+            
+            // Configure progress monitoring
+            String progressIntervalStr = config.getProperty("app.progress.log.interval.minutes");
+            int progressIntervalMinutes = (progressIntervalStr != null) ? Integer.parseInt(progressIntervalStr) : 5;
+            
+            // Create final references for shutdown hook and monitoring
+            final ExecutorService executorRef = executor;
+            
+            // Setup progress monitoring if enabled
+            if (progressIntervalMinutes > 0) {
+                ScheduledExecutorService progressMonitorService = Executors.newScheduledThreadPool(1);
+                progressMonitor = progressMonitorService;
+                
+                progressMonitorService.scheduleAtFixedRate(() -> {
+                    try {
+                        report.logProgress();
+                        
+                        // Log thread pool statistics
+                        if (executorRef instanceof ThreadPoolExecutor) {
+                            ThreadPoolExecutor tpe = (ThreadPoolExecutor) executorRef;
+                            Logger.info("Thread Pool: Active={}/{}, Queue={}", 
+                                       tpe.getActiveCount(), tpe.getPoolSize(), tpe.getQueue().size());
+                            report.updateThreadPoolStats(tpe.getPoolSize(), tpe.getActiveCount(), tpe.getQueue().size());
+                        }
+                    } catch (Exception e) {
+                        Logger.error("Error in progress monitor", e);
+                    }
+                }, 0, progressIntervalMinutes, TimeUnit.MINUTES);
+                
+                Logger.info("Progress monitoring enabled (interval: {} minutes)", progressIntervalMinutes);
+            } else {
+                Logger.info("Progress monitoring disabled");
+            }
+            
+            // Store progressMonitor reference for shutdown hook
+            final ScheduledExecutorService progressMonitorRef = progressMonitor;
+            
+            // Add shutdown hook for abnormal termination (e.g., Ctrl+C)
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                Logger.info("Shutdown hook triggered - cleaning up resources...");
+                
+                // Shutdown progress monitor first
+                if (progressMonitorRef != null && !progressMonitorRef.isShutdown()) {
+                    try {
+                        progressMonitorRef.shutdown();
+                        progressMonitorRef.awaitTermination(5, TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        progressMonitorRef.shutdownNow();
+                    }
+                }
+                
+                if (executorRef != null && !executorRef.isShutdown()) {
+                    try {
+                        executorRef.shutdown();
+                        if (!executorRef.awaitTermination(30, TimeUnit.SECONDS)) {
+                            executorRef.shutdownNow();
+                        }
+                    } catch (InterruptedException e) {
+                        executorRef.shutdownNow();
+                    }
+                }
+                
+                if (connManagerRef[0] != null) {
+                    try {
+                        connManagerRef[0].close();
+                    } catch (Exception e) {
+                        Logger.error("Error closing connection in shutdown hook", e);
+                    }
+                }
+                
+                Logger.info("Shutdown hook completed");
+            }));
+
+            Logger.info("JRE Library Path: {}", System.getProperty("java.library.path"));
+            Logger.info("Config File: {}", System.getProperty("config.file"));
+            Logger.info("Log4j Config: {}", System.getProperty("log4j.configurationFile"));
+            
+            String base_path = config.getProperty("app.base_path");
+            Logger.info("Base Path: {}", base_path);
+
+            // Validate all required directories exist
+            if (isValidDirectory(base_path, Constants.INPUT_FOLDER)
+                    && isValidDirectory(base_path, Constants.INPROGRESS_FOLDER)
+                    && isValidDirectory(base_path, Constants.COMPLETED_FOLDER)
+                    && isValidDirectory(base_path, Constants.FAILED_FOLDER)
+                    && isValidDirectory(base_path, Constants.ARCHIVE_FOLDER)) {
+
+                Logger.info("All required directories validated successfully under base path: {}", base_path);
+
+                // Initialize connection manager
+                connManagerRef[0] = new ConnectionManager(config);
+                Logger.info("Database connection pool initialized");
+                
+                // Initialize staging-based merge utility (fast batch INSERT approach)
+                StagingBasedMergeUtils utils = new StagingBasedMergeUtils(config, connManagerRef[0]);
+                
+                // Process all CSV files in Input folder
+                Path inputDir = Paths.get(base_path, Constants.INPUT_FOLDER);
+                
+                // First pass: Count total files to queue
+                try (DirectoryStream<Path> stream = Files.newDirectoryStream(inputDir, "conv_claims_extract_*.csv")) {
+                    for (Path csvFile : stream) {
+                        if (Files.isRegularFile(csvFile)) {
+                            totalFilesQueued.incrementAndGet();
+                            report.incrementFilesQueued();
+                        }
+                    }
+                    Logger.info("Found {} CSV file(s) to process", totalFilesQueued.get());
+                } catch (IOException e) {
+                    Logger.error("Error counting CSV files in Input directory", e);
+                }
+                
+                // Second pass: Process files
+                processCSVFiles(inputDir, utils, executor, report);
+
+            } else {
+                Logger.error("Required directories are missing under the base path: {}", base_path);
+                Logger.error("Application terminated due to missing directories");
+            }
+
+        } catch (Exception e) {
+            Logger.error("Error during processing", e);
+            e.printStackTrace();
+        } finally {
+            // Shutdown progress monitor
+            if (progressMonitor != null && !progressMonitor.isShutdown()) {
+                try {
+                    Logger.info("Shutting down progress monitor...");
+                    progressMonitor.shutdown();
+                    progressMonitor.awaitTermination(5, TimeUnit.SECONDS);
+                    Logger.info("Progress monitor shut down successfully");
+                } catch (InterruptedException e) {
+                    Logger.error("Interrupted while shutting down progress monitor", e);
+                    progressMonitor.shutdownNow();
+                    Thread.currentThread().interrupt();
+                }
+            }
+            
+            // Shutdown ExecutorService gracefully
+            if (executor != null) {
+                try {
+                    Logger.info("Shutting down executor service...");
+                    executor.shutdown(); // Disable new tasks from being submitted
+                    
+                    // Calculate dynamic timeout based on number of files queued
+                    // Conservative timeouts to allow tasks to complete naturally
+                    int filesQueued = totalFilesQueued.get();
+                    long shutdownTimeout;
+                    
+                    if (filesQueued == 0) {
+                        // No files processed - quick shutdown
+                        shutdownTimeout = 10; // 10 seconds
+                    } else if (filesQueued <= 10) {
+                        // Small batch: 2 minutes per file (conservative for safety)
+                        shutdownTimeout = filesQueued * 120;
+                    } else if (filesQueued <= 100) {
+                        // Medium batch: 1 minute per file + 5 minute buffer
+                        shutdownTimeout = (filesQueued * 60) + 300;
+                    } else if (filesQueued <= 1000) {
+                        // Large batch: 30 seconds per file + 10 minute buffer
+                        shutdownTimeout = (filesQueued * 30) + 600;
+                    } else {
+                        // Very large batch: 10 seconds per file + 30 minute buffer, max 8 hours
+                        long calculated = (filesQueued * 10) + 1800;
+                        shutdownTimeout = Math.min(calculated, 28800); // 8 hours max
+                    }
+                    
+                    Logger.info("Waiting for {} file(s) to complete (timeout: {} seconds / {}.{} minutes)...", 
+                               filesQueued, shutdownTimeout, shutdownTimeout / 60, (shutdownTimeout % 60));
+                    
+                    long startTime = System.currentTimeMillis();
+                    
+                    // Wait for existing tasks to terminate
+                    if (!executor.awaitTermination(shutdownTimeout, TimeUnit.SECONDS)) {
+                        long waitedTime = (System.currentTimeMillis() - startTime) / 1000;
+                        Logger.warn("Executor did not terminate after {} seconds, forcing shutdown...", waitedTime);
+                        executor.shutdownNow(); // Cancel currently executing tasks
+                        
+                        // Wait a while for tasks to respond to being cancelled
+                        if (!executor.awaitTermination(60, TimeUnit.SECONDS)) {
+                            Logger.error("Executor did not terminate after forced shutdown");
+                        }
+                    } else {
+                        long actualTime = (System.currentTimeMillis() - startTime) / 1000;
+                        Logger.info("All tasks completed successfully in {} seconds", actualTime);
+                    }
+                    
+                    Logger.info("Executor service shut down successfully");
+                } catch (InterruptedException e) {
+                    Logger.error("Interrupted while shutting down executor", e);
+                    executor.shutdownNow();
+                    Thread.currentThread().interrupt();
+                }
+            }
+            
+            // Close connection pool
+            if (connManagerRef[0] != null) {
+                try {
+                    Logger.info("Closing database connection pool...");
+                    connManagerRef[0].close();
+                    Logger.info("Database connection pool closed successfully");
+                } catch (Exception e) {
+                    Logger.error("Error closing connection manager", e);
+                    e.printStackTrace();
+                }
+            }
+            
+            // Write final summary report
+            try {
+                Logger.info("===== FINAL SUMMARY =====");
+                Logger.info(report.getSummary());
+                
+                PropertiesConfigLoader config = PropertiesConfigLoader.getInstance();
+                String basePath = config.getProperty("app.base_path");
+                
+                // Validate/Create SummaryReports folder
+                File summaryReportsDir = new File(basePath, "SummaryReports");
+                if (!summaryReportsDir.exists()) {
+                    if (summaryReportsDir.mkdirs()) {
+                        Logger.info("Created SummaryReports folder: {}", summaryReportsDir.getAbsolutePath());
+                    } else {
+                        Logger.error("Failed to create SummaryReports folder: {}", summaryReportsDir.getAbsolutePath());
+                        throw new IOException("Cannot create SummaryReports folder");
+                    }
+                } else {
+                    Logger.debug("SummaryReports folder already exists: {}", summaryReportsDir.getAbsolutePath());
+                }
+                
+                report.writeReportToFile(basePath);
+                Logger.info("Summary report written to: {}", summaryReportsDir.getAbsolutePath());
+            } catch (Exception e) {
+                Logger.error("Failed to write summary report", e);
+            }
+            
+            Logger.info("Application completed");
+        }
+    }
+
+    /**
+     * Process all CSV files in the Input directory using multi-threading
+     * Uses staging-based approach: batch INSERT to staging, then stored procedure syncs to main table
+     */
+    private static void processCSVFiles(Path inputDir, StagingBasedMergeUtils utils, ExecutorService executor, GlobalProcessingReport report) {
+        Logger.info("Scanning Input directory for CSV files: {}", inputDir);
+        Logger.info("Using STAGING-BASED approach (fast batch INSERT + stored procedure sync)");
+        
+        int fileCount = 0;
+        
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(inputDir, "conv_claims_extract_*.csv")) {
+            for (Path csvFile : stream) {
+                if (Files.isRegularFile(csvFile)) {
+                    fileCount++;
+                    String fileName = csvFile.getFileName().toString();
+                    Logger.info("Submitting CSV file for processing: {}", fileName);
+                    
+                    // Submit each CSV file for parallel processing
+                    executor.submit(() -> {
+                        long taskStartTime = System.currentTimeMillis();
+                        Logger.info("[TASK START] Processing file: {}", fileName);
+                        
+                        try {
+                            StagingBasedMergeUtils.ProcessingResult result = utils.processCSVFile(csvFile);
+                            
+                            long taskDuration = (System.currentTimeMillis() - taskStartTime) / 1000;
+                            Logger.info("[TASK COMPLETE] File: {} in {} sec | Staged: {} | Merged: {} | Not Matched: {}", 
+                                       fileName, taskDuration, result.successCount, result.rowsUpdatedInMain, result.rowsNotMatched);
+                            
+                            // Record success in global report
+                            // Use rowsUpdatedInMain as successCount (actual rows merged to main table)
+                            report.recordFileSuccess(fileName, 
+                                new GlobalProcessingReport.ProcessingResult(
+                                    result.totalRows, 
+                                    result.rowsUpdatedInMain,  // Rows actually updated in main table
+                                    result.rowsNotMatched + result.failureCount,  // Not matched + parse errors
+                                    result.skippedEmptyLines
+                                )
+                            );
+                            
+                        } catch (Exception e) {
+                            long taskDuration = (System.currentTimeMillis() - taskStartTime) / 1000;
+                            Logger.error("[TASK FAILED] File: {} failed after {} seconds - Error: {}", 
+                                        fileName, taskDuration, e.getMessage(), e);
+                            report.recordFileFailure(fileName, e.getMessage());
+                        }
+                    });
+                }
+            }
+            
+            if (fileCount == 0) {
+                Logger.warn("No CSV files found in Input directory: {}", inputDir);
+            } else {
+                Logger.info("Total {} CSV file(s) submitted for processing", fileCount);
+            }
+            
+        } catch (IOException e) {
+            Logger.error("Error reading Input directory: {}", inputDir, e);
+        }
+    }
+    
+    /**
+     * Validate that a directory exists under the base path
+     */
+    private static boolean isValidDirectory(String base_path, String folderName) {
+        boolean isExist = false;
+        try {
+            File dir = new File(base_path + folderName);
+            if (dir.exists() && dir.isDirectory()) {
+                isExist = true;
+                Logger.debug("Directory validated: {}", dir.getAbsolutePath());
+            } else {
+                Logger.error("Expected directory does not exist: {}", 
+                           base_path + File.separator + folderName);
+            }
+        } catch (Exception e) {
+            Logger.error("Error validating directory: {}", folderName, e);
+        }
+        return isExist;
+    }
+}
+
+
+package com.wawanesa.ace.merge.configuration;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.Properties;
+
+public class PropertiesConfigLoader {
+    private static PropertiesConfigLoader instance;
+    private Properties properties;
+
+    private PropertiesConfigLoader() {
+        properties = new Properties();
+        String configPath = System.getProperty("config.file");
+
+        if (configPath == null) {
+            throw new RuntimeException("Missing system property: config.file");
+        }
+
+        try (FileInputStream fis = new FileInputStream(configPath)) {
+            properties.load(fis);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load properties file: " + configPath, e);
+        }
+    }
+
+    public static PropertiesConfigLoader getInstance() {
+        if (instance == null) {
+            synchronized (PropertiesConfigLoader.class) {
+                if (instance == null) {
+                    instance = new PropertiesConfigLoader();
+                }
+            }
+        }
+        return instance;
+    }
+
+    public String getProperty(String key) {
+        return properties.getProperty(key);
+    }
+}
+
+
+
+
+package com.wawanesa.ace.merge.connection;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+
+public class ConnectionManager {
+
+    private HikariDataSource dataSource;
+
+    public ConnectionManager(com.wawanesa.ace.merge.configuration.PropertiesConfigLoader properties) {
+        HikariConfig config = new HikariConfig();
+        String serverName = properties.getProperty("db.serverName");
+        String port = properties.getProperty("db.port");
+        String dbName = properties.getProperty("db.dbName");
+        int poolsize = Integer.parseInt(properties.getProperty("db.pool.size"));
+
+        System.out.println("serverName     : " + serverName);
+        System.out.println("port           : " + port);
+        System.out.println("dbName         : " + dbName);
+        System.out.println("poolsize       : " + poolsize);
+
+        // Simplified JDBC URL - matching DataTransformUtility which works fine
+        // Removed socketTimeout as it was causing "incomplete response" errors
+        String jdbcUrl = "jdbc:sqlserver://" + serverName + ":" + port
+                + ";DatabaseName=" + dbName
+                + ";integratedSecurity=true;trustServerCertificate=true"
+                + ";loginTimeout=30"
+                + ";";
+
+        System.out.println("jdbcUrl        : " + jdbcUrl);
+
+        config.setJdbcUrl(jdbcUrl);
+        config.setDriverClassName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
+
+        // Performance tuning optimized for batch processing
+        config.setMaximumPoolSize(poolsize);
+        config.setMinimumIdle(2);
+        config.setIdleTimeout(30000);         // 30 seconds idle timeout
+        config.setConnectionTimeout(30000);    // 30 seconds connection timeout
+        config.setMaxLifetime(1800000);        // 30 minutes max lifetime
+        
+        // Leak detection: Only warn if connection held > 10 minutes
+        // (Batch processing can legitimately hold connections for several minutes)
+        config.setLeakDetectionThreshold(600000); // 10 minutes
+        
+        // Enable fast connection validation
+        config.setConnectionTestQuery("SELECT 1");
+        config.setValidationTimeout(3000);     // 3 seconds validation timeout
+        
+        // Enable keepalive for long-running connections
+        config.setKeepaliveTime(60000);        // Send keepalive every 60 seconds
+
+        dataSource = new HikariDataSource(config);
+    }
+
+    public void getPoolInfo() {
+        System.out.println("Active connections: " + dataSource.getHikariPoolMXBean().getActiveConnections());
+        System.out.println("Idle connections  : " + dataSource.getHikariPoolMXBean().getIdleConnections());
+        System.out.println("Total connections : " + dataSource.getHikariPoolMXBean().getTotalConnections());
+    }
+
+    public Connection getConnection() throws SQLException {
+        Connection conn = dataSource.getConnection();
+        // Disable auto-commit for batch processing performance
+        // Commits will be managed explicitly by the calling code
+        conn.setAutoCommit(false);
+        return conn;
+    }
+
+    public void close() {
+        if (dataSource != null && !dataSource.isClosed()) {
+            dataSource.close();
+        }
+    }
+}
+
+
+
+
+package com.wawanesa.ace.merge.constants;
+
+public class Constants {
+
+    public static final String INPUT_FOLDER      = "Input";
+    public static final String ARCHIVE_FOLDER   = "Archive";
+    public static final String COMPLETED_FOLDER = "Completed";
+    public static final String FAILED_FOLDER   = "Failed";
+    public static final String INPROGRESS_FOLDER  = "Inprogress";
+}
+
+
+
+
+
+
+package com.wawanesa.ace.merge.utils;
+
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+/**
+ * Thread-safe global statistics collector for CCDataMergeUtility
+ * Aggregates processing statistics from all threads and generates summary reports
+ */
+public class GlobalProcessingReport {
+    
+    private static final Logger logger = LogManager.getLogger(GlobalProcessingReport.class);
+    
+    // Global counters (thread-safe)
+    private final AtomicLong totalFilesQueued = new AtomicLong(0);
+    private final AtomicLong totalFilesProcessed = new AtomicLong(0);
+    private final AtomicLong totalFilesFailed = new AtomicLong(0);
+    private final AtomicLong totalRowsProcessed = new AtomicLong(0);
+    private final AtomicLong totalRowsSuccess = new AtomicLong(0);
+    private final AtomicLong totalRowsFailure = new AtomicLong(0);
+    private final AtomicLong totalRowsSkipped = new AtomicLong(0);
+    
+    // Per-file statistics (thread-safe)
+    private final ConcurrentHashMap<String, FileStats> fileStats = new ConcurrentHashMap<>();
+    
+    // Timing
+    private final long startTime;
+    private long endTime;
+    
+    // Thread pool stats
+    private volatile int threadPoolSize = 0;
+    private volatile int maxActiveThreads = 0;
+    private volatile long peakQueueSize = 0;
+    
+    public GlobalProcessingReport() {
+        this.startTime = System.currentTimeMillis();
+        logger.info("GlobalProcessingReport initialized");
+    }
+    
+    /**
+     * Increment files queued counter
+     */
+    public void incrementFilesQueued() {
+        totalFilesQueued.incrementAndGet();
+    }
+    
+    /**
+     * Set total number of files to process (call at startup)
+     */
+    public void setTotalFilesQueued(long total) {
+        totalFilesQueued.set(total);
+        logger.info("Total files queued for processing: {}", total);
+    }
+    
+    /**
+     * Record a successfully processed file
+     */
+    public void recordFileSuccess(String fileName, ProcessingResult result) {
+        totalFilesProcessed.incrementAndGet();
+        totalRowsProcessed.addAndGet(result.totalRows);
+        totalRowsSuccess.addAndGet(result.successCount);
+        totalRowsFailure.addAndGet(result.failureCount);
+        totalRowsSkipped.addAndGet(result.skippedEmptyLines);
+        
+        // Store file stats
+        fileStats.put(fileName, new FileStats(fileName, result, null));
+        
+        if (logger.isDebugEnabled()) {
+            logger.debug("File processed: name={}, rows={}, success={}, failed={}", 
+                        fileName, result.totalRows, result.successCount, result.failureCount);
+        }
+    }
+    
+    /**
+     * Record a failed file (couldn't process)
+     */
+    public void recordFileFailure(String fileName, String errorReason) {
+        totalFilesFailed.incrementAndGet();
+        fileStats.put(fileName, new FileStats(fileName, null, errorReason));
+        logger.warn("File failed: name={}, reason={}", fileName, errorReason);
+    }
+    
+    /**
+     * Update thread pool statistics
+     */
+    public void updateThreadPoolStats(int poolSize, int activeThreads, long queueSize) {
+        this.threadPoolSize = poolSize;
+        this.maxActiveThreads = Math.max(this.maxActiveThreads, activeThreads);
+        this.peakQueueSize = Math.max(this.peakQueueSize, queueSize);
+    }
+    
+    /**
+     * Log current progress to console/log file
+     */
+    public void logProgress() {
+        long processed = totalFilesProcessed.get();
+        long failed = totalFilesFailed.get();
+        long total = totalFilesQueued.get();
+        long remaining = total - processed - failed;
+        
+        double pct = (total > 0) ? ((processed + failed) * 100.0 / total) : 0;
+        long elapsed = System.currentTimeMillis() - startTime;
+        long eta = ((processed + failed) > 0) ? 
+            (elapsed * remaining / (processed + failed)) : 0;
+        
+        logger.info("===== PROGRESS REPORT =====");
+        logger.info("Files: {}/{} processed ({}) | {} failed | {} remaining | ETA: {} min",
+                   processed, total, String.format("%.1f%%", pct), failed, remaining, eta / 60000);
+        logger.info("Rows: {} merged | {} failed/not matched | {} skipped",
+                   totalRowsSuccess.get(), totalRowsFailure.get(), totalRowsSkipped.get());
+        
+        double successRate = (totalRowsProcessed.get() > 0) ? 
+            (totalRowsSuccess.get() * 100.0 / totalRowsProcessed.get()) : 0;
+        logger.info("Merge Success Rate: {}", String.format("%.2f%%", successRate));
+        logger.info("===========================");
+    }
+    
+    /**
+     * Finalize and write comprehensive summary report to file
+     */
+    public void writeReportToFile(String outputDirectory) {
+        endTime = System.currentTimeMillis();
+        long durationMs = endTime - startTime;
+        
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd_HHmmss");
+        String timestamp = sdf.format(new Date(endTime));
+        String reportFileName = outputDirectory + "/SummaryReports/CCDataMerge_Summary_Report_" + timestamp + ".csv";
+        
+        logger.info("Writing summary report to: {}", reportFileName);
+        
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(reportFileName))) {
+            
+            // ===== EXECUTION SUMMARY =====
+            writer.write("CCDataMergeUtility - Execution Summary\n");
+            writer.write("Metric,Value\n");
+            
+            SimpleDateFormat fullDateFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+            writer.write("Start Time," + fullDateFormat.format(new Date(startTime)) + "\n");
+            writer.write("End Time," + fullDateFormat.format(new Date(endTime)) + "\n");
+            writer.write("Total Duration," + formatDuration(durationMs) + "\n");
+            writer.write("Total Files Queued," + totalFilesQueued.get() + "\n");
+            writer.write("Total Files Processed," + totalFilesProcessed.get() + "\n");
+            writer.write("Total Files Failed," + totalFilesFailed.get() + "\n");
+            writer.write("Total Rows in CSV," + totalRowsProcessed.get() + "\n");
+            writer.write("Total Rows Merged (isDataMerged=1)," + totalRowsSuccess.get() + "\n");
+            writer.write("Total Rows Failed/Not Matched," + totalRowsFailure.get() + "\n");
+            writer.write("Total Rows Skipped (Empty)," + totalRowsSkipped.get() + "\n");
+            
+            double successRate = (totalRowsProcessed.get() > 0) ? 
+                (totalRowsSuccess.get() * 100.0 / totalRowsProcessed.get()) : 0;
+            writer.write("Merge Success Rate," + String.format("%.2f%%", successRate) + "\n");
+            
+            long rowsPerSecond = (durationMs > 0) ? 
+                (totalRowsSuccess.get() * 1000 / durationMs) : 0;
+            writer.write("Average Processing Speed," + rowsPerSecond + " rows/sec\n");
+            
+            double avgFileTime = (totalFilesProcessed.get() > 0) ? 
+                (durationMs / 1000.0 / totalFilesProcessed.get()) : 0;
+            writer.write("Average File Processing Time," + String.format("%.2f", avgFileTime) + " seconds\n");
+            
+            writer.write("\n");
+            
+            // ===== PER-FILE BREAKDOWN =====
+            writer.write("Per-File Results\n");
+            writer.write("File Name,Status,Total Rows,Rows Merged,Rows Failed,Error\n");
+            
+            for (Map.Entry<String, FileStats> entry : fileStats.entrySet()) {
+                FileStats stats = entry.getValue();
+                if (stats.result != null) {
+                    writer.write(String.format("%s,SUCCESS,%d,%d,%d,\n",
+                        stats.fileName,
+                        stats.result.totalRows,
+                        stats.result.successCount,
+                        stats.result.failureCount));
+                } else {
+                    writer.write(String.format("%s,FAILED,0,0,0,%s\n",
+                        stats.fileName,
+                        stats.errorReason != null ? stats.errorReason.replace(",", ";") : "Unknown error"));
+                }
+            }
+            
+            writer.write("\n");
+            
+            // ===== THREAD POOL STATISTICS =====
+            writer.write("Thread Pool Statistics\n");
+            writer.write("Metric,Value\n");
+            writer.write("Thread Pool Size," + threadPoolSize + "\n");
+            writer.write("Max Active Threads," + maxActiveThreads + "\n");
+            writer.write("Peak Queue Size," + peakQueueSize + "\n");
+            
+            writer.write("\n");
+            
+            // ===== MEMORY STATISTICS =====
+            Runtime runtime = Runtime.getRuntime();
+            long maxMemoryMB = runtime.maxMemory() / (1024 * 1024);
+            long totalMemoryMB = runtime.totalMemory() / (1024 * 1024);
+            long freeMemoryMB = runtime.freeMemory() / (1024 * 1024);
+            long usedMemoryMB = totalMemoryMB - freeMemoryMB;
+            
+            writer.write("Memory Statistics\n");
+            writer.write("Metric,Value\n");
+            writer.write("Current Used Memory," + usedMemoryMB + "MB\n");
+            writer.write("Max Heap Size," + maxMemoryMB + "MB\n");
+            
+            writer.write("\n");
+            
+            logger.info("Summary report written successfully: {}", reportFileName);
+            
+        } catch (IOException e) {
+            logger.error("Failed to write summary report", e);
+        }
+    }
+    
+    /**
+     * Get current statistics as formatted string
+     */
+    public String getSummary() {
+        long processed = totalFilesProcessed.get();
+        long total = totalFilesQueued.get();
+        double pct = (total > 0) ? (processed * 100.0 / total) : 0;
+        
+        return String.format("Files: %d/%d (%.1f%%) | Rows: Merged=%d Failed/NotMatched=%d",
+                           processed, total, pct, 
+                           totalRowsSuccess.get(), totalRowsFailure.get());
+    }
+    
+    /**
+     * Format duration in human-readable format
+     */
+    private String formatDuration(long durationMs) {
+        long seconds = durationMs / 1000;
+        long minutes = seconds / 60;
+        long hours = minutes / 60;
+        
+        if (hours > 0) {
+            return String.format("%d hours %d minutes", hours, minutes % 60);
+        } else if (minutes > 0) {
+            return String.format("%d minutes %d seconds", minutes, seconds % 60);
+        } else {
+            return String.format("%d seconds", seconds);
+        }
+    }
+    
+    // ===== INNER CLASS: ProcessingResult =====
+    
+    /**
+     * Result data from processing a single file
+     */
+    public static class ProcessingResult {
+        public int totalRows = 0;
+        public int successCount = 0;
+        public int failureCount = 0;
+        public int skippedEmptyLines = 0;
+        
+        public ProcessingResult() {}
+        
+        public ProcessingResult(int totalRows, int successCount, int failureCount, int skippedEmptyLines) {
+            this.totalRows = totalRows;
+            this.successCount = successCount;
+            this.failureCount = failureCount;
+            this.skippedEmptyLines = skippedEmptyLines;
+        }
+    }
+    
+    // ===== INNER CLASS: FileStats =====
+    
+    /**
+     * Statistics for a specific file
+     */
+    private static class FileStats {
+        private final String fileName;
+        private final ProcessingResult result;
+        private final String errorReason;
+        
+        public FileStats(String fileName, ProcessingResult result, String errorReason) {
+            this.fileName = fileName;
+            this.result = result;
+            this.errorReason = errorReason;
+        }
+    }
+}
+
+package com.wawanesa.ace.merge.utils;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.sql.CallableStatement;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Types;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.wawanesa.ace.merge.configuration.PropertiesConfigLoader;
+import com.wawanesa.ace.merge.connection.ConnectionManager;
+import com.wawanesa.ace.merge.constants.Constants;
+
+/**
+ * Fast staging-based merge utility - modeled after DataTransformUtility's approach.
+ * 
+ * APPROACH:
+ * 1. Batch INSERT into CC_Extract_Staging table (fast - same as DataTransformUtility)
+ * 2. Call sp_SyncStagingToMain stored procedure (all UPDATE logic runs on DB server)
+ * 
+ * BENEFITS:
+ * - No BULK INSERT permission needed
+ * - No long-running UPDATE queries from Java
+ * - Same fast batch insert pattern as DataTransformUtility
+ */
+public class StagingBasedMergeUtils {
+    
+    private static final Logger logger = LogManager.getLogger(StagingBasedMergeUtils.class);
+    
+    // SQL for upserting into staging table (MERGE handles duplicates on EXTERNALID)
+    // If EXTERNALID exists, update the row; otherwise insert new row
+    private static final String UPSERT_STAGING_SQL = 
+        "MERGE [dbo].[CC_Extract_Staging] AS target " +
+        "USING (SELECT ? AS [NAME], ? AS [DOCUMENT_TYPE], ? AS [CLAIM_NUMBER], ? AS [POLICY_NUMBER], " +
+        "? AS [DOCUMENT_SUBTYPE], ? AS [AUTHOR], ? AS [DOCUMENT_DESCRIPTION], ? AS [STATUS], " +
+        "? AS [EXTERNALID], ? AS [ID], ? AS [CLAIMID], ? AS [SourceFileName]) AS source " +
+        "ON target.[EXTERNALID] = source.[EXTERNALID] " +
+        "WHEN MATCHED THEN UPDATE SET " +
+        "  target.[NAME] = source.[NAME], target.[DOCUMENT_TYPE] = source.[DOCUMENT_TYPE], " +
+        "  target.[CLAIM_NUMBER] = source.[CLAIM_NUMBER], target.[POLICY_NUMBER] = source.[POLICY_NUMBER], " +
+        "  target.[DOCUMENT_SUBTYPE] = source.[DOCUMENT_SUBTYPE], target.[AUTHOR] = source.[AUTHOR], " +
+        "  target.[DOCUMENT_DESCRIPTION] = source.[DOCUMENT_DESCRIPTION], target.[STATUS] = source.[STATUS], " +
+        "  target.[ID] = source.[ID], target.[CLAIMID] = source.[CLAIMID], " +
+        "  target.[SourceFileName] = source.[SourceFileName], target.[LoadedDate] = GETDATE(), " +
+        "  target.[SyncStatus] = NULL, target.[IsSynced] = 0 " +
+        "WHEN NOT MATCHED THEN INSERT " +
+        "  ([NAME], [DOCUMENT_TYPE], [CLAIM_NUMBER], [POLICY_NUMBER], [DOCUMENT_SUBTYPE], " +
+        "   [AUTHOR], [DOCUMENT_DESCRIPTION], [STATUS], [EXTERNALID], [ID], [CLAIMID], " +
+        "   [SourceFileName], [LoadedDate]) " +
+        "  VALUES (source.[NAME], source.[DOCUMENT_TYPE], source.[CLAIM_NUMBER], source.[POLICY_NUMBER], " +
+        "   source.[DOCUMENT_SUBTYPE], source.[AUTHOR], source.[DOCUMENT_DESCRIPTION], source.[STATUS], " +
+        "   source.[EXTERNALID], source.[ID], source.[CLAIMID], source.[SourceFileName], GETDATE());";
+    
+    // SQL for calling the sync procedure
+    private static final String CALL_SYNC_PROC = 
+        "{CALL [dbo].[sp_SyncStagingToMain](?, ?, ?, ?, ?)}";
+    
+    private ConnectionManager connectionManager;
+    private String basePath;
+    private int batchSize;
+    
+    public StagingBasedMergeUtils(PropertiesConfigLoader config, ConnectionManager connectionManager) {
+        this.connectionManager = connectionManager;
+        this.basePath = config.getProperty("app.base_path");
+        
+        // Use same batch size pattern as DataTransformUtility
+        String batchSizeStr = config.getProperty("db.batch.insert.size");
+        if (batchSizeStr == null) {
+            batchSizeStr = config.getProperty("db.batch.update.size");
+        }
+        this.batchSize = (batchSizeStr != null) ? Integer.parseInt(batchSizeStr) : 1000;
+        
+        logger.info("StagingBasedMergeUtils initialized - Batch size: {}", batchSize);
+    }
+    
+    /**
+     * Result class for processing (matches Utils.ProcessingResult structure)
+     */
+    public static class ProcessingResult {
+        public int totalRows = 0;
+        public int successCount = 0;       // Rows loaded to staging
+        public int failureCount = 0;       // Parse errors
+        public int skippedEmptyLines = 0;
+        public int rowsUpdatedInMain = 0;  // Rows synced to main table
+        public int rowsNotMatched = 0;     // Rows with no matching externalID
+        public String batchRunId = null;
+    }
+    
+    /**
+     * Process a CSV file using the fast staging approach
+     */
+    public ProcessingResult processCSVFile(Path csvFilePath) {
+        String csvFileName = csvFilePath.getFileName().toString();
+        logger.info("===== Starting STAGING-BASED processing of: {} =====", csvFileName);
+        
+        Path inprogressDir = Paths.get(basePath, Constants.INPROGRESS_FOLDER);
+        Path inprogressFile = inprogressDir.resolve(csvFileName);
+        ProcessingResult result = new ProcessingResult();
+        
+        try {
+            // Move file to Inprogress folder
+            logger.info("Moving {} to Inprogress folder", csvFileName);
+            Files.move(csvFilePath, inprogressFile, StandardCopyOption.REPLACE_EXISTING);
+            
+            // STEP 1: Load CSV into staging table using fast batch insert
+            logger.info("[STEP 1] Loading CSV into staging table...");
+            loadCSVToStagingBatch(inprogressFile, csvFileName, result);
+            logger.info("[STEP 1] Complete - Loaded: {}, Failed: {}", result.successCount, result.failureCount);
+            
+            // STEP 2: Call stored procedure to sync staging -> main
+            if (result.successCount > 0) {
+                logger.info("[STEP 2] Calling sync procedure...");
+                callSyncProcedure(csvFileName, result);
+                logger.info("[STEP 2] Complete - Updated: {}, Not Matched: {}", 
+                           result.rowsUpdatedInMain, result.rowsNotMatched);
+            }
+            
+            // STEP 3: Handle file lifecycle
+            handleFileLifecycle(inprogressFile, csvFileName, result);
+            
+            logFinalSummary(csvFileName, result);
+            return result;
+            
+        } catch (Exception e) {
+            logger.error("Critical error processing: {}", csvFileName, e);
+            moveToFailed(inprogressFile, csvFileName, e.getMessage());
+            return result;
+        }
+    }
+    
+    /**
+     * STEP 1: Fast batch INSERT into staging table
+     * Same approach as DataTransformUtility.insertClaimCenterRowsBatch()
+     */
+    private void loadCSVToStagingBatch(Path csvFilePath, String csvFileName, ProcessingResult result) 
+            throws IOException, SQLException {
+        
+        List<String[]> batchData = new ArrayList<>(batchSize);
+        List<String> batchLines = new ArrayList<>(batchSize);
+        List<String> failedRows = new ArrayList<>();
+        String headerLine = null;
+        
+        try (Connection conn = connectionManager.getConnection();
+             BufferedReader reader = new BufferedReader(new FileReader(csvFilePath.toFile()))) {
+            
+            conn.setAutoCommit(false);
+            
+            // Read header
+            headerLine = reader.readLine();
+            if (headerLine == null || headerLine.trim().isEmpty()) {
+                throw new IOException("Empty CSV file or missing header");
+            }
+            
+            Map<String, Integer> headerIndex = buildHeaderIndex(headerLine);
+            if (!validateRequiredColumns(headerIndex)) {
+                throw new IOException("Missing required columns in CSV");
+            }
+            
+            String line;
+            int rowNum = 1;
+            
+            while ((line = reader.readLine()) != null) {
+                rowNum++;
+                
+                if (line.trim().isEmpty()) {
+                    result.skippedEmptyLines++;
+                    continue;
+                }
+                
+                result.totalRows++;
+                
+                try {
+                    String[] cells = line.split("\\|", -1);
+                    
+                    // Build data array for batch insert
+                    String[] rowData = new String[12]; // 11 columns + filename
+                    rowData[0] = getCell(cells, headerIndex, "NAME");
+                    rowData[1] = getCell(cells, headerIndex, "DOCUMENT_TYPE");
+                    rowData[2] = getCell(cells, headerIndex, "CLAIM_NUMBER");
+                    rowData[3] = getCell(cells, headerIndex, "POLICY_NUMBER");
+                    rowData[4] = getCell(cells, headerIndex, "DOCUMENT_SUBTYPE");
+                    rowData[5] = getCell(cells, headerIndex, "AUTHOR");
+                    rowData[6] = getCell(cells, headerIndex, "DOCUMENT_DESCRIPTION");
+                    rowData[7] = getCell(cells, headerIndex, "STATUS");
+                    rowData[8] = getCell(cells, headerIndex, "EXTERNALID");
+                    rowData[9] = getCell(cells, headerIndex, "ID");
+                    rowData[10] = getCell(cells, headerIndex, "CLAIMID");
+                    rowData[11] = csvFileName;
+                    
+                    batchData.add(rowData);
+                    batchLines.add(line);
+                    
+                    // Execute batch when full (same pattern as DataTransformUtility)
+                    if (batchData.size() >= batchSize) {
+                        int inserted = executeBatchInsert(conn, batchData);
+                        result.successCount += inserted;
+                        
+                        logger.debug("Batch committed: {} rows (total: {})", inserted, result.successCount);
+                        batchData.clear();
+                        batchLines.clear();
+                    }
+                    
+                } catch (Exception e) {
+                    result.failureCount++;
+                    String errorMsg = e.getMessage().replace("\"", "'").replace("|", ";");
+                    failedRows.add(line + "|" + errorMsg);
+                    logger.warn("Row {} parse error: {}", rowNum, e.getMessage());
+                }
+            }
+            
+            // Execute remaining batch
+            if (!batchData.isEmpty()) {
+                int inserted = executeBatchInsert(conn, batchData);
+                result.successCount += inserted;
+                logger.debug("Final batch committed: {} rows", inserted);
+            }
+            
+            conn.commit();
+            logger.info("Staging load complete: {} rows inserted", result.successCount);
+        }
+        
+        // Write failed rows file if any failures
+        if (!failedRows.isEmpty()) {
+            writeFailedFile(csvFileName, headerLine, failedRows);
+        }
+    }
+    
+    /**
+     * Execute batch upsert - inserts new rows or updates existing ones (by EXTERNALID)
+     */
+    private int executeBatchInsert(Connection conn, List<String[]> batchData) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(UPSERT_STAGING_SQL)) {
+            
+            for (String[] rowData : batchData) {
+                for (int i = 0; i < 12; i++) {
+                    ps.setString(i + 1, rowData[i]);
+                }
+                ps.addBatch();
+            }
+            
+            int[] results = ps.executeBatch();
+            conn.commit();
+            return results.length;
+            
+        } catch (SQLException e) {
+            conn.rollback();
+            throw e;
+        }
+    }
+    
+    /**
+     * STEP 2: Call stored procedure to sync staging -> main table
+     */
+    private void callSyncProcedure(String csvFileName, ProcessingResult result) throws SQLException {
+        try (Connection conn = connectionManager.getConnection();
+             CallableStatement stmt = conn.prepareCall(CALL_SYNC_PROC)) {
+            
+            // Input parameter
+            stmt.setString(1, csvFileName);
+            
+            // Output parameters
+            stmt.registerOutParameter(2, Types.INTEGER);  // @RowsToProcess
+            stmt.registerOutParameter(3, Types.INTEGER);  // @RowsUpdated
+            stmt.registerOutParameter(4, Types.INTEGER);  // @RowsNotMatched
+            stmt.registerOutParameter(5, Types.VARCHAR);  // @BatchRunID
+            
+            stmt.execute();
+            
+            // Get output values
+            result.rowsUpdatedInMain = stmt.getInt(3);
+            result.rowsNotMatched = stmt.getInt(4);
+            result.batchRunId = stmt.getString(5);
+            
+            logger.info("Sync procedure completed - Updated: {}, Not Matched: {}, BatchID: {}", 
+                       result.rowsUpdatedInMain, result.rowsNotMatched, result.batchRunId);
+        }
+    }
+    
+    /**
+     * Handle file lifecycle after processing
+     */
+    private void handleFileLifecycle(Path inprogressFile, String csvFileName, ProcessingResult result) {
+        try {
+            Path targetDir;
+            String summaryStatus;
+            
+            if (result.failureCount == 0 && result.rowsNotMatched == 0) {
+                // Complete success
+                targetDir = Paths.get(basePath, Constants.COMPLETED_FOLDER);
+                summaryStatus = "SUCCESS";
+            } else if (result.rowsUpdatedInMain > 0) {
+                // Partial success
+                targetDir = Paths.get(basePath, Constants.COMPLETED_FOLDER);
+                summaryStatus = "PARTIAL";
+            } else {
+                // Complete failure
+                targetDir = Paths.get(basePath, Constants.FAILED_FOLDER);
+                summaryStatus = "FAILED";
+            }
+            
+            Files.createDirectories(targetDir);
+            Path targetFile = targetDir.resolve(csvFileName);
+            Files.move(inprogressFile, targetFile, StandardCopyOption.REPLACE_EXISTING);
+            logger.info("File moved to {} folder", targetDir.getFileName());
+            
+            // Write summary
+            writeSummaryFile(targetDir, csvFileName, result, summaryStatus);
+            
+        } catch (IOException e) {
+            logger.error("Error handling file lifecycle: {}", e.getMessage());
+        }
+    }
+    
+    private void moveToFailed(Path inprogressFile, String csvFileName, String errorMessage) {
+        try {
+            Path failedDir = Paths.get(basePath, Constants.FAILED_FOLDER);
+            Files.createDirectories(failedDir);
+            
+            if (Files.exists(inprogressFile)) {
+                Path failedFile = failedDir.resolve(csvFileName);
+                Files.move(inprogressFile, failedFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+            
+            // Write error log
+            Path errorLogPath = failedDir.resolve(csvFileName.replace(".csv", "_ERROR.log"));
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(errorLogPath.toFile()))) {
+                writer.write("Error: " + errorMessage);
+                writer.newLine();
+                writer.write("Timestamp: " + java.time.LocalDateTime.now());
+            }
+        } catch (IOException e) {
+            logger.error("Error moving to failed: {}", e.getMessage());
+        }
+    }
+    
+    private void writeFailedFile(String csvFileName, String headerLine, List<String> failedRows) {
+        try {
+            Path failedDir = Paths.get(basePath, Constants.FAILED_FOLDER);
+            Files.createDirectories(failedDir);
+            
+            String baseFileName = csvFileName.replaceAll("(?i)\\.csv$", "");
+            Path failedFile = failedDir.resolve(baseFileName + "_PARSE_ERRORS.csv");
+            
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(failedFile.toFile()))) {
+                writer.write(headerLine + "|ERROR_MESSAGE");
+                writer.newLine();
+                for (String row : failedRows) {
+                    writer.write(row);
+                    writer.newLine();
+                }
+            }
+            logger.info("Created parse errors file: {}", failedFile);
+        } catch (IOException e) {
+            logger.error("Error writing failed file: {}", e.getMessage());
+        }
+    }
+    
+    private void writeSummaryFile(Path dir, String csvFileName, ProcessingResult result, String status) {
+        Path summaryPath = dir.resolve(csvFileName.replace(".csv", "_SUMMARY.txt"));
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(summaryPath.toFile()))) {
+            writer.write("============================================================");
+            writer.newLine();
+            writer.write("CLAIM CENTER DATA MERGE - SUMMARY");
+            writer.newLine();
+            writer.write("============================================================");
+            writer.newLine();
+            writer.write("File: " + csvFileName);
+            writer.newLine();
+            writer.write("Status: " + status);
+            writer.newLine();
+            writer.write("Batch Run ID: " + result.batchRunId);
+            writer.newLine();
+            writer.write("Timestamp: " + java.time.LocalDateTime.now());
+            writer.newLine();
+            writer.write("------------------------------------------------------------");
+            writer.newLine();
+            writer.write("Total Rows in CSV: " + result.totalRows);
+            writer.newLine();
+            writer.write("Loaded to Staging: " + result.successCount);
+            writer.newLine();
+            writer.write("Parse Errors: " + result.failureCount);
+            writer.newLine();
+            writer.write("Updated in Main Table: " + result.rowsUpdatedInMain + " (isDataMerged=1)");
+            writer.newLine();
+            writer.write("Not Matched (externalID not found): " + result.rowsNotMatched);
+            writer.newLine();
+            writer.write("Empty Lines Skipped: " + result.skippedEmptyLines);
+            writer.newLine();
+            writer.write("============================================================");
+        } catch (IOException e) {
+            logger.error("Error writing summary: {}", e.getMessage());
+        }
+    }
+    
+    private void logFinalSummary(String csvFileName, ProcessingResult result) {
+        logger.info("============================================================");
+        logger.info("PROCESSING COMPLETE: {}", csvFileName);
+        logger.info("============================================================");
+        logger.info("Total Rows: {}", result.totalRows);
+        logger.info("Loaded to Staging: {}", result.successCount);
+        logger.info("Parse Errors: {}", result.failureCount);
+        logger.info("Updated in Main: {} (isDataMerged=1)", result.rowsUpdatedInMain);
+        logger.info("Not Matched: {}", result.rowsNotMatched);
+        logger.info("Batch Run ID: {}", result.batchRunId);
+        logger.info("============================================================");
+    }
+    
+    // ========== Helper Methods ==========
+    
+    private Map<String, Integer> buildHeaderIndex(String headerLine) {
+        Map<String, Integer> index = new HashMap<>();
+        String[] headers = headerLine.split("\\|", -1);
+        for (int i = 0; i < headers.length; i++) {
+            String header = headers[i].trim().replace("\"", "");
+            index.put(header, i);
+        }
+        return index;
+    }
+    
+    private boolean validateRequiredColumns(Map<String, Integer> headerIndex) {
+        String[] required = {"NAME", "DOCUMENT_TYPE", "CLAIM_NUMBER", "POLICY_NUMBER", 
+                            "DOCUMENT_SUBTYPE", "AUTHOR", "DOCUMENT_DESCRIPTION", 
+                            "STATUS", "EXTERNALID", "ID", "CLAIMID"};
+        
+        List<String> missing = new ArrayList<>();
+        for (String col : required) {
+            if (!headerIndex.containsKey(col)) {
+                missing.add(col);
+            }
+        }
+        
+        if (!missing.isEmpty()) {
+            logger.error("Missing required columns: {}", missing);
+            return false;
+        }
+        return true;
+    }
+    
+    private String getCell(String[] cells, Map<String, Integer> headerIndex, String columnName) {
+        Integer idx = headerIndex.get(columnName);
+        if (idx == null || idx >= cells.length) {
+            return null;
+        }
+        String value = cells[idx].trim().replace("\"", "");
+        return value.isEmpty() ? null : value;
+    }
+}
