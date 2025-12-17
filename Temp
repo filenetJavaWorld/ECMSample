@@ -1,1 +1,959 @@
-temp
+package com.wawanesa.ace.merge.utils;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.wawanesa.ace.merge.configuration.PropertiesConfigLoader;
+import com.wawanesa.ace.merge.connection.ConnectionManager;
+import com.wawanesa.ace.merge.constants.Constants;
+import com.wawanesa.ace.merge.model.ClaimCenterDocumentDTO;
+
+/**
+ * Utility class for processing ClaimCenter CSV extracts and updating database records
+ */
+public class Utils {
+    
+    private static final Logger logger = LogManager.getLogger(Utils.class);
+    
+    // Maximum number of connection retry attempts for batch processing
+    private static final int MAX_CONNECTION_RETRIES = 3;
+    // Delay between connection retry attempts (milliseconds)
+    private static final long CONNECTION_RETRY_DELAY_MS = 2000;
+    
+    private PropertiesConfigLoader config;
+    private ConnectionManager connectionManager;
+    private String basePath;
+    private String dbTableName;
+    private String updateMergeQuery;
+    private int queryTimeoutSeconds; // Query timeout for PreparedStatements
+    
+    public Utils(PropertiesConfigLoader config, ConnectionManager connectionManager) {
+        this.config = config;
+        this.connectionManager = connectionManager;
+        this.basePath = config.getProperty("app.base_path");
+        this.dbTableName = config.getProperty("db.staging.claimcenterdbtable");
+        
+        // Load SQL query from properties and replace table name placeholder
+        String queryTemplate = config.getProperty("db.query.update.merge");
+        this.updateMergeQuery = queryTemplate.replace("%TABLE_NAME%", this.dbTableName);
+        
+        // Load query timeout from properties (default: 60 seconds per statement)
+        String queryTimeoutStr = config.getProperty("db.query.timeout");
+        this.queryTimeoutSeconds = (queryTimeoutStr != null) ? Integer.parseInt(queryTimeoutStr) : 60;
+        logger.info("Query timeout configured: {} seconds", queryTimeoutSeconds);
+        logger.info("Connection retry configured: max {} attempts with {}ms delay", 
+                   MAX_CONNECTION_RETRIES, CONNECTION_RETRY_DELAY_MS);
+    }
+    
+    /**
+     * Inner class to track processing results
+     * Made public for GlobalProcessingReport integration
+     */
+    public static class ProcessingResult {
+        public int totalRows = 0;
+        public int successCount = 0;
+        public int failureCount = 0;
+        public int skippedEmptyLines = 0;
+    }
+    
+    /**
+     * Process a single CSV file from Input folder
+     * Returns ProcessingResult for global reporting
+     */
+    public ProcessingResult processCSVFile(Path csvFilePath) {
+        String csvFileName = csvFilePath.getFileName().toString();
+        logger.info("===== Starting processing of CSV file: {} =====", csvFileName);
+        
+        Path inprogressDir = Paths.get(basePath, Constants.INPROGRESS_FOLDER);
+        Path inprogressFile = inprogressDir.resolve(csvFileName);
+        
+        try {
+            // Step 1: Move file to Inprogress folder
+            logger.info("Moving {} to Inprogress folder", csvFileName);
+            Files.move(csvFilePath, inprogressFile, StandardCopyOption.REPLACE_EXISTING);
+            logger.info("File moved to: {}", inprogressFile);
+            
+            // Step 2: Process the CSV file
+            ProcessingResult result = processCSVWithTracking(inprogressFile);
+            
+            // Step 3: Handle file lifecycle based on results
+            handleFileLifecycle(inprogressFile, result);
+            
+            logger.info("===== Completed processing of CSV file: {} =====", csvFileName);
+            logger.info("Total Rows: {}, Success: {}, Failed: {}, Empty Lines Skipped: {}", 
+                       result.totalRows, result.successCount, result.failureCount, result.skippedEmptyLines);
+            
+            return result;
+            
+        } catch (Exception e) {
+            logger.error("Critical error processing CSV file: {}", csvFileName, e);
+            // Move to Failed folder on critical error
+            try {
+                Path failedDir = Paths.get(basePath, Constants.FAILED_FOLDER);
+                Path failedFile = failedDir.resolve(csvFileName);
+                Files.move(inprogressFile, failedFile, StandardCopyOption.REPLACE_EXISTING);
+                
+                // Create error log file
+                createErrorLogFile(failedDir, csvFileName, "Critical processing error: " + e.getMessage());
+                
+            } catch (IOException ioe) {
+                logger.error("Failed to move file to Failed folder: {}", csvFileName, ioe);
+            }
+            
+            // Return empty result on critical error
+            return new ProcessingResult();
+        }
+    }
+    
+    /**
+     * Process CSV file with row-level tracking
+     */
+    private ProcessingResult processCSVWithTracking(Path csvFilePath) throws IOException {
+        ProcessingResult result = new ProcessingResult();
+        String csvFileName = csvFilePath.getFileName().toString();
+        
+        // Prepare output files for success and failure tracking
+        Path completedDir = Paths.get(basePath, Constants.COMPLETED_FOLDER);
+        Path failedDir = Paths.get(basePath, Constants.FAILED_FOLDER);
+        
+        String baseFileName = csvFileName.replaceAll("(?i)\\.csv$", "");
+        Path successFile = completedDir.resolve(baseFileName + "_SUCCESS.csv");
+        Path failedFile = failedDir.resolve(baseFileName + "_FAILED.csv");
+        
+        List<String> successRows = new ArrayList<>();
+        List<String> failedRows = new ArrayList<>();
+        
+        String skipHeaderProp = config.getProperty("app.skipHeaderRow");
+        boolean skipHeaderRow = skipHeaderProp == null ? true : Boolean.parseBoolean(skipHeaderProp);
+        String headerLine = null;
+        
+        // Get batch size from configuration (default reduced to 100 for stability)
+        String batchSizeStr = config.getProperty("db.batch.update.size");
+        int batchSize = (batchSizeStr != null) ? Integer.parseInt(batchSizeStr) : 100;
+        
+        logger.info("Processing CSV file: {}", csvFilePath);
+        logger.info("Delimiter: pipe (|), Skip header: {}, Batch size: {}", skipHeaderRow, batchSize);
+        
+        // Use connection holder to allow connection replacement during processing
+        // This enables retry logic when connection is lost mid-processing
+        final Connection[] connHolder = new Connection[1];
+        try (BufferedReader reader = new BufferedReader(new FileReader(csvFilePath.toFile()))) {
+            
+            long connStartTime = System.currentTimeMillis();
+            connHolder[0] = connectionManager.getConnection();
+            long connAcquireTime = System.currentTimeMillis() - connStartTime;
+            logger.debug("Connection acquired in {} ms", connAcquireTime);
+            
+            String line;
+            int rowNum = 0;
+            
+            // Read and process header
+            if (skipHeaderRow && (line = reader.readLine()) != null) {
+                headerLine = line.trim();
+                logger.debug("Header: {}", headerLine);
+            }
+            
+            // Build header index map
+            Map<String, Integer> headerIndex = buildHeaderIndex(headerLine);
+            
+            // Validate required columns exist
+            if (!validateRequiredColumns(headerIndex, csvFileName)) {
+                result.failureCount = 1;
+                // Close connection before returning
+                if (connHolder[0] != null) {
+                    try {
+                        connHolder[0].close();
+                        logger.debug("Connection closed after validation failure");
+                    } catch (SQLException e) {
+                        logger.error("Error closing connection after validation failure", e);
+                    }
+                }
+                return result;
+            }
+            
+            // Batch processing buffers
+            List<ClaimCenterDocumentDTO> batchDTOs = new ArrayList<>();
+            List<String> batchLines = new ArrayList<>();
+            
+            // Process each row
+            while ((line = reader.readLine()) != null) {
+                // Check for thread interruption to allow graceful shutdown
+                if (Thread.currentThread().isInterrupted()) {
+                    logger.warn("Thread interrupted during CSV processing at row {} - stopping processing", rowNum);
+                    break; // Exit gracefully, commit what we have so far
+                }
+                
+                rowNum++;
+                
+                // Skip empty lines
+                if (line.trim().length() == 0) {
+                    result.skippedEmptyLines++;
+                    continue;
+                }
+                
+                result.totalRows++;
+                String currentLine = line;
+                
+                try {
+                    // Parse CSV row
+                    String[] cells = parseCSVLine(line);
+                    
+                    // Build DTO from CSV row
+                    ClaimCenterDocumentDTO dto = buildDTOFromCSV(cells, headerIndex, csvFileName);
+                    
+                    dto.setDataMerged(true);
+                    
+                    // Validate DTO
+                    validateDTO(dto, rowNum);
+                    
+                    // Add to batch
+                    batchDTOs.add(dto);
+                    batchLines.add(currentLine);
+                    
+                    // Process batch when it reaches batch size
+                    if (batchDTOs.size() >= batchSize) {
+                        processBatchWithRetry(batchDTOs, batchLines, connHolder, batchSize, 
+                                               successRows, failedRows, result);
+                        batchDTOs.clear();
+                        batchLines.clear();
+                        
+                        logger.debug("Processed batch at row {}", rowNum);
+                    }
+                    
+                } catch (Exception e) {
+                    result.failureCount++;
+                    String errorMsg = e.getMessage().replace("\"", "'").replace("|", ";");
+                    failedRows.add(currentLine + "|" + errorMsg);
+                    logger.error("Row {}: Failed to process - {}", rowNum, e.getMessage());
+                }
+            }
+            
+            // Process remaining batch
+            if (!batchDTOs.isEmpty()) {
+                processBatchWithRetry(batchDTOs, batchLines, connHolder, batchSize, 
+                                       successRows, failedRows, result);
+                logger.debug("Processed final batch of {} rows", batchDTOs.size());
+            }
+            
+            // Commit all successful transactions
+            if (connHolder[0] != null && isConnectionValid(connHolder[0])) {
+                connHolder[0].commit();
+                logger.info("Transaction committed successfully");
+            }
+            
+            logger.info("CSV processing completed: Total={}, Success={}, Failed={}, Skipped Empty={}", 
+                       result.totalRows, result.successCount, result.failureCount, result.skippedEmptyLines);
+            
+        } catch (SQLException e) {
+            logger.error("Database error while processing CSV: {}", csvFileName, e);
+            // Rollback on error
+            if (connHolder[0] != null && isConnectionValid(connHolder[0])) {
+                try {
+                    connHolder[0].rollback();
+                    logger.warn("Transaction rolled back due to error");
+                } catch (SQLException rollbackEx) {
+                    logger.error("Error during rollback", rollbackEx);
+                }
+            }
+            throw new IOException("Database error: " + e.getMessage(), e);
+        } catch (Exception e) {
+            logger.error("Unexpected error while processing CSV: {}", csvFileName, e);
+            // Rollback on error
+            if (connHolder[0] != null && isConnectionValid(connHolder[0])) {
+                try {
+                    connHolder[0].rollback();
+                    logger.warn("Transaction rolled back due to error");
+                } catch (SQLException rollbackEx) {
+                    logger.error("Error during rollback", rollbackEx);
+                }
+            }
+            throw new IOException("Processing error: " + e.getMessage(), e);
+        } finally {
+            // Close connection
+            if (connHolder[0] != null) {
+                try {
+                    long closeStartTime = System.currentTimeMillis();
+                    connHolder[0].close();
+                    long closeTime = System.currentTimeMillis() - closeStartTime;
+                    logger.debug("Connection closed and returned to pool in {} ms", closeTime);
+                } catch (SQLException closeEx) {
+                    logger.error("Error closing connection", closeEx);
+                }
+            }
+        }
+        
+        // Write success file
+        if (!successRows.isEmpty()) {
+            writeSuccessFile(successFile, headerLine, successRows);
+            logger.info("Created success file with {} rows: {}", successRows.size(), successFile);
+        }
+        
+        // Write failed file (only if there are failures)
+        if (!failedRows.isEmpty()) {
+            writeFailedFile(failedFile, headerLine, failedRows);
+            logger.info("Created failed file with {} rows: {}", failedRows.size(), failedFile);
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Build header index map for CSV columns
+     */
+    private Map<String, Integer> buildHeaderIndex(String headerLine) {
+        Map<String, Integer> index = new HashMap<>();
+        if (headerLine == null || headerLine.trim().isEmpty()) {
+            return index;
+        }
+        
+        String[] headers = headerLine.split("\\|", -1);
+        for (int i = 0; i < headers.length; i++) {
+            String header = headers[i].trim().replace("\"", "");
+            index.put(header, i);
+        }
+        
+        logger.debug("Header index built with {} columns", index.size());
+        return index;
+    }
+    
+    /**
+     * Validate that all required columns exist in CSV
+     */
+    private boolean validateRequiredColumns(Map<String, Integer> headerIndex, String csvFileName) {
+    	// NAME|DOCUMENT_TYPE|CLAIM_NUMBER|POLICY_NUMBER|DOCUMENT_SUBTYPE|AUTHOR|DOCUMENT_DESCRIPTION|STATUS|EXTERNALID|ID|CLAIMID
+    	String[] requiredColumns = {
+    	    "NAME", "DOCUMENT_TYPE", "CLAIM_NUMBER", "POLICY_NUMBER", "DOCUMENT_SUBTYPE",
+    	    "AUTHOR", "DOCUMENT_DESCRIPTION", "STATUS", "EXTERNALID", "ID", "CLAIMID"
+    	};
+        
+        List<String> missingColumns = new ArrayList<>();
+        for (String col : requiredColumns) {
+            if (!headerIndex.containsKey(col)) {
+                missingColumns.add(col);
+            }
+        }
+        
+        if (!missingColumns.isEmpty()) {
+            logger.error("CSV file {} is missing required columns: {}", csvFileName, missingColumns);
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Parse CSV line handling pipe delimiter
+     */
+    private String[] parseCSVLine(String line) {
+        // Simple split by pipe - handles basic CSV
+        return line.split("\\|", -1);
+    }
+    
+    /**
+     * Build DTO from CSV row
+     */
+    private ClaimCenterDocumentDTO buildDTOFromCSV(String[] cells, Map<String, Integer> headerIndex, String csvFileName) {
+        ClaimCenterDocumentDTO dto = new ClaimCenterDocumentDTO();
+
+        // NAME|DOCUMENT_TYPE|CLAIM_NUMBER|POLICY_NUMBER|DOCUMENT_SUBTYPE|AUTHOR|DOCUMENT_DESCRIPTION|STATUS|EXTERNALID|ID|CLAIMID
+        dto.setDocumentTitle(safeTrim(getCell(cells, headerIndex.get("NAME"))));
+        dto.setDocumentType(safeTrim(getCell(cells, headerIndex.get("DOCUMENT_TYPE"))));
+        dto.setClaimNumber(safeTrim(getCell(cells, headerIndex.get("CLAIM_NUMBER"))));
+        dto.setPolicyNumber(safeTrim(getCell(cells, headerIndex.get("POLICY_NUMBER"))));
+        dto.setDocumentSubtype(safeTrim(getCell(cells, headerIndex.get("DOCUMENT_SUBTYPE"))));
+        dto.setAuthor(safeTrim(getCell(cells, headerIndex.get("AUTHOR"))));
+        dto.setDocumentDescription(safeTrim(getCell(cells, headerIndex.get("DOCUMENT_DESCRIPTION"))));
+        dto.setClaimType(safeTrim(getCell(cells, headerIndex.get("STATUS"))));
+        dto.setExternalID(safeTrim(getCell(cells, headerIndex.get("EXTERNALID"))));
+        dto.setGwDocumentID(safeTrim(getCell(cells, headerIndex.get("ID"))));
+        dto.setClaimID(safeTrim(getCell(cells, headerIndex.get("CLAIMID"))));
+        dto.setCsvFileName(csvFileName);
+
+        return dto;
+    }
+
+    
+    /**
+     * Validate DTO has required fields
+     */
+    private void validateDTO(ClaimCenterDocumentDTO dto, int rowNum) throws Exception {
+        if (dto.getExternalID() == null || dto.getExternalID().trim().isEmpty()) {
+            throw new Exception("Missing required field: externalID");
+        }
+    }
+    
+    /**
+     * Update database record matching externalID
+     */
+    private int updateDatabaseRecord(ClaimCenterDocumentDTO dto, Connection conn) throws SQLException {
+        // NAME|DOCUMENT_TYPE|CLAIM_NUMBER|POLICY_NUMBER|DOCUMENT_SUBTYPE|AUTHOR|DOCUMENT_DESCRIPTION|STATUS|EXTERNALID|ID|CLAIMID
+        try (PreparedStatement pstmt = conn.prepareStatement(updateMergeQuery)) {
+            // Set query timeout to prevent infinite blocking
+            pstmt.setQueryTimeout(queryTimeoutSeconds);
+            
+            pstmt.setString(1, dto.getDocumentTitle());
+            pstmt.setString(2, dto.getDocumentType());
+            pstmt.setString(3, dto.getDocumentSubtype());
+            //pstmt.setLong(4, Long.parseLong(dto.getClaimID()));
+            pstmt.setString(4, dto.getClaimNumber());
+            pstmt.setString(5, dto.getPolicyNumber());
+            pstmt.setString(6, dto.getAuthor());
+            pstmt.setString(7, dto.getDocumentDescription());
+            pstmt.setString(8, dto.getClaimType());
+            pstmt.setString(9, dto.getGwDocumentID());
+            pstmt.setBoolean(10, true);
+            pstmt.setString(11, dto.getCsvFileName());
+            pstmt.setTimestamp(12, Timestamp.valueOf(LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS)));
+            pstmt.setString(13, dto.getExternalID());
+
+            if (logger.isDebugEnabled()) {
+                logger.debug("Executing UPDATE for externalID={}", dto.getExternalID());
+            }
+            int rowsUpdated = pstmt.executeUpdate();
+
+            if (logger.isDebugEnabled()) {
+                logger.debug("UPDATE SQL executed: {} rows affected for externalID={}", rowsUpdated, dto.getExternalID());
+            }
+
+            return rowsUpdated;
+        }
+    }
+    
+    /**
+     * Update multiple database records using JDBC batch processing
+     * Significantly faster than individual UPDATEs for large datasets
+     * 
+     * @param dtoList List of DTOs to update
+     * @param conn Database connection
+     * @param batchSize Maximum batch size
+     * @return boolean array indicating success (true) or failure (false) for each record
+     */
+    private boolean[] updateDatabaseRecordsBatch(List<ClaimCenterDocumentDTO> dtoList, Connection conn, int batchSize) 
+            throws SQLException {
+        
+        if (dtoList == null || dtoList.isEmpty()) {
+            return new boolean[0];
+        }
+        
+        boolean[] results = new boolean[dtoList.size()];
+        int currentIndex = 0;
+        int batchStartIndex = 0;
+        
+        try (PreparedStatement pstmt = conn.prepareStatement(updateMergeQuery)) {
+            // CRITICAL: Set query timeout to prevent infinite blocking
+            // This ensures executeBatch() will timeout instead of hanging forever
+            pstmt.setQueryTimeout(queryTimeoutSeconds);
+            logger.debug("PreparedStatement query timeout set to {} seconds", queryTimeoutSeconds);
+            
+            int batchCount = 0;
+            
+            for (ClaimCenterDocumentDTO dto : dtoList) {
+                // Check for thread interruption to allow graceful shutdown
+                if (Thread.currentThread().isInterrupted()) {
+                    logger.warn("Thread interrupted during batch preparation - aborting batch");
+                    throw new SQLException("Batch processing interrupted by shutdown");
+                }
+                
+                pstmt.setString(1, dto.getDocumentTitle());
+                pstmt.setString(2, dto.getDocumentType());
+                pstmt.setString(3, dto.getDocumentSubtype());
+                //pstmt.setLong(4, Long.parseLong(dto.getClaimID()));
+                pstmt.setString(4, dto.getClaimNumber());
+                pstmt.setString(5, dto.getPolicyNumber());
+                pstmt.setString(6, dto.getAuthor());
+                pstmt.setString(7, dto.getDocumentDescription());
+                pstmt.setString(8, dto.getClaimType());
+                pstmt.setString(9, dto.getGwDocumentID());
+                pstmt.setBoolean(10, true);
+                pstmt.setString(11, dto.getCsvFileName());
+                pstmt.setTimestamp(12, Timestamp.valueOf(LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS)));
+                pstmt.setString(13, dto.getExternalID());
+                
+                pstmt.addBatch();
+                batchCount++;
+                currentIndex++;
+                
+                // Execute batch when reaching batch size
+                if (batchCount >= batchSize) {
+                    // Check for interruption before executing batch
+                    if (Thread.currentThread().isInterrupted()) {
+                        logger.warn("Thread interrupted before batch execution - aborting");
+                        throw new SQLException("Batch execution interrupted by shutdown");
+                    }
+                    
+                    int[] updateCounts = pstmt.executeBatch();
+                    // Map update counts to results array
+                    for (int i = 0; i < updateCounts.length; i++) {
+                        results[batchStartIndex + i] = (updateCounts[i] > 0);
+                    }
+                    batchStartIndex = currentIndex;
+                    batchCount = 0;
+                    
+                    logger.debug("Executed batch of {} updates", batchSize);
+                }
+            }
+            
+            // Execute remaining batch
+            if (batchCount > 0) {
+                // Check for interruption before executing final batch
+                if (Thread.currentThread().isInterrupted()) {
+                    logger.warn("Thread interrupted before final batch execution - aborting");
+                    throw new SQLException("Final batch execution interrupted by shutdown");
+                }
+                
+                int[] updateCounts = pstmt.executeBatch();
+                // Map update counts to results array
+                for (int i = 0; i < updateCounts.length; i++) {
+                    results[batchStartIndex + i] = (updateCounts[i] > 0);
+                }
+                
+                logger.debug("Executed final batch of {} updates", batchCount);
+            }
+            
+            int successCount = countSuccessfulUpdates(results);
+            logger.info("Batch UPDATE completed: {} records updated from {} DTOs", successCount, dtoList.size());
+            
+            return results;
+        }
+    }
+    
+    /**
+     * Count successful updates from batch execution results
+     */
+    private int countSuccessfulUpdates(boolean[] results) {
+        int count = 0;
+        for (boolean success : results) {
+            if (success) {
+                count++;
+            }
+        }
+        return count;
+    }
+    
+    /**
+     * Process a batch with connection retry logic
+     * If connection fails, attempts to get a new connection and retry the batch
+     * 
+     * @param dtoList List of DTOs to process
+     * @param linesList Corresponding CSV lines
+     * @param connHolder Connection holder array (allows connection replacement)
+     * @param batchSize Batch size for processing
+     * @param successRows List to accumulate successful rows
+     * @param failedRows List to accumulate failed rows
+     * @param result Processing result to update
+     */
+    private void processBatchWithRetry(List<ClaimCenterDocumentDTO> dtoList,
+                                       List<String> linesList,
+                                       Connection[] connHolder,
+                                       int batchSize,
+                                       List<String> successRows,
+                                       List<String> failedRows,
+                                       ProcessingResult result) throws SQLException {
+        
+        if (dtoList.isEmpty()) {
+            return;
+        }
+        
+        int retryCount = 0;
+        SQLException lastException = null;
+        
+        while (retryCount < MAX_CONNECTION_RETRIES) {
+            // Check for thread interruption
+            if (Thread.currentThread().isInterrupted()) {
+                logger.warn("Thread interrupted - aborting batch retry");
+                throw new SQLException("Batch processing interrupted by shutdown");
+            }
+            
+            // STEP 1: Validate current connection, get new one if needed
+            if (!isConnectionValid(connHolder[0])) {
+                logger.warn("Connection invalid before batch (attempt {}/{}), acquiring new connection...", 
+                           retryCount + 1, MAX_CONNECTION_RETRIES);
+                
+                // Close old connection safely
+                closeConnectionSafely(connHolder[0]);
+                
+                try {
+                    // Wait before retry to avoid hammering the database
+                    if (retryCount > 0) {
+                        Thread.sleep(CONNECTION_RETRY_DELAY_MS);
+                    }
+                    
+                    connHolder[0] = connectionManager.getConnection();
+                    logger.info("New connection acquired successfully (attempt {}/{})", 
+                               retryCount + 1, MAX_CONNECTION_RETRIES);
+                    
+                } catch (SQLException e) {
+                    logger.error("Failed to acquire new connection (attempt {}/{}): {}", 
+                                retryCount + 1, MAX_CONNECTION_RETRIES, e.getMessage());
+                    lastException = e;
+                    retryCount++;
+                    continue;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new SQLException("Interrupted while waiting for connection retry", e);
+                }
+            }
+            
+            // STEP 2: Attempt batch processing with the valid connection
+            try {
+                processBatchWithFallback(dtoList, linesList, connHolder[0], batchSize,
+                                        successRows, failedRows, result);
+                // Success - exit the retry loop
+                return;
+                
+            } catch (SQLException e) {
+                lastException = e;
+                String sqlState = e.getSQLState();
+                boolean isConnectionError = sqlState != null && 
+                    (sqlState.startsWith("08") || sqlState.equals("HYT00"));
+                
+                if (isConnectionError) {
+                    // Connection error - worth retrying with new connection
+                    logger.warn("Connection error during batch processing (SQLState: {}, attempt {}/{}): {}", 
+                               sqlState, retryCount + 1, MAX_CONNECTION_RETRIES, e.getMessage());
+                    
+                    // Mark connection as invalid for next iteration
+                    closeConnectionSafely(connHolder[0]);
+                    connHolder[0] = null;
+                    
+                    retryCount++;
+                    
+                    if (retryCount < MAX_CONNECTION_RETRIES) {
+                        logger.info("Will retry batch with new connection...");
+                    }
+                } else {
+                    // Non-connection error (e.g., data error) - don't retry, propagate
+                    logger.error("Non-connection SQL error during batch: {}", e.getMessage());
+                    throw e;
+                }
+            }
+        }
+        
+        // All retries exhausted
+        logger.error("All {} connection retry attempts exhausted - marking batch as failed", MAX_CONNECTION_RETRIES);
+        
+        // Mark all rows in this batch as failed
+        for (int i = 0; i < dtoList.size(); i++) {
+            String line = linesList.get(i);
+            String errorMsg = "Connection retry exhausted: " + 
+                (lastException != null ? lastException.getMessage().replace("|", ";") : "Unknown error");
+            failedRows.add(line + "|" + errorMsg);
+            result.failureCount++;
+        }
+        
+        // Throw the last exception to signal the error upstream
+        throw new SQLException("All connection retry attempts exhausted", lastException);
+    }
+    
+    /**
+     * Safely close a connection without throwing exceptions
+     */
+    private void closeConnectionSafely(Connection conn) {
+        if (conn != null) {
+            try {
+                if (!conn.isClosed()) {
+                    conn.close();
+                    logger.debug("Connection closed safely");
+                }
+            } catch (SQLException e) {
+                logger.warn("Error closing connection (ignored): {}", e.getMessage());
+            }
+        }
+    }
+    
+    /**
+     * Process a batch of DTOs with fallback to individual processing on failure
+     */
+    private void processBatchWithFallback(List<ClaimCenterDocumentDTO> dtoList,
+                                          List<String> linesList,
+                                          Connection conn,
+                                          int batchSize,
+                                          List<String> successRows,
+                                          List<String> failedRows,
+                                          ProcessingResult result) throws SQLException {
+        
+        if (dtoList.isEmpty()) {
+            return;
+        }
+        
+        // Validate connection before batch processing
+        if (!isConnectionValid(conn)) {
+            logger.error("Connection is invalid before batch processing - marking all rows as failed");
+            for (int i = 0; i < dtoList.size(); i++) {
+                ClaimCenterDocumentDTO dto = dtoList.get(i);
+                String line = linesList.get(i);
+                String errorMsg = "Database connection lost before batch execution";
+                failedRows.add(line + "|" + errorMsg);
+                result.failureCount++;
+            }
+            throw new SQLException("Database connection is not valid - cannot proceed with batch processing");
+        }
+        
+        try {
+            // Attempt batch UPDATE - returns success/failure status for each record
+            boolean[] updateResults = updateDatabaseRecordsBatch(dtoList, conn, batchSize);
+            
+            // Commit after batch
+            conn.commit();
+            
+            // Categorize rows based on individual update results
+            int successCount = 0;
+            int failCount = 0;
+            
+            for (int i = 0; i < updateResults.length; i++) {
+                String line = linesList.get(i);
+                ClaimCenterDocumentDTO dto = dtoList.get(i);
+                
+                if (updateResults[i]) {
+                    // Record was successfully updated in database
+                    successRows.add(line);
+                    successCount++;
+                } else {
+                    // Record was not found in database (externalID not matched)
+                    String errorMsg = "No record found with externalID=" + dto.getExternalID();
+                    failedRows.add(line + "|" + errorMsg);
+                    failCount++;
+                    logger.warn("No record found for externalID={}", dto.getExternalID());
+                }
+            }
+            
+            result.successCount += successCount;
+            result.failureCount += failCount;
+            
+            logger.debug("Batch committed: {} success, {} failed", successCount, failCount);
+            
+            if (failCount > 0) {
+                logger.warn("Batch UPDATE partial match: {}/{} records updated (some externalIDs not found in DB)", 
+                           successCount, dtoList.size());
+            } else {
+                logger.debug("Batch UPDATE successful: {}/{} records", successCount, dtoList.size());
+            }
+            
+        } catch (SQLException e) {
+            // Check if this is a connection-related failure
+            String sqlState = e.getSQLState();
+            boolean isConnectionError = sqlState != null && (sqlState.startsWith("08") || sqlState.equals("HYT00"));
+            
+            if (isConnectionError || !isConnectionValid(conn)) {
+                // Connection is broken - cannot recover, mark all as failed
+                logger.error("Connection lost during batch processing (SQLState: {}) - marking all {} rows as failed", 
+                            sqlState, dtoList.size());
+                for (int i = 0; i < dtoList.size(); i++) {
+                    ClaimCenterDocumentDTO dto = dtoList.get(i);
+                    String line = linesList.get(i);
+                    String errorMsg = "Database connection lost: " + e.getMessage().replace("|", ";");
+                    failedRows.add(line + "|" + errorMsg);
+                    result.failureCount++;
+                }
+                throw new SQLException("Connection lost during batch processing - cannot recover", e);
+            }
+            
+            // Non-connection error - try rollback and individual processing
+            logger.warn("Batch UPDATE failed, rolling back and falling back to individual processing: {}", e.getMessage());
+            try {
+                conn.rollback();
+            } catch (SQLException rollbackEx) {
+                logger.error("Failed to rollback after batch failure", rollbackEx);
+            }
+            processBatchIndividually(dtoList, linesList, conn, successRows, failedRows, result);
+            // Commit individual updates
+            conn.commit();
+        }
+    }
+    
+    /**
+     * Check if database connection is still valid
+     */
+    private boolean isConnectionValid(Connection conn) {
+        if (conn == null) {
+            return false;
+        }
+        try {
+            // Check if connection is closed
+            if (conn.isClosed()) {
+                return false;
+            }
+            // Validate with a timeout of 5 seconds
+            return conn.isValid(5);
+        } catch (SQLException e) {
+            logger.warn("Connection validation failed: {}", e.getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * Process DTOs individually (fallback method)
+     */
+    private void processBatchIndividually(List<ClaimCenterDocumentDTO> dtoList,
+                                         List<String> linesList,
+                                         Connection conn,
+                                         List<String> successRows,
+                                         List<String> failedRows,
+                                         ProcessingResult result) {
+        
+        for (int i = 0; i < dtoList.size(); i++) {
+            // Check for thread interruption to allow graceful shutdown
+            if (Thread.currentThread().isInterrupted()) {
+                logger.warn("Thread interrupted during individual processing at item {} of {} - marking remaining as failed", 
+                           i + 1, dtoList.size());
+                // Mark remaining items as failed due to interruption
+                for (int j = i; j < dtoList.size(); j++) {
+                    String line = linesList.get(j);
+                    String errorMsg = "Processing interrupted by shutdown";
+                    failedRows.add(line + "|" + errorMsg);
+                    result.failureCount++;
+                }
+                break;
+            }
+            
+            ClaimCenterDocumentDTO dto = dtoList.get(i);
+            String line = linesList.get(i);
+            
+            try {
+                int rowsUpdated = updateDatabaseRecord(dto, conn);
+                
+                if (rowsUpdated > 0) {
+                    result.successCount++;
+                    successRows.add(line);
+                } else {
+                    result.failureCount++;
+                    String errorMsg = "No record found with externalID=" + dto.getExternalID();
+                    failedRows.add(line + "|" + errorMsg);
+                    logger.warn("No record found for externalID={}", dto.getExternalID());
+                }
+                
+            } catch (Exception e) {
+                result.failureCount++;
+                String errorMsg = e.getMessage().replace("\"", "'").replace("|", ";");
+                failedRows.add(line + "|" + errorMsg);
+                logger.error("Failed to update externalID={}: {}", dto.getExternalID(), e.getMessage());
+            }
+        }
+    }
+
+    
+    /**
+     * Write success rows to file
+     */
+    private void writeSuccessFile(Path successFile, String headerLine, List<String> successRows) throws IOException {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(successFile.toFile()))) {
+            // Write header
+            if (headerLine != null) {
+                writer.write(headerLine);
+                writer.newLine();
+            }
+            
+            // Write success rows
+            for (String row : successRows) {
+                writer.write(row);
+                writer.newLine();
+            }
+        }
+    }
+    
+    /**
+     * Write failed rows to file with error messages
+     */
+    private void writeFailedFile(Path failedFile, String headerLine, List<String> failedRows) throws IOException {
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(failedFile.toFile()))) {
+            // Write header with error_message column
+            if (headerLine != null) {
+                writer.write(headerLine + "|error_message");
+                writer.newLine();
+            }
+            
+            // Write failed rows (already have error message appended)
+            for (String row : failedRows) {
+                writer.write(row);
+                writer.newLine();
+            }
+        }
+    }
+    
+    /**
+     * Handle file lifecycle after processing
+     */
+    private void handleFileLifecycle(Path inprogressFile, ProcessingResult result) throws IOException {
+        String csvFileName = inprogressFile.getFileName().toString();
+        String archiveProp = config.getProperty("app.archive.after.processing");
+        boolean archiveAfterProcessing = archiveProp == null ? true : Boolean.parseBoolean(archiveProp);
+        
+        if (archiveAfterProcessing) {
+            // Move to Archive folder
+            Path archiveDir = Paths.get(basePath, Constants.ARCHIVE_FOLDER);
+            Path archiveFile = archiveDir.resolve(csvFileName);
+            
+            Files.move(inprogressFile, archiveFile, StandardCopyOption.REPLACE_EXISTING);
+            logger.info("Moved processed file to Archive: {}", archiveFile);
+        } else {
+            // Delete the file
+            Files.delete(inprogressFile);
+            logger.info("Deleted processed file from Inprogress: {}", csvFileName);
+        }
+    }
+    
+    /**
+     * Create error log file for critical failures
+     */
+    private void createErrorLogFile(Path directory, String csvFileName, String errorMessage) {
+        try {
+            String baseFileName = csvFileName.replaceAll("(?i)\\.csv$", "");
+            Path errorLogFile = directory.resolve(baseFileName + "_error.log");
+            
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(errorLogFile.toFile()))) {
+                writer.write("Error processing file: " + csvFileName);
+                writer.newLine();
+                writer.write("Timestamp: " + java.time.LocalDateTime.now());
+                writer.newLine();
+                writer.write("Error: " + errorMessage);
+                writer.newLine();
+            }
+            
+            logger.info("Created error log file: {}", errorLogFile);
+        } catch (IOException e) {
+            logger.error("Failed to create error log file for {}", csvFileName, e);
+        }
+    }
+    
+    /**
+     * Safe trim utility
+     */
+    private String safeTrim(String value) {
+        if (value == null) return "";
+        String trimmed = value.trim();
+        // Handle "null" string as empty
+        if (trimmed.equalsIgnoreCase("null")) return "";
+        return trimmed;
+    }
+    
+    /**
+     * Safe get cell from array
+     */
+    private String getCell(String[] cells, Integer index) {
+        if (index == null || index < 0 || index >= cells.length) {
+            return "";
+        }
+        return cells[index];
+    }
+}
+
