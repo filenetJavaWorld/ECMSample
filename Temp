@@ -1,1 +1,3142 @@
-temp
+-- ============================================================================
+-- CCDataMergeUtility - CC_Extract_Staging Table Creation Script
+-- Purpose: Create staging table to hold CC Extract data for document migration
+-- 
+-- Data Flow:
+--   Step 1: DataTransformUtility loads content into Wawa_Doc_Migration_Transit_Data
+--   Step 2: CCDataMergeUtility loads CC Extract CSV into this table
+--   Step 3: SP syncs claimID from ClaimInfo (join on claimNumber)
+--   Step 4: SP syncs gwDocumentID from guidewireIDMapping (join on externalID)
+--   Step 5: SP syncs content columns from Wawa_Doc_Migration_Transit_Data (join on externalID)
+--   Step 6: CCDataIndexAndPackagingUtility creates batch packages
+--   Step 7: WawaDocumentMigrationUtility injects documents
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- Drop existing staging table if exists
+IF OBJECT_ID('dbo.CC_Extract_Staging', 'U') IS NOT NULL
+    DROP TABLE [dbo].[CC_Extract_Staging];
+GO
+
+-- ============================================================================
+-- Create CC_Extract_Staging Table
+-- ============================================================================
+CREATE TABLE [dbo].[CC_Extract_Staging]
+(
+    -- Primary Key
+    [UniqueID]                    BIGINT IDENTITY(1,1) NOT NULL
+        CONSTRAINT [PK_CC_Extract_Staging] PRIMARY KEY CLUSTERED,
+
+    -- Document metadata (from CC Extract CSV - Step 2)
+    [Name]                        VARCHAR(500)  NULL,
+    [documentType]                VARCHAR(50)   NULL,
+    [claimNumber]                 VARCHAR(20)   NOT NULL,
+    [policyNumber]                VARCHAR(50)   NULL,
+    [documentSubtype]             VARCHAR(50)   NULL,
+    [author]                      VARCHAR(50)   NULL,
+    [documentDescription]         VARCHAR(500)  NULL,
+    [externalID]                  VARCHAR(100)  NOT NULL,
+
+    -- Composite key: gwDocumentID~~~externalID (3 tilde separator)
+    -- Used for joining/matching across systems
+    [gwDocExternalID]             VARCHAR(200)  NOT NULL,
+
+    -- Synced from ClaimInfo table (Step 3 SP)
+    [claimID]                     BIGINT        NULL,
+
+    -- Synced from guidewireIDMapping table (Step 4 SP)
+    [gwDocumentID]                VARCHAR(50)   NULL,
+
+    -- Document handling defaults
+    [doNotCreateActivity]         BIT           NOT NULL
+        CONSTRAINT [DF_CC_Extract_Staging_doNotCreateActivity] DEFAULT (1),
+
+    [inputMethod]                 VARCHAR(50)   NULL
+        CONSTRAINT [DF_CC_Extract_Staging_inputMethod] DEFAULT ('WawanesaMigration'),
+
+    -- Content metadata (synced from Wawa_Doc_Migration_Transit_Data - Step 5 SP)
+    [mimeType]                    VARCHAR(100)  NULL,
+    [OrigDateCreated]             VARCHAR(100)  NULL,
+    [sensitive]                   BIT           NOT NULL
+        CONSTRAINT [DF_CC_Extract_Staging_sensitive] DEFAULT (0),
+    [contentFilePath]             VARCHAR(500)  NULL,
+    [contentRetrievalName]        VARCHAR(500)  NULL,
+    [contentType]                 VARCHAR(100)  NULL,
+
+    -- File identification (from CC Extract CSV or derived)
+    [file_id]                     VARCHAR(50)   NULL,
+    [file_creation_year]          VARCHAR(4)    NULL,
+
+    -- Batch indexing (populated by CCDataIndexAndPackagingUtility - Step 6)
+    [batchDocCount]               INT           NULL,
+    [batchID]                     VARCHAR(50)   NULL,
+    [jobID]                       VARCHAR(50)   NULL,
+    [setDocCount]                 INT           NULL,
+    [setID]                       INT           NULL,
+    [SetDocIndex]                 INT           NULL,
+
+    -- Processing status flags
+    [isDataMerged]                BIT           NOT NULL
+        CONSTRAINT [DF_CC_Extract_Staging_isDataMerged] DEFAULT (0),
+    [DataMergedMessage]           VARCHAR(500)  NULL,
+
+    [isIndexed]                   BIT           NOT NULL
+        CONSTRAINT [DF_CC_Extract_Staging_isIndexed] DEFAULT (0),
+
+    [isProcessed]                 BIT           NOT NULL
+        CONSTRAINT [DF_CC_Extract_Staging_isProcessed] DEFAULT (0),
+    [DateProcessed]               DATETIME2(3)  NULL,
+
+    -- File tracking (set by CCDataMergeUtility - Step 2)
+    [CC_Extract_file_loaded_date] DATETIME2(3)  NULL,
+    [CC_Extract_file_Name]        VARCHAR(200)  NULL,
+
+    -- Final output (set after document injection - Step 7)
+    [FileNetGUID]                 VARCHAR(50)   NULL
+);
+GO
+
+PRINT 'Table [CC_Extract_Staging] created successfully.';
+GO
+
+-- ============================================================================
+-- Indexes for Stored Procedure Joins (Steps 3, 4, 5)
+-- ============================================================================
+
+-- Index on claimNumber for SP Step 3 (ClaimInfo sync)
+CREATE NONCLUSTERED INDEX [IX_CC_Extract_Staging_claimNumber]
+ON [dbo].[CC_Extract_Staging] ([claimNumber]);
+GO
+
+-- Index on externalID for SP Steps 4 & 5 (guidewireIDMapping & content sync)
+CREATE NONCLUSTERED INDEX [IX_CC_Extract_Staging_externalID]
+ON [dbo].[CC_Extract_Staging] ([externalID]);
+GO
+
+-- Index on gwDocExternalID for composite key lookups (gwDocumentID~~~externalID)
+CREATE NONCLUSTERED INDEX [IX_CC_Extract_Staging_gwDocExternalID]
+ON [dbo].[CC_Extract_Staging] ([gwDocExternalID]);
+GO
+
+-- Index on claimID for CCDataIndexAndPackagingUtility filter
+CREATE NONCLUSTERED INDEX [IX_CC_Extract_Staging_claimID]
+ON [dbo].[CC_Extract_Staging] ([claimID]);
+GO
+
+-- ============================================================================
+-- Indexes for File-based Operations
+-- ============================================================================
+
+-- Index on CC_Extract_file_Name for file-based queries and DELETE operations
+CREATE NONCLUSTERED INDEX [IX_CC_Extract_Staging_CC_Extract_file_Name]
+ON [dbo].[CC_Extract_Staging] ([CC_Extract_file_Name]);
+GO
+
+-- Index on CC_Extract_file_loaded_date for date-based reporting
+CREATE NONCLUSTERED INDEX [IX_CC_Extract_Staging_CC_Extract_file_loaded_date]
+ON [dbo].[CC_Extract_Staging] ([CC_Extract_file_loaded_date]);
+GO
+
+-- ============================================================================
+-- Indexes for Batch Processing (CCDataIndexAndPackagingUtility)
+-- ============================================================================
+
+-- Index on batchID for batch-based queries
+CREATE NONCLUSTERED INDEX [IX_CC_Extract_Staging_batchID]
+ON [dbo].[CC_Extract_Staging] ([batchID]);
+GO
+
+-- ============================================================================
+-- Indexes for Processing Status Filtering
+-- ============================================================================
+
+-- Index on isDataMerged for filtering merged/unmerged records
+CREATE NONCLUSTERED INDEX [IX_CC_Extract_Staging_isDataMerged]
+ON [dbo].[CC_Extract_Staging] ([isDataMerged]);
+GO
+
+-- Index on isIndexed for filtering indexed/unindexed records
+CREATE NONCLUSTERED INDEX [IX_CC_Extract_Staging_isIndexed]
+ON [dbo].[CC_Extract_Staging] ([isIndexed]);
+GO
+
+-- Index on isProcessed for filtering processed/unprocessed records
+CREATE NONCLUSTERED INDEX [IX_CC_Extract_Staging_isProcessed]
+ON [dbo].[CC_Extract_Staging] ([isProcessed]);
+GO
+
+-- ============================================================================
+-- Composite Index for CCDataIndexAndPackagingUtility Filter Condition
+-- Optimizes: WHERE claimID IS NOT NULL AND gwDocumentID IS NOT NULL 
+--            AND isDataMerged = 1 AND contentFilePath IS NOT NULL
+-- ============================================================================
+
+CREATE NONCLUSTERED INDEX [IX_CC_Extract_Staging_IndexingFilter]
+ON [dbo].[CC_Extract_Staging] ([isDataMerged], [claimID], [gwDocumentID], [contentFilePath])
+INCLUDE ([isIndexed], [CC_Extract_file_Name]);
+GO
+
+PRINT 'All indexes created successfully.';
+GO
+
+-- ============================================================================
+-- Summary of Indexes (11 total)
+-- ============================================================================
+-- 1.  IX_CC_Extract_Staging_claimNumber           - SP Step 3 join
+-- 2.  IX_CC_Extract_Staging_externalID            - SP Steps 4 & 5 join
+-- 3.  IX_CC_Extract_Staging_gwDocExternalID       - Composite key lookups
+-- 4.  IX_CC_Extract_Staging_claimID               - Indexing utility filter
+-- 5.  IX_CC_Extract_Staging_CC_Extract_file_Name  - File operations
+-- 6.  IX_CC_Extract_Staging_CC_Extract_file_loaded_date - Date reporting
+-- 7.  IX_CC_Extract_Staging_batchID               - Batch queries
+-- 8.  IX_CC_Extract_Staging_isDataMerged          - Status filtering
+-- 9.  IX_CC_Extract_Staging_isIndexed             - Status filtering
+-- 10. IX_CC_Extract_Staging_isProcessed           - Status filtering
+-- 11. IX_CC_Extract_Staging_IndexingFilter        - Composite for indexing tool
+-- ============================================================================
+
+
+
+
+==================================************************=================================
+
+
+
+
+-- ============================================================================
+-- CCDataMergeUtility - Step 5: Sync Content Data Stored Procedure
+-- Purpose: Sync content-specific columns from Wawa_Doc_Migration_Transit_Data 
+--          to CC_Extract_Staging using externalID as join key
+-- 
+-- Data Flow:
+--   Step 2: CCDataMergeUtility loads CC Extract CSV into CC_Extract_Staging
+--   Step 3: SP syncs claimID from ClaimInfo (join on claimNumber)
+--   Step 4: SP syncs gwDocumentID from guidewireIDMapping (join on externalID)
+--   Step 5: THIS SP - syncs content columns from Wawa_Doc_Migration_Transit_Data
+--   Step 6: CCDataIndexAndPackagingUtility creates batch packages
+--   Step 7: WawaDocumentMigrationUtility injects documents
+-- 
+-- Columns Synced:
+--   - doNotCreateActivity
+--   - inputMethod
+--   - mimeType
+--   - OrigDateCreated
+--   - sensitive
+--   - contentFilePath
+--   - contentRetrievalName
+--   - contentType
+--   - file_id
+--   - file_creation_year
+-- 
+-- After successful sync: isDataMerged = 1
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- Drop existing procedure if exists
+IF OBJECT_ID('dbo.sp_SyncContentDataToStaging', 'P') IS NOT NULL
+    DROP PROCEDURE [dbo].[sp_SyncContentDataToStaging];
+GO
+
+CREATE PROCEDURE [dbo].[sp_SyncContentDataToStaging]
+    @CC_Extract_file_Name VARCHAR(200) = NULL,  -- Optional: filter by specific file (NULL = all unsynced)
+    @RowsProcessed INT OUTPUT,
+    @RowsSynced INT OUTPUT,
+    @RowsNotMatched INT OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @StartTime DATETIME2 = SYSDATETIME();
+    DECLARE @EndTime DATETIME2;
+    DECLARE @ErrorMessage NVARCHAR(MAX);
+    
+    -- Initialize output parameters
+    SET @RowsProcessed = 0;
+    SET @RowsSynced = 0;
+    SET @RowsNotMatched = 0;
+    
+    BEGIN TRY
+        PRINT '============================================================';
+        PRINT 'STEP 5: SYNC CONTENT DATA - STARTED';
+        PRINT 'Start Time: ' + CONVERT(VARCHAR, @StartTime, 121);
+        IF @CC_Extract_file_Name IS NOT NULL
+            PRINT 'Filter: CC_Extract_file_Name = ' + @CC_Extract_file_Name;
+        ELSE
+            PRINT 'Filter: All unsynced records (isDataMerged = 0)';
+        PRINT '============================================================';
+        
+        -- Count rows to process
+        SELECT @RowsProcessed = COUNT(*)
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE stg.[isDataMerged] = 0
+          AND (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name);
+        
+        PRINT '[INFO] Rows to process: ' + CAST(@RowsProcessed AS VARCHAR);
+        
+        IF @RowsProcessed = 0
+        BEGIN
+            PRINT '[WARNING] No unsynced rows found. Exiting.';
+            RETURN;
+        END
+        
+        BEGIN TRANSACTION;
+        
+        -- ================================================================
+        -- STEP 1: Update CC_Extract_Staging with content data from 
+        --         Wawa_Doc_Migration_Transit_Data where externalID matches
+        -- ================================================================
+        UPDATE stg
+        SET 
+            -- Content-specific columns
+            stg.[doNotCreateActivity]   = ISNULL(src.[doNotCreateActivity], stg.[doNotCreateActivity]),
+            stg.[inputMethod]           = ISNULL(src.[inputMethod], stg.[inputMethod]),
+            stg.[mimeType]              = src.[mimeType],
+            stg.[OrigDateCreated]       = src.[OrigDateCreated],
+            stg.[sensitive]             = ISNULL(src.[sensitive], stg.[sensitive]),
+            stg.[contentFilePath]       = src.[contentFilePath],
+            stg.[contentRetrievalName]  = src.[contentRetrievalName],
+            stg.[contentType]           = src.[contentType],
+            stg.[file_id]               = src.[file_id],
+            stg.[file_creation_year]    = src.[file_creation_year],
+            
+            -- Mark as synced
+            stg.[isDataMerged]          = 1,
+            stg.[DataMergedMessage]     = 'Content synced from Wawa_Doc_Migration_Transit_Data at ' + CONVERT(VARCHAR, SYSDATETIME(), 121)
+            
+        FROM [dbo].[CC_Extract_Staging] stg
+        INNER JOIN [dbo].[Wawa_Doc_Migration_Transit_Data] src
+            ON stg.[externalID] = src.[externalID]
+        WHERE stg.[isDataMerged] = 0
+          AND (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name);
+        
+        SET @RowsSynced = @@ROWCOUNT;
+        
+        PRINT '[STEP 1] Synced ' + CAST(@RowsSynced AS VARCHAR) + ' rows with content data.';
+        
+        -- ================================================================
+        -- STEP 2: Mark rows that had no matching externalID
+        -- ================================================================
+        UPDATE stg
+        SET 
+            stg.[DataMergedMessage] = 'No matching externalID found in Wawa_Doc_Migration_Transit_Data'
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE stg.[isDataMerged] = 0
+          AND (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name)
+          AND NOT EXISTS (
+              SELECT 1 
+              FROM [dbo].[Wawa_Doc_Migration_Transit_Data] src
+              WHERE src.[externalID] = stg.[externalID]
+          );
+        
+        SET @RowsNotMatched = @@ROWCOUNT;
+        
+        IF @RowsNotMatched > 0
+            PRINT '[STEP 2] ' + CAST(@RowsNotMatched AS VARCHAR) + ' rows had no matching externalID (NOT synced).';
+        
+        COMMIT TRANSACTION;
+        
+        SET @EndTime = SYSDATETIME();
+        
+        -- ================================================================
+        -- FINAL SUMMARY
+        -- ================================================================
+        PRINT '';
+        PRINT '============================================================';
+        PRINT 'STEP 5: SYNC CONTENT DATA - COMPLETED';
+        PRINT '============================================================';
+        PRINT 'Start Time      : ' + CONVERT(VARCHAR, @StartTime, 121);
+        PRINT 'End Time        : ' + CONVERT(VARCHAR, @EndTime, 121);
+        PRINT 'Duration        : ' + CAST(DATEDIFF(SECOND, @StartTime, @EndTime) AS VARCHAR) + ' seconds';
+        PRINT '------------------------------------------------------------';
+        PRINT 'Rows Processed  : ' + CAST(@RowsProcessed AS VARCHAR);
+        PRINT 'Rows Synced     : ' + CAST(@RowsSynced AS VARCHAR) + ' (isDataMerged = 1)';
+        PRINT 'Rows Not Matched: ' + CAST(@RowsNotMatched AS VARCHAR) + ' (externalID not found)';
+        PRINT '============================================================';
+        
+        -- Show sample of synced rows
+        IF @RowsSynced > 0
+        BEGIN
+            PRINT '';
+            PRINT '--- SAMPLE SYNCED ROWS (first 5) ---';
+            SELECT TOP 5
+                stg.[UniqueID],
+                stg.[externalID],
+                stg.[claimNumber],
+                stg.[mimeType],
+                stg.[contentFilePath],
+                stg.[isDataMerged],
+                stg.[DataMergedMessage]
+            FROM [dbo].[CC_Extract_Staging] stg
+            WHERE stg.[isDataMerged] = 1
+              AND (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name)
+            ORDER BY stg.[UniqueID] DESC;
+        END
+        
+        -- Show not matched rows if any
+        IF @RowsNotMatched > 0
+        BEGIN
+            PRINT '';
+            PRINT '--- NOT MATCHED ROWS (externalID not found) ---';
+            SELECT 
+                stg.[UniqueID],
+                stg.[externalID],
+                stg.[claimNumber],
+                stg.[Name],
+                stg.[DataMergedMessage]
+            FROM [dbo].[CC_Extract_Staging] stg
+            WHERE stg.[isDataMerged] = 0
+              AND stg.[DataMergedMessage] LIKE '%No matching externalID%'
+              AND (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name);
+        END
+        
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0
+            ROLLBACK TRANSACTION;
+        
+        SET @ErrorMessage = ERROR_MESSAGE();
+        
+        PRINT '';
+        PRINT '============================================================';
+        PRINT 'STEP 5: SYNC CONTENT DATA - FAILED';
+        PRINT 'Error: ' + @ErrorMessage;
+        PRINT '============================================================';
+        
+        -- Re-throw the error
+        THROW;
+    END CATCH
+END;
+GO
+
+PRINT '';
+PRINT '============================================================';
+PRINT 'Stored procedure [sp_SyncContentDataToStaging] created successfully.';
+PRINT '';
+PRINT 'USAGE:';
+PRINT '  -- Sync all unsynced records:';
+PRINT '  DECLARE @Processed INT, @Synced INT, @NotMatched INT;';
+PRINT '  EXEC [dbo].[sp_SyncContentDataToStaging]';
+PRINT '      @CC_Extract_file_Name = NULL,';
+PRINT '      @RowsProcessed = @Processed OUTPUT,';
+PRINT '      @RowsSynced = @Synced OUTPUT,';
+PRINT '      @RowsNotMatched = @NotMatched OUTPUT;';
+PRINT '';
+PRINT '  -- Sync specific file only:';
+PRINT '  EXEC [dbo].[sp_SyncContentDataToStaging]';
+PRINT '      @CC_Extract_file_Name = ''conv_claims_extract_12192024.csv'',';
+PRINT '      @RowsProcessed = @Processed OUTPUT,';
+PRINT '      @RowsSynced = @Synced OUTPUT,';
+PRINT '      @RowsNotMatched = @NotMatched OUTPUT;';
+PRINT '============================================================';
+GO
+
+
+
+
+
+================================***********************************=============================
+
+
+
+
+-- ============================================================================
+-- CCDataMergeUtility - Step 3: Sync ClaimID Stored Procedure
+-- Purpose: Sync claimID from ClaimInfo table to CC_Extract_Staging 
+--          using claimNumber as join key
+-- 
+-- Data Flow:
+--   Step 2: CCDataMergeUtility loads CC Extract CSV into CC_Extract_Staging
+--   Step 3: THIS SP - syncs claimID from ClaimInfo (join on claimNumber)
+--   Step 4: SP syncs gwDocumentID from guidewireIDMapping (join on externalID)
+--   Step 5: SP syncs content columns from Wawa_Doc_Migration_Transit_Data
+--   Step 6: CCDataIndexAndPackagingUtility creates batch packages
+--   Step 7: WawaDocumentMigrationUtility injects documents
+-- 
+-- Source Table: ClaimInfo
+--   - ID (bigint) = claimID
+--   - ClaimNumber (varchar 40) = join key
+-- 
+-- Target Table: CC_Extract_Staging
+--   - claimID (bigint) = populated from ClaimInfo.ID
+--   - claimNumber (varchar 20) = join key
+-- 
+-- Note: This SP runs through ALL records each time it's executed
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- Drop existing procedure if exists
+IF OBJECT_ID('dbo.sp_SyncClaimIDToStaging', 'P') IS NOT NULL
+    DROP PROCEDURE [dbo].[sp_SyncClaimIDToStaging];
+GO
+
+CREATE PROCEDURE [dbo].[sp_SyncClaimIDToStaging]
+    @CC_Extract_file_Name VARCHAR(200) = NULL,  -- Optional: filter by specific file (NULL = all records)
+    @RowsProcessed INT OUTPUT,
+    @RowsSynced INT OUTPUT,
+    @RowsNotMatched INT OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @StartTime DATETIME2 = SYSDATETIME();
+    DECLARE @EndTime DATETIME2;
+    DECLARE @ErrorMessage NVARCHAR(MAX);
+    
+    -- Initialize output parameters
+    SET @RowsProcessed = 0;
+    SET @RowsSynced = 0;
+    SET @RowsNotMatched = 0;
+    
+    BEGIN TRY
+        PRINT '============================================================';
+        PRINT 'STEP 3: SYNC CLAIM ID - STARTED';
+        PRINT 'Start Time: ' + CONVERT(VARCHAR, @StartTime, 121);
+        IF @CC_Extract_file_Name IS NOT NULL
+            PRINT 'Filter: CC_Extract_file_Name = ' + @CC_Extract_file_Name;
+        ELSE
+            PRINT 'Filter: ALL records in CC_Extract_Staging';
+        PRINT '============================================================';
+        
+        -- Count total rows to process
+        SELECT @RowsProcessed = COUNT(*)
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name);
+        
+        PRINT '[INFO] Total rows to process: ' + CAST(@RowsProcessed AS VARCHAR);
+        
+        IF @RowsProcessed = 0
+        BEGIN
+            PRINT '[WARNING] No rows found. Exiting.';
+            RETURN;
+        END
+        
+        BEGIN TRANSACTION;
+        
+        -- ================================================================
+        -- STEP 1: Update CC_Extract_Staging.claimID from ClaimInfo.ID
+        --         where claimNumber matches
+        -- ================================================================
+        UPDATE stg
+        SET 
+            stg.[claimID] = ci.[ID]
+        FROM [dbo].[CC_Extract_Staging] stg
+        INNER JOIN [dbo].[ClaimInfo] ci
+            ON stg.[claimNumber] = ci.[ClaimNumber]
+        WHERE (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name);
+        
+        SET @RowsSynced = @@ROWCOUNT;
+        
+        PRINT '[STEP 1] Synced claimID for ' + CAST(@RowsSynced AS VARCHAR) + ' rows.';
+        
+        -- ================================================================
+        -- STEP 2: Count rows that had no matching claimNumber
+        -- ================================================================
+        SELECT @RowsNotMatched = COUNT(*)
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE stg.[claimID] IS NULL
+          AND (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name)
+          AND NOT EXISTS (
+              SELECT 1 
+              FROM [dbo].[ClaimInfo] ci
+              WHERE ci.[ClaimNumber] = stg.[claimNumber]
+          );
+        
+        IF @RowsNotMatched > 0
+            PRINT '[STEP 2] ' + CAST(@RowsNotMatched AS VARCHAR) + ' rows have no matching claimNumber in ClaimInfo.';
+        
+        COMMIT TRANSACTION;
+        
+        SET @EndTime = SYSDATETIME();
+        
+        -- ================================================================
+        -- FINAL SUMMARY
+        -- ================================================================
+        PRINT '';
+        PRINT '============================================================';
+        PRINT 'STEP 3: SYNC CLAIM ID - COMPLETED';
+        PRINT '============================================================';
+        PRINT 'Start Time      : ' + CONVERT(VARCHAR, @StartTime, 121);
+        PRINT 'End Time        : ' + CONVERT(VARCHAR, @EndTime, 121);
+        PRINT 'Duration        : ' + CAST(DATEDIFF(SECOND, @StartTime, @EndTime) AS VARCHAR) + ' seconds';
+        PRINT '------------------------------------------------------------';
+        PRINT 'Rows Processed  : ' + CAST(@RowsProcessed AS VARCHAR);
+        PRINT 'Rows Synced     : ' + CAST(@RowsSynced AS VARCHAR) + ' (claimID populated)';
+        PRINT 'Rows Not Matched: ' + CAST(@RowsNotMatched AS VARCHAR) + ' (claimNumber not found in ClaimInfo)';
+        PRINT '============================================================';
+        
+        -- Show sample of synced rows
+        IF @RowsSynced > 0
+        BEGIN
+            PRINT '';
+            PRINT '--- SAMPLE SYNCED ROWS (first 5) ---';
+            SELECT TOP 5
+                stg.[UniqueID],
+                stg.[claimNumber],
+                stg.[claimID],
+                stg.[externalID],
+                stg.[Name]
+            FROM [dbo].[CC_Extract_Staging] stg
+            WHERE stg.[claimID] IS NOT NULL
+              AND (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name)
+            ORDER BY stg.[UniqueID] DESC;
+        END
+        
+        -- Show not matched rows if any
+        IF @RowsNotMatched > 0
+        BEGIN
+            PRINT '';
+            PRINT '--- NOT MATCHED ROWS (claimNumber not found in ClaimInfo) ---';
+            SELECT TOP 20
+                stg.[UniqueID],
+                stg.[claimNumber],
+                stg.[externalID],
+                stg.[Name]
+            FROM [dbo].[CC_Extract_Staging] stg
+            WHERE stg.[claimID] IS NULL
+              AND (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name)
+              AND NOT EXISTS (
+                  SELECT 1 
+                  FROM [dbo].[ClaimInfo] ci
+                  WHERE ci.[ClaimNumber] = stg.[claimNumber]
+              )
+            ORDER BY stg.[UniqueID];
+        END
+        
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0
+            ROLLBACK TRANSACTION;
+        
+        SET @ErrorMessage = ERROR_MESSAGE();
+        
+        PRINT '';
+        PRINT '============================================================';
+        PRINT 'STEP 3: SYNC CLAIM ID - FAILED';
+        PRINT 'Error: ' + @ErrorMessage;
+        PRINT '============================================================';
+        
+        -- Re-throw the error
+        THROW;
+    END CATCH
+END;
+GO
+
+PRINT '';
+PRINT '============================================================';
+PRINT 'Stored procedure [sp_SyncClaimIDToStaging] created successfully.';
+PRINT '';
+PRINT 'USAGE:';
+PRINT '  -- Sync ALL records:';
+PRINT '  DECLARE @Processed INT, @Synced INT, @NotMatched INT;';
+PRINT '  EXEC [dbo].[sp_SyncClaimIDToStaging]';
+PRINT '      @CC_Extract_file_Name = NULL,';
+PRINT '      @RowsProcessed = @Processed OUTPUT,';
+PRINT '      @RowsSynced = @Synced OUTPUT,';
+PRINT '      @RowsNotMatched = @NotMatched OUTPUT;';
+PRINT '';
+PRINT '  -- Sync specific file only:';
+PRINT '  EXEC [dbo].[sp_SyncClaimIDToStaging]';
+PRINT '      @CC_Extract_file_Name = ''conv_claims_extract_12192024.csv'',';
+PRINT '      @RowsProcessed = @Processed OUTPUT,';
+PRINT '      @RowsSynced = @Synced OUTPUT,';
+PRINT '      @RowsNotMatched = @NotMatched OUTPUT;';
+PRINT '';
+PRINT 'SOURCE: ClaimInfo.ID -> CC_Extract_Staging.claimID';
+PRINT 'JOIN:   ClaimInfo.ClaimNumber = CC_Extract_Staging.claimNumber';
+PRINT '============================================================';
+GO
+
+
+
+package com.wawanesa.ace.merge.utils;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.wawanesa.ace.merge.configuration.PropertiesConfigLoader;
+import com.wawanesa.ace.merge.connection.ConnectionManager;
+import com.wawanesa.ace.merge.constants.Constants;
+
+/**
+ * Staging utility - Inserts CC Extract CSV data into CC_Extract_Staging table.
+ * 
+ * Data Flow:
+ *   Step 2: This utility loads CC Extract CSV into CC_Extract_Staging table
+ *   Step 3: SP syncs claimID from ClaimInfo (join on claimNumber)
+ *   Step 4: SP syncs gwDocumentID from guidewireIDMapping (join on externalID)
+ *   Step 5: SP syncs content columns from Wawa_Doc_Migration_Transit_Data (join on externalID)
+ * 
+ * CSV Headers Expected:
+ *   NAME|DOCUMENT_TYPE|CLAIM_NUMBER|POLICY_NUMBER|DOCUMENT_SUBTYPE|AUTHOR|DOCUMENT_DESCRIPTION|STATUS|EXTERNALID|ID|CLAIMID
+ * 
+ * EXTERNALID Format in CSV:
+ *   GW12345678001~~~10001:{1EAF3C7A-0BD2-43DB-8B69-5B9D1B9DA1F}
+ *   └─────────────┘   └──────────────────────────────────────────┘
+ *      (prefix)                  (actual externalID)
+ * 
+ * Columns Inserted:
+ *   - Name, documentType, claimNumber, policyNumber, documentSubtype, author, documentDescription
+ *   - externalID (2nd part of CSV EXTERNALID after splitting by ~~~)
+ *   - gwDocExternalID (full CSV EXTERNALID value as-is)
+ *   - CC_Extract_file_loaded_date, CC_Extract_file_Name (set by this utility)
+ * 
+ * Columns Ignored (populated by SPs):
+ *   - STATUS (ignored)
+ *   - ID (ignored - no longer used)
+ *   - CLAIMID (claimID comes from SP Step 3)
+ */
+public class StagingBasedMergeUtils {
+    
+    private static final Logger logger = LogManager.getLogger(StagingBasedMergeUtils.class);
+    
+    // CSV column names (uppercase as they appear in the CSV header)
+    private static final String CSV_NAME = "NAME";
+    private static final String CSV_DOCUMENT_TYPE = "DOCUMENT_TYPE";
+    private static final String CSV_CLAIM_NUMBER = "CLAIM_NUMBER";
+    private static final String CSV_POLICY_NUMBER = "POLICY_NUMBER";
+    private static final String CSV_DOCUMENT_SUBTYPE = "DOCUMENT_SUBTYPE";
+    private static final String CSV_AUTHOR = "AUTHOR";
+    private static final String CSV_DOCUMENT_DESCRIPTION = "DOCUMENT_DESCRIPTION";
+    private static final String CSV_EXTERNALID = "EXTERNALID";
+    // Note: CSV_ID is no longer used - EXTERNALID now contains the combined value
+    
+    // Separator for parsing EXTERNALID (3 tildes)
+    // CSV EXTERNALID format: GW12345678001~~~10001:{GUID}
+    // - Full value → gwDocExternalID
+    // - 2nd part after split → externalID
+    private static final String GW_DOC_EXTERNAL_ID_SEPARATOR = "~~~";
+    
+    // Required columns for validation
+    private static final String[] REQUIRED_COLUMNS = {
+        CSV_CLAIM_NUMBER,    // claimNumber is NOT NULL in DB
+        CSV_EXTERNALID       // externalID is NOT NULL in DB (contains combined value)
+    };
+    
+    // INSERT into CC_Extract_Staging table (7 columns from CSV + 2 parsed from EXTERNALID + 2 utility columns)
+    // CSV EXTERNALID format: GW12345678001~~~10001:{GUID}
+    // - Full value → gwDocExternalID
+    // - 2nd part after split by ~~~ → externalID
+    private static final String INSERT_STAGING_SQL = 
+        "INSERT INTO [dbo].[CC_Extract_Staging] " +
+        "([Name], [documentType], [claimNumber], [policyNumber], [documentSubtype], " +
+        "[author], [documentDescription], [externalID], [gwDocExternalID], " +
+        "[CC_Extract_file_Name], [CC_Extract_file_loaded_date]) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, GETDATE())";
+    
+    // Delete existing rows for this file before inserting (prevents duplicates on re-run)
+    private static final String DELETE_STAGING_BY_FILE_SQL = 
+        "DELETE FROM [dbo].[CC_Extract_Staging] WHERE [CC_Extract_file_Name] = ?";
+    
+    private ConnectionManager connectionManager;
+    private String basePath;
+    private int batchSize;
+    private boolean archiveAfterProcessing;
+    
+    public StagingBasedMergeUtils(PropertiesConfigLoader config, ConnectionManager connectionManager) {
+        this.connectionManager = connectionManager;
+        this.basePath = config.getProperty("app.base_path");
+        
+        // Archive after processing setting
+        String archiveStr = config.getProperty("app.archive.after.processing");
+        this.archiveAfterProcessing = (archiveStr != null) && Boolean.parseBoolean(archiveStr);
+        
+        // Batch size
+        String batchSizeStr = config.getProperty("db.batch.insert.size");
+        if (batchSizeStr == null) {
+            batchSizeStr = config.getProperty("db.batch.update.size");
+        }
+        this.batchSize = (batchSizeStr != null) ? Integer.parseInt(batchSizeStr) : 1000;
+        
+        logger.info("StagingBasedMergeUtils initialized - Batch size: {}, Archive: {}", 
+                   batchSize, archiveAfterProcessing);
+    }
+    
+    /**
+     * Result class for processing
+     */
+    public static class ProcessingResult {
+        public int totalRows = 0;
+        public int successCount = 0;       // Rows inserted to staging
+        public int failureCount = 0;       // Failed rows (written to Error file)
+        public int skippedEmptyLines = 0;
+        public int rowsUpdatedInMain = 0;  // Not used - SPs run manually
+        public int rowsNotMatched = 0;     // Not used - SPs run manually
+        public String batchRunId = null;   // Not used - SPs run manually
+    }
+    
+    /**
+     * Process a CSV file - INSERT into CC_Extract_Staging table only.
+     * Does NOT call stored procedures - user will run those manually.
+     */
+    public ProcessingResult processCSVFile(Path csvFilePath) {
+        String csvFileName = csvFilePath.getFileName().toString();
+        logger.info("===== Processing: {} =====", csvFileName);
+        
+        Path inprogressDir = Paths.get(basePath, Constants.INPROGRESS_FOLDER);
+        Path inprogressFile = inprogressDir.resolve(csvFileName);
+        ProcessingResult result = new ProcessingResult();
+        
+        try {
+            // Move file to Inprogress folder
+            Files.move(csvFilePath, inprogressFile, StandardCopyOption.REPLACE_EXISTING);
+            logger.info("File moved to Inprogress folder");
+            
+            // Load CSV into staging table
+            loadCSVToStaging(inprogressFile, csvFileName, result);
+            
+            // Handle file lifecycle
+            handleFileLifecycle(inprogressFile, csvFileName, result);
+            
+            // Log summary
+            logger.info("===== Complete: {} =====", csvFileName);
+            logger.info("Total: {}, Inserted: {}, Failed: {}", 
+                       result.totalRows, result.successCount, result.failureCount);
+            
+            return result;
+            
+        } catch (Exception e) {
+            logger.error("Error processing: {}", csvFileName, e);
+            moveToFailed(inprogressFile, csvFileName, e.getMessage());
+            return result;
+        }
+    }
+    
+    /**
+     * Load CSV into CC_Extract_Staging table using batch INSERT.
+     * 
+     * CSV columns mapped:
+     *   NAME → Name
+     *   DOCUMENT_TYPE → documentType
+     *   CLAIM_NUMBER → claimNumber
+     *   POLICY_NUMBER → policyNumber
+     *   DOCUMENT_SUBTYPE → documentSubtype
+     *   AUTHOR → author
+     *   DOCUMENT_DESCRIPTION → documentDescription
+     *   EXTERNALID (full value) → gwDocExternalID
+     *   EXTERNALID (split by ~~~, 2nd part) → externalID
+     * 
+     * EXTERNALID Format: GW12345678001~~~10001:{1EAF3C7A-0BD2-43DB-8B69-5B9D1B9DA1F}
+     *   - Full value → gwDocExternalID
+     *   - 2nd part after ~~~ → externalID (10001:{1EAF3C7A-0BD2-43DB-8B69-5B9D1B9DA1F})
+     * 
+     * Ignored columns: STATUS, ID, CLAIMID (populated by SPs or not used)
+     */
+    private void loadCSVToStaging(Path csvFilePath, String csvFileName, ProcessingResult result) 
+            throws IOException, SQLException {
+        
+        List<String[]> batchData = new ArrayList<>(batchSize);
+        List<String> batchLines = new ArrayList<>(batchSize);
+        List<String> failedRows = new ArrayList<>();
+        String headerLine = null;
+        
+        try (Connection conn = connectionManager.getConnection();
+             BufferedReader reader = new BufferedReader(new FileReader(csvFilePath.toFile()))) {
+            
+            conn.setAutoCommit(false);
+            
+            // Delete existing rows for this file first (allows re-processing)
+            try (PreparedStatement deleteStmt = conn.prepareStatement(DELETE_STAGING_BY_FILE_SQL)) {
+                deleteStmt.setString(1, csvFileName);
+                int deleted = deleteStmt.executeUpdate();
+                conn.commit();
+                if (deleted > 0) {
+                    logger.info("Cleared {} existing rows for: {}", deleted, csvFileName);
+                }
+            }
+            
+            // Read header
+            headerLine = reader.readLine();
+            if (headerLine == null || headerLine.trim().isEmpty()) {
+                throw new IOException("Empty CSV file or missing header");
+            }
+            
+            Map<String, Integer> headerIndex = buildHeaderIndex(headerLine);
+            if (!validateRequiredColumns(headerIndex)) {
+                throw new IOException("Missing required columns in CSV. Required: CLAIM_NUMBER, EXTERNALID");
+            }
+            
+            String line;
+            int rowNum = 1;
+            
+            while ((line = reader.readLine()) != null) {
+                rowNum++;
+                
+                if (line.trim().isEmpty()) {
+                    result.skippedEmptyLines++;
+                    continue;
+                }
+                
+                result.totalRows++;
+                
+                try {
+                    String[] cells = line.split("\\|", -1);
+                    
+                    // Validate required fields
+                    String claimNumber = getCell(cells, headerIndex, CSV_CLAIM_NUMBER);
+                    String csvExternalId = getCell(cells, headerIndex, CSV_EXTERNALID);  // Full combined value
+                    
+                    if (claimNumber == null || claimNumber.isEmpty()) {
+                        throw new IllegalArgumentException("CLAIM_NUMBER is required but empty");
+                    }
+                    if (csvExternalId == null || csvExternalId.isEmpty()) {
+                        throw new IllegalArgumentException("EXTERNALID is required but empty");
+                    }
+                    
+                    // Parse EXTERNALID: GW12345678001~~~10001:{GUID}
+                    // - Full value → gwDocExternalID
+                    // - 2nd part after ~~~ → externalID
+                    String gwDocExternalId = csvExternalId;  // Full value as-is
+                    String externalId;
+                    
+                    if (csvExternalId.contains(GW_DOC_EXTERNAL_ID_SEPARATOR)) {
+                        String[] parts = csvExternalId.split(GW_DOC_EXTERNAL_ID_SEPARATOR, 2);
+                        if (parts.length >= 2 && parts[1] != null && !parts[1].isEmpty()) {
+                            externalId = parts[1];  // 2nd part after ~~~
+                        } else {
+                            throw new IllegalArgumentException("EXTERNALID format invalid: missing 2nd part after ~~~");
+                        }
+                    } else {
+                        throw new IllegalArgumentException("EXTERNALID must contain ~~~ separator");
+                    }
+                    
+                    // Build data array for batch insert (10 columns: 7 from CSV + 2 parsed + 1 filename)
+                    String[] rowData = new String[10];
+                    rowData[0] = getCell(cells, headerIndex, CSV_NAME);
+                    rowData[1] = getCell(cells, headerIndex, CSV_DOCUMENT_TYPE);
+                    rowData[2] = claimNumber;
+                    rowData[3] = getCell(cells, headerIndex, CSV_POLICY_NUMBER);
+                    rowData[4] = getCell(cells, headerIndex, CSV_DOCUMENT_SUBTYPE);
+                    rowData[5] = getCell(cells, headerIndex, CSV_AUTHOR);
+                    rowData[6] = getCell(cells, headerIndex, CSV_DOCUMENT_DESCRIPTION);
+                    rowData[7] = externalId;        // 2nd part after ~~~ split
+                    rowData[8] = gwDocExternalId;   // Full CSV EXTERNALID value
+                    rowData[9] = csvFileName;       // CC_Extract_file_Name
+                    
+                    batchData.add(rowData);
+                    batchLines.add(line);
+                    
+                    // Execute batch when full
+                    if (batchData.size() >= batchSize) {
+                        int inserted = executeBatchInsert(conn, batchData, batchLines, failedRows);
+                        result.successCount += inserted;
+                        result.failureCount += (batchData.size() - inserted);
+                        batchData.clear();
+                        batchLines.clear();
+                    }
+                    
+                } catch (Exception e) {
+                    result.failureCount++;
+                    failedRows.add(line + "|PARSE_ERROR: " + e.getMessage().replace("|", ";"));
+                    logger.warn("Row {} parse error: {}", rowNum, e.getMessage());
+                }
+            }
+            
+            // Execute remaining batch
+            if (!batchData.isEmpty()) {
+                int inserted = executeBatchInsert(conn, batchData, batchLines, failedRows);
+                result.successCount += inserted;
+                result.failureCount += (batchData.size() - inserted);
+            }
+            
+            conn.commit();
+            logger.info("Staging complete: {} rows inserted into CC_Extract_Staging", result.successCount);
+        }
+        
+        // Write failed rows to Error file
+        if (!failedRows.isEmpty()) {
+            writeErrorFile(csvFileName, headerLine, failedRows);
+            logger.warn("Written {} failed rows to Error file", failedRows.size());
+        }
+    }
+    
+    /**
+     * Execute batch insert with individual fallback on failure.
+     * Parameters: Name, documentType, claimNumber, policyNumber, documentSubtype,
+     *             author, documentDescription, externalID, gwDocExternalID, CC_Extract_file_Name
+     */
+    private int executeBatchInsert(Connection conn, List<String[]> batchData, 
+                                   List<String> batchLines, List<String> failedRows) throws SQLException {
+        try (PreparedStatement ps = conn.prepareStatement(INSERT_STAGING_SQL)) {
+            
+            for (String[] rowData : batchData) {
+                // 10 parameters from rowData
+                for (int i = 0; i < 10; i++) {
+                    ps.setString(i + 1, rowData[i]);
+                }
+                ps.addBatch();
+            }
+            
+            int[] results = ps.executeBatch();
+            conn.commit();
+            return results.length;
+            
+        } catch (SQLException e) {
+            // Batch failed - try individual inserts to find which rows failed
+            logger.warn("Batch failed, trying individual inserts: {}", e.getMessage());
+            conn.rollback();
+            
+            int successCount = 0;
+            try (PreparedStatement ps = conn.prepareStatement(INSERT_STAGING_SQL)) {
+                for (int i = 0; i < batchData.size(); i++) {
+                    try {
+                        String[] rowData = batchData.get(i);
+                        for (int j = 0; j < 10; j++) {
+                            ps.setString(j + 1, rowData[j]);
+                        }
+                        ps.executeUpdate();
+                        conn.commit();
+                        successCount++;
+                    } catch (SQLException rowEx) {
+                        conn.rollback();
+                        String errorMsg = rowEx.getMessage().replace("|", ";").replace("\n", " ");
+                        failedRows.add(batchLines.get(i) + "|DB_ERROR: " + errorMsg);
+                        logger.debug("Row insert failed: {}", errorMsg);
+                    }
+                }
+            }
+            return successCount;
+        }
+    }
+    
+    /**
+     * Write failed rows to Error file
+     */
+    private void writeErrorFile(String csvFileName, String headerLine, List<String> failedRows) {
+        try {
+            Path failedDir = Paths.get(basePath, Constants.FAILED_FOLDER);
+            Files.createDirectories(failedDir);
+            
+            String baseFileName = csvFileName.replaceAll("(?i)\\.csv$", "");
+            Path errorFile = failedDir.resolve(baseFileName + "_ERRORS.csv");
+            
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(errorFile.toFile()))) {
+                writer.write(headerLine + "|ERROR_REASON");
+                writer.newLine();
+                for (String row : failedRows) {
+                    writer.write(row);
+                    writer.newLine();
+                }
+            }
+            logger.info("Error file created: {}", errorFile);
+        } catch (IOException e) {
+            logger.error("Failed to write error file: {}", e.getMessage());
+        }
+    }
+    
+    /**
+     * Handle file lifecycle after processing
+     */
+    private void handleFileLifecycle(Path inprogressFile, String csvFileName, ProcessingResult result) {
+        try {
+            Path targetDir;
+            
+            if (result.failureCount == 0) {
+                // All success - move to Completed
+                targetDir = Paths.get(basePath, Constants.COMPLETED_FOLDER);
+            } else if (result.successCount > 0) {
+                // Partial success - move to Completed (errors in separate file)
+                targetDir = Paths.get(basePath, Constants.COMPLETED_FOLDER);
+            } else {
+                // Complete failure - move to Failed
+                targetDir = Paths.get(basePath, Constants.FAILED_FOLDER);
+            }
+            
+            Files.createDirectories(targetDir);
+            Path targetFile = targetDir.resolve(csvFileName);
+            Files.move(inprogressFile, targetFile, StandardCopyOption.REPLACE_EXISTING);
+            logger.info("File moved to {}", targetDir.getFileName());
+            
+            // Archive if configured and successful
+            if (result.successCount > 0 && archiveAfterProcessing) {
+                Path archiveDir = Paths.get(basePath, Constants.ARCHIVE_FOLDER);
+                Files.createDirectories(archiveDir);
+                Path archiveFile = archiveDir.resolve(csvFileName);
+                Files.move(targetFile, archiveFile, StandardCopyOption.REPLACE_EXISTING);
+                logger.info("File archived");
+            }
+            
+        } catch (IOException e) {
+            logger.error("Error handling file lifecycle: {}", e.getMessage());
+        }
+    }
+    
+    private void moveToFailed(Path inprogressFile, String csvFileName, String errorMessage) {
+        try {
+            Path failedDir = Paths.get(basePath, Constants.FAILED_FOLDER);
+            Files.createDirectories(failedDir);
+            
+            if (Files.exists(inprogressFile)) {
+                Path failedFile = failedDir.resolve(csvFileName);
+                Files.move(inprogressFile, failedFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+            
+            // Write error log
+            Path errorLogPath = failedDir.resolve(csvFileName.replace(".csv", "_ERROR.log"));
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(errorLogPath.toFile()))) {
+                writer.write("Error: " + errorMessage);
+                writer.newLine();
+                writer.write("Timestamp: " + java.time.LocalDateTime.now());
+            }
+        } catch (IOException e) {
+            logger.error("Error moving to failed: {}", e.getMessage());
+        }
+    }
+    
+    // ========== Helper Methods ==========
+    
+    /**
+     * Build header index map from CSV header line.
+     * Keys are uppercase column names.
+     */
+    private Map<String, Integer> buildHeaderIndex(String headerLine) {
+        Map<String, Integer> index = new HashMap<>();
+        String[] headers = headerLine.split("\\|", -1);
+        for (int i = 0; i < headers.length; i++) {
+            String header = headers[i].trim().replace("\"", "").toUpperCase();
+            index.put(header, i);
+        }
+        logger.debug("CSV headers found: {}", index.keySet());
+        return index;
+    }
+    
+    /**
+     * Validate required columns exist in CSV header.
+     * Required: CLAIM_NUMBER, EXTERNALID (NOT NULL in database)
+     */
+    private boolean validateRequiredColumns(Map<String, Integer> headerIndex) {
+        List<String> missing = new ArrayList<>();
+        for (String col : REQUIRED_COLUMNS) {
+            if (!headerIndex.containsKey(col)) {
+                missing.add(col);
+            }
+        }
+        
+        if (!missing.isEmpty()) {
+            logger.error("Missing required columns: {}", missing);
+            return false;
+        }
+        
+        logger.info("Required columns validated: CLAIM_NUMBER, EXTERNALID");
+        return true;
+    }
+    
+    /**
+     * Get cell value from parsed row by column name.
+     * Returns null if column not found or value is empty.
+     */
+    private String getCell(String[] cells, Map<String, Integer> headerIndex, String columnName) {
+        Integer idx = headerIndex.get(columnName);
+        if (idx == null || idx >= cells.length) {
+            return null;
+        }
+        String value = cells[idx].trim().replace("\"", "");
+        return value.isEmpty() ? null : value;
+    }
+}
+
+
+
+
+
+================================
+
+
+package com.wawanesa.ace.index.model;
+
+import java.util.Date;
+
+/**
+ * Data Transfer Object for ClaimCenter Document
+ * Used for indexing, batching, and packaging document metadata
+ */
+public class ClaimCenterDocumentDTO {
+    
+    // ==================== CORE FIELDS ====================
+    private String externalID;          // Unique identifier (Primary key for updates)
+    private String claimNumber;         // Claim number (used for grouping)
+    private String claimID;
+    private String gwDocumentID;
+    private String gwDocExternalID;     // Composite key: gwDocumentID~~~externalID
+    private String ccExtractFileName;   // CC_Extract_file_Name - source extract file
+    
+    // ==================== INDEXING FIELDS (Updated during Step 3-4) ====================
+    private Integer batchDocCount;      // Max documents per batch (e.g., 500)
+    private String batchID;             // Unique batch ID: wawa_<timestamp>
+    private String jobID;               // Job ID: wawa_migrate_<timestamp>
+    private Integer setDocCount;        // Max documents per set (e.g., 25)
+    private Integer setID;              // Set ID within batch (1, 2, 3...)
+    private Integer setDocIndex;        // Document index within set (1-25)
+    private Boolean isIndexed;          // Flag: indexing completed
+    private Boolean isDataMerged;       // Flag: data merge completed (query filter)
+    private Boolean isProcessed;        // Flag: packaging completed
+    private Date dateProcessed;         // Timestamp of packaging
+    
+    // ==================== PACKAGING OUTPUT FIELDS (Step 5) ====================
+    private String amount;
+    private String author;
+    private String claimant;
+    private String coverage;
+    private String customerID;
+    private String documentDescription;
+    private String documentSubtype;
+    private String documentTitle;
+    private String documentType;
+    private String doNotCreateActivity;
+    private String duplicate;
+    private String exposureID;
+    private String hidden;
+    private String inputMethod;
+    private String insuredName;
+    private String mimeType;
+    private String origDateCreated;
+    private String policyNumber;
+    private String primaryMembershipNumber;
+    private String reviewed;
+    private String sensitive;
+    private String contentFilePath;
+    private String contentRetrievalName;
+    private String contentType;         // Content type from CC_Extract_Staging
+    
+    // Metadata
+    private String csvFileName;
+    
+    // ==================== CONSTRUCTORS ====================
+    public ClaimCenterDocumentDTO() {
+    }
+    
+    // ==================== GETTERS AND SETTERS ====================
+    
+    public String getExternalID() {
+        return externalID;
+    }
+    
+    public void setExternalID(String externalID) {
+        this.externalID = externalID;
+    }
+    
+    public String getClaimNumber() {
+        return claimNumber;
+    }
+    
+    public void setClaimNumber(String claimNumber) {
+        this.claimNumber = claimNumber;
+    }
+    
+    public String getClaimID() {
+        return claimID;
+    }
+    
+    public void setClaimID(String claimID) {
+        this.claimID = claimID;
+    }
+    
+    public String getGwDocumentID() {
+        return gwDocumentID;
+    }
+    
+    public void setGwDocumentID(String gwDocumentID) {
+        this.gwDocumentID = gwDocumentID;
+    }
+    
+    public String getGwDocExternalID() {
+        return gwDocExternalID;
+    }
+    
+    public void setGwDocExternalID(String gwDocExternalID) {
+        this.gwDocExternalID = gwDocExternalID;
+    }
+    
+    public String getCcExtractFileName() {
+        return ccExtractFileName;
+    }
+    
+    public void setCcExtractFileName(String ccExtractFileName) {
+        this.ccExtractFileName = ccExtractFileName;
+    }
+    
+    public Integer getBatchDocCount() {
+        return batchDocCount;
+    }
+    
+    public void setBatchDocCount(Integer batchDocCount) {
+        this.batchDocCount = batchDocCount;
+    }
+    
+    public String getBatchID() {
+        return batchID;
+    }
+    
+    public void setBatchID(String batchID) {
+        this.batchID = batchID;
+    }
+    
+    public String getJobID() {
+        return jobID;
+    }
+    
+    public void setJobID(String jobID) {
+        this.jobID = jobID;
+    }
+    
+    public Integer getSetDocCount() {
+        return setDocCount;
+    }
+    
+    public void setSetDocCount(Integer setDocCount) {
+        this.setDocCount = setDocCount;
+    }
+    
+    public Integer getSetID() {
+        return setID;
+    }
+    
+    public void setSetID(Integer setID) {
+        this.setID = setID;
+    }
+    
+    public Integer getSetDocIndex() {
+        return setDocIndex;
+    }
+    
+    public void setSetDocIndex(Integer setDocIndex) {
+        this.setDocIndex = setDocIndex;
+    }
+    
+    public Boolean getIsIndexed() {
+        return isIndexed;
+    }
+    
+    public void setIsIndexed(Boolean isIndexed) {
+        this.isIndexed = isIndexed;
+    }
+    
+    public Boolean getIsDataMerged() {
+        return isDataMerged;
+    }
+    
+    public void setIsDataMerged(Boolean isDataMerged) {
+        this.isDataMerged = isDataMerged;
+    }
+    
+    public Boolean getIsProcessed() {
+        return isProcessed;
+    }
+    
+    public void setIsProcessed(Boolean isProcessed) {
+        this.isProcessed = isProcessed;
+    }
+    
+    public Date getDateProcessed() {
+        return dateProcessed;
+    }
+    
+    public void setDateProcessed(Date dateProcessed) {
+        this.dateProcessed = dateProcessed;
+    }
+    
+    public String getAmount() {
+        return amount;
+    }
+    
+    public void setAmount(String amount) {
+        this.amount = amount;
+    }
+    
+    public String getAuthor() {
+        return author;
+    }
+    
+    public void setAuthor(String author) {
+        this.author = author;
+    }
+    
+    public String getClaimant() {
+        return claimant;
+    }
+    
+    public void setClaimant(String claimant) {
+        this.claimant = claimant;
+    }
+    
+    public String getCoverage() {
+        return coverage;
+    }
+    
+    public void setCoverage(String coverage) {
+        this.coverage = coverage;
+    }
+    
+    public String getCustomerID() {
+        return customerID;
+    }
+    
+    public void setCustomerID(String customerID) {
+        this.customerID = customerID;
+    }
+    
+    public String getDocumentDescription() {
+        return documentDescription;
+    }
+    
+    public void setDocumentDescription(String documentDescription) {
+        this.documentDescription = documentDescription;
+    }
+    
+    public String getDocumentSubtype() {
+        return documentSubtype;
+    }
+    
+    public void setDocumentSubtype(String documentSubtype) {
+        this.documentSubtype = documentSubtype;
+    }
+    
+    public String getDocumentTitle() {
+        return documentTitle;
+    }
+    
+    public void setDocumentTitle(String documentTitle) {
+        this.documentTitle = documentTitle;
+    }
+    
+    public String getDocumentType() {
+        return documentType;
+    }
+    
+    public void setDocumentType(String documentType) {
+        this.documentType = documentType;
+    }
+    
+    public String getDoNotCreateActivity() {
+        return doNotCreateActivity;
+    }
+    
+    public void setDoNotCreateActivity(String doNotCreateActivity) {
+        this.doNotCreateActivity = doNotCreateActivity;
+    }
+    
+    public String getDuplicate() {
+        return duplicate;
+    }
+    
+    public void setDuplicate(String duplicate) {
+        this.duplicate = duplicate;
+    }
+    
+    public String getExposureID() {
+        return exposureID;
+    }
+    
+    public void setExposureID(String exposureID) {
+        this.exposureID = exposureID;
+    }
+    
+    public String getHidden() {
+        return hidden;
+    }
+    
+    public void setHidden(String hidden) {
+        this.hidden = hidden;
+    }
+    
+    public String getInputMethod() {
+        return inputMethod;
+    }
+    
+    public void setInputMethod(String inputMethod) {
+        this.inputMethod = inputMethod;
+    }
+    
+    public String getInsuredName() {
+        return insuredName;
+    }
+    
+    public void setInsuredName(String insuredName) {
+        this.insuredName = insuredName;
+    }
+    
+    public String getMimeType() {
+        return mimeType;
+    }
+    
+    public void setMimeType(String mimeType) {
+        this.mimeType = mimeType;
+    }
+    
+    public String getOrigDateCreated() {
+        return origDateCreated;
+    }
+    
+    public void setOrigDateCreated(String origDateCreated) {
+        this.origDateCreated = origDateCreated;
+    }
+    
+    public String getPolicyNumber() {
+        return policyNumber;
+    }
+    
+    public void setPolicyNumber(String policyNumber) {
+        this.policyNumber = policyNumber;
+    }
+    
+    public String getPrimaryMembershipNumber() {
+        return primaryMembershipNumber;
+    }
+    
+    public void setPrimaryMembershipNumber(String primaryMembershipNumber) {
+        this.primaryMembershipNumber = primaryMembershipNumber;
+    }
+    
+    public String getReviewed() {
+        return reviewed;
+    }
+    
+    public void setReviewed(String reviewed) {
+        this.reviewed = reviewed;
+    }
+    
+    public String getSensitive() {
+        return sensitive;
+    }
+    
+    public void setSensitive(String sensitive) {
+        this.sensitive = sensitive;
+    }
+    
+    public String getContentFilePath() {
+        return contentFilePath;
+    }
+    
+    public void setContentFilePath(String contentFilePath) {
+        this.contentFilePath = contentFilePath;
+    }
+    
+    public String getContentRetrievalName() {
+        return contentRetrievalName;
+    }
+    
+    public void setContentRetrievalName(String contentRetrievalName) {
+        this.contentRetrievalName = contentRetrievalName;
+    }
+    
+    public String getContentType() {
+        return contentType;
+    }
+    
+    public void setContentType(String contentType) {
+        this.contentType = contentType;
+    }
+    
+    public String getCsvFileName() {
+        return csvFileName;
+    }
+    
+    public void setCsvFileName(String csvFileName) {
+        this.csvFileName = csvFileName;
+    }
+    
+    /**
+     * Generates pipe-delimited packaging output line in specified column order
+     * Order: amount|author|batchDocCount|batchID|claimant|claimID|claimNumber|coverage|
+     *        customerID|documentDescription|documentSubtype|documentTitle|documentType|
+     *        doNotCreateActivity|duplicate|exposureID|gwDocumentID|hidden|inputMethod|
+     *        insuredName|jobID|mimeType|OrigDateCreated|policyNumber|primaryMembershipNumber|
+     *        reviewed|sensitive|setDocCount|setID|SetDocIndex|ClbSecurityController|
+     *        contentFilePath|contentRetrievalName
+     */
+    public String toPackagingCSVLine() {
+        return String.join("|",
+            nullSafe(amount),
+            nullSafe(author),
+            nullSafe(batchDocCount),
+            nullSafe(batchID),
+            nullSafe(claimant),
+            nullSafe(claimID),
+            nullSafe(claimNumber),
+            nullSafe(coverage),
+            nullSafe(customerID),
+            nullSafe(documentDescription),
+            nullSafe(documentSubtype),
+            nullSafe(documentTitle),
+            nullSafe(documentType),
+            nullSafe(doNotCreateActivity),
+            nullSafe(duplicate),
+            nullSafe(exposureID),
+            nullSafe(gwDocumentID),
+            nullSafe(hidden),
+            nullSafe(inputMethod),
+            nullSafe(insuredName),
+            nullSafe(jobID),
+            nullSafe(mimeType),
+            nullSafe(origDateCreated),
+            nullSafe(policyNumber),
+            nullSafe(primaryMembershipNumber),
+            nullSafe(reviewed),
+            nullSafe(sensitive),
+            nullSafe(setDocCount),
+            nullSafe(setID),
+            nullSafe(setDocIndex),
+            nullSafe(contentFilePath),
+            nullSafe(contentRetrievalName)
+        );
+    }
+    
+    /**
+     * Returns packaging CSV header in correct column order
+     */
+    public static String getPackagingCSVHeader() {
+        return "amount|author|batchDocCount|batchID|claimant|claimID|claimNumber|coverage|" +
+               "customerID|documentDescription|documentSubtype|documentTitle|documentType|" +
+               "doNotCreateActivity|duplicate|exposureID|gwDocumentID|hidden|inputMethod|" +
+               "insuredName|jobID|mimeType|OrigDateCreated|policyNumber|primaryMembershipNumber|" +
+               "reviewed|sensitive|setDocCount|setID|SetDocIndex|" +
+               "contentFilePath|contentRetrievalName";
+    }
+    
+    private String nullSafe(Object value) {
+        return value == null ? "" : value.toString();
+    }
+    
+    @Override
+    public String toString() {
+        return "ClaimCenterDocumentDTO{" +
+                "externalID='" + externalID + '\'' +
+                ", claimNumber='" + claimNumber + '\'' +
+                ", batchID='" + batchID + '\'' +
+                ", setID=" + setID +
+                ", setDocIndex=" + setDocIndex +
+                '}';
+    }
+}
+
+
+
+package com.wawanesa.ace.index.utils;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.wawanesa.ace.index.configuration.PropertiesConfigLoader;
+import com.wawanesa.ace.index.connection.ConnectionManager;
+import com.wawanesa.ace.index.constants.Constants;
+import com.wawanesa.ace.index.model.ClaimCenterDocumentDTO;
+
+/**
+ * Utility class for CCDataIndexAndPackagingUtility
+ * 
+ * Handles:
+ * - Indexing: Batching documents and updating DB with batch/set metadata
+ * - Packaging: Generating pipe-delimited CSV files for migration
+ * 
+ * Data Source: CC_Extract_Staging table (changed from Wawa_Doc_Migration_Transit_Data)
+ * 
+ * Filter Conditions for Document Selection:
+ * - claimID IS NOT NULL (synced from ClaimInfo - Step 3)
+ * - gwDocumentID IS NOT NULL (synced from guidewireIDMapping - Step 4)
+ * - isDataMerged = 1 (content synced from Wawa_Doc_Migration_Transit_Data - Step 5)
+ * - contentFilePath IS NOT NULL
+ * - isIndexed = 0 (not yet indexed)
+ * - CC_Extract_file_Name matches the input CSV file
+ * 
+ * Column Mapping:
+ * - CC_Extract_Staging.Name → documentTitle (for packaging output)
+ * - Missing columns (amount, claimant, coverage, etc.) are set to empty strings
+ */
+public class Utils {
+    
+    private static final Logger logger = LogManager.getLogger(Utils.class);
+    
+    private PropertiesConfigLoader config;
+    private ConnectionManager connectionManager;
+    private String basePath;
+    private String dbTableName;
+    private int setDocCount;
+    private boolean forceSingleSet;
+    private boolean canSetDocTitleAsContentFileNameIfNull;
+    private boolean setGwDocumentIDAsEmpty;
+    
+    // SQL Queries loaded from properties
+    private String selectDocumentsByClaimQuery;
+    private String updateIndexingQuery;
+    private String selectPackagingByBatchIdsQueryTemplate;
+    private String updateProcessedQuery;
+    
+    /**
+     * Constructor
+     */
+    public Utils(PropertiesConfigLoader config, ConnectionManager connectionManager) {
+        this.config = config;
+        this.connectionManager = connectionManager;
+        this.basePath = config.getProperty("app.base_path");
+        this.dbTableName = config.getProperty("db.staging.claimcenterdbtable");
+        
+        // Load set configuration (with default)
+        String setDocCountStr = config.getProperty("app.set.doc.count");
+        this.setDocCount = (setDocCountStr != null) ? 
+            Integer.parseInt(setDocCountStr) : Constants.DEFAULT_SET_DOC_COUNT;
+        
+        // Load force single set configuration (with default)
+        String forceSingleSetStr = config.getProperty("app.batch.force.single.set");
+        this.forceSingleSet = (forceSingleSetStr != null) ? 
+            Boolean.parseBoolean(forceSingleSetStr) : Constants.DEFAULT_FORCE_SINGLE_SET;
+        
+        // Load configuration for setting documentTitle from contentRetrievalName if null
+        String canSetDocTitleStr = config.getProperty("app.canSetDocTitleAsContentFileNameIfNULL");
+        this.canSetDocTitleAsContentFileNameIfNull = (canSetDocTitleStr != null) ? 
+            Boolean.parseBoolean(canSetDocTitleStr) : false;
+        
+        // Load configuration for setting gwDocumentID as empty during packaging
+        String setGwDocIdEmptyStr = config.getProperty("app.setgwDocumentIDAsEmpty");
+        this.setGwDocumentIDAsEmpty = (setGwDocIdEmptyStr != null) ? 
+            Boolean.parseBoolean(setGwDocIdEmptyStr) : false;
+        
+        // Load SQL queries from properties and replace table name placeholder
+        this.selectDocumentsByClaimQuery = config.getProperty("db.query.select.documents.by.claim")
+            .replace("%TABLE_NAME%", this.dbTableName);
+        this.updateIndexingQuery = config.getProperty("db.query.update.indexing")
+            .replace("%TABLE_NAME%", this.dbTableName);
+        this.selectPackagingByBatchIdsQueryTemplate = config.getProperty("db.query.select.packaging.by.batchids")
+            .replace("%TABLE_NAME%", this.dbTableName);
+        this.updateProcessedQuery = config.getProperty("db.query.update.processed")
+            .replace("%TABLE_NAME%", this.dbTableName);
+        
+        logger.info("Utils initialized with setDocCount={}, forceSingleSet={}, canSetDocTitleAsContentFileNameIfNull={}, setGwDocumentIDAsEmpty={}", 
+                   setDocCount, forceSingleSet, canSetDocTitleAsContentFileNameIfNull, setGwDocumentIDAsEmpty);
+    }
+    
+    /**
+     * Inner class to track processing results
+     * Made public for GlobalProcessingReport integration
+     */
+    public static class ProcessingResult {
+        public int totalClaimNumbers = 0;
+        public int totalDocuments = 0;
+        public int indexedSuccessCount = 0;
+        public int indexedFailureCount = 0;
+        public int packagingFilesCreated = 0;
+        public Set<String> batchIDsCreated = new LinkedHashSet<>();
+        
+        /**
+         * Merge another result into this one (for multi-threaded aggregation)
+         */
+        public void merge(ProcessingResult other) {
+            this.totalClaimNumbers += other.totalClaimNumbers;
+            this.totalDocuments += other.totalDocuments;
+            this.indexedSuccessCount += other.indexedSuccessCount;
+            this.indexedFailureCount += other.indexedFailureCount;
+            this.packagingFilesCreated += other.packagingFilesCreated;
+            this.batchIDsCreated.addAll(other.batchIDsCreated);
+        }
+    }
+    
+    // ==================== STEP 2-5: PROCESS CSV FILE ====================
+    
+    /**
+     * Main method to process a single CSV file from Indexing\Data folder
+     * Steps:
+     * - Read CSV and extract claim numbers
+     * - Process each claim individually:
+     *   * Query DB for documents of one claim
+     *   * Apply batching/indexing logic
+     *   * Update DB
+     * - Create success/failed tracking files
+     * - Generate packaging CSV files
+     * 
+     * @return ProcessingResult with statistics
+     */
+    public ProcessingResult processCSVFile(Path csvFilePath) {
+        String csvFileName = csvFilePath.getFileName().toString();
+        logger.info("===== PROCESSING CSV FILE: {} =====", csvFileName);
+        
+        ProcessingResult result = new ProcessingResult();
+        List<String> successLines = new ArrayList<>();
+        List<String> failedLines = new ArrayList<>();
+        
+        try {
+            // STEP 3: Read CSV and extract unique claim numbers
+            Set<String> claimNumbers = extractClaimNumbersFromCSV(csvFilePath);
+            result.totalClaimNumbers = claimNumbers.size();
+            logger.info("Extracted {} unique claim numbers from CSV", claimNumbers.size());
+            
+            if (claimNumbers.isEmpty()) {
+                logger.warn("No claim numbers found in CSV file. Skipping...");
+                archiveCSVFile(csvFilePath);
+                return result;
+            }
+            
+            // STEP 3: Process each claim individually
+            // Use the CSV file name as the CC_Extract_file_Name filter
+            int claimIndex = 0;
+            for (String claimNumber : claimNumbers) {
+                claimIndex++;
+                logger.info("Processing claim {}/{}: {}", claimIndex, claimNumbers.size(), claimNumber);
+                
+                // Query DB for documents of this specific claim from the specific extract file
+                // Filter: claimID NOT NULL, gwDocumentID NOT NULL, isDataMerged=1, contentFilePath NOT NULL
+                List<ClaimCenterDocumentDTO> documents = fetchDocumentsForOneClaim(claimNumber, csvFileName);
+                
+                if (documents.isEmpty()) {
+                    logger.warn("No documents found for claim: {} in file: {} (filter: claimID/gwDocumentID NOT NULL, isDataMerged=1, contentFilePath NOT NULL, isIndexed=0)", 
+                               claimNumber, csvFileName);
+                    continue;
+                }
+                
+                logger.info("Retrieved {} documents for claim: {}", documents.size(), claimNumber);
+                result.totalDocuments += documents.size();
+                
+                // Apply batching and indexing logic (one batch per claim or multiple based on config)
+                applyBatchingLogicForClaim(documents, result, claimNumber);
+                
+                // Update database with indexing metadata
+                updateDatabaseWithIndexing(documents, successLines, failedLines, result);
+                
+                logger.info("Completed claim: {} - Batches created: {}", claimNumber, 
+                           result.batchIDsCreated.size() - (claimIndex - 1));
+            }
+            
+            logger.info("Created total {} batches with IDs: {}", result.batchIDsCreated.size(), result.batchIDsCreated);
+            logger.info("Database update complete. Success: {}, Failed: {}", 
+                       result.indexedSuccessCount, result.indexedFailureCount);
+            
+            // STEP 5a: Write success/failed tracking files
+            writeTrackingFiles(csvFileName, successLines, failedLines);
+            
+            // STEP 5b: Generate packaging CSV files
+            generatePackagingFiles(result.batchIDsCreated, result);
+            logger.info("Generated {} packaging file(s)", result.packagingFilesCreated);
+            
+            // Archive processed CSV file
+            archiveCSVFile(csvFilePath);
+            
+            logger.info("===== COMPLETED CSV FILE: {} =====", csvFileName);
+            logger.info("Summary: Claims={}, Docs={}, Indexed={}, Failed={}, PackageFiles={}", 
+                       result.totalClaimNumbers, result.totalDocuments, 
+                       result.indexedSuccessCount, result.indexedFailureCount, result.packagingFilesCreated);
+            
+            return result;
+            
+        } catch (Exception e) {
+            logger.error("Critical error processing CSV file: {}", csvFileName, e);
+            // Move to failed folder
+            try {
+                Path failedDir = Paths.get(basePath, Constants.INDEXING_FOLDER, Constants.FAILED_FOLDER);
+                Path failedFile = failedDir.resolve(csvFileName);
+                Files.move(csvFilePath, failedFile, StandardCopyOption.REPLACE_EXISTING);
+                createErrorLogFile(failedDir, csvFileName, "Critical error: " + e.getMessage());
+            } catch (IOException ioe) {
+                logger.error("Failed to move file to Failed folder", ioe);
+            }
+            
+            // Return empty result on critical error
+            return new ProcessingResult();
+        }
+    }
+    
+    // ==================== STEP 3: EXTRACT CLAIM NUMBERS ====================
+    
+    /**
+     * Read CSV file and extract unique claim numbers
+     * Respects app.skipHeaderRow property to handle CSV files with/without headers
+     * Expects CSV to have a 'claimNumber' or 'ClaimNumber' column
+     */
+    private Set<String> extractClaimNumbersFromCSV(Path csvFilePath) throws IOException {
+        Set<String> claimNumbers = new LinkedHashSet<>();
+        
+        // Check if we should skip header row (from properties)
+        String skipHeaderProp = config.getProperty("app.skipHeaderRow");
+        boolean skipHeaderRow = (skipHeaderProp == null) ? true : Boolean.parseBoolean(skipHeaderProp);
+        
+        logger.debug("Processing CSV with skipHeaderRow={}", skipHeaderRow);
+        
+        try (BufferedReader reader = new BufferedReader(new FileReader(csvFilePath.toFile()))) {
+            
+            String headerLine = null;
+            int claimNumberIndex = -1;
+            
+            if (skipHeaderRow) {
+                // Read header to find claimNumber column index
+                headerLine = reader.readLine();
+                if (headerLine == null || headerLine.trim().isEmpty()) {
+                    logger.warn("CSV file has no header line: {}", csvFilePath.getFileName());
+                    return claimNumbers;
+                }
+                
+                String[] headers = headerLine.split("\\|", -1);
+                
+                // Find claimNumber column (case-insensitive, supports both camelCase and UNDERSCORE formats)
+                for (int i = 0; i < headers.length; i++) {
+                    String header = headers[i].trim().replace("\"", "");
+                    String normalizedHeader = header.toUpperCase().replace("_", "");
+                    
+                    // Support both "claimNumber" and "CLAIM_NUMBER" formats
+                    if (normalizedHeader.equals("CLAIMNUMBER")) {
+                        claimNumberIndex = i;
+                        logger.debug("Found claimNumber column at index: {} (header: '{}')", i, header);
+                        break;
+                    }
+                }
+                
+                if (claimNumberIndex == -1) {
+                    logger.error("CSV file does not have 'claimNumber' or 'CLAIM_NUMBER' column in header: {}", csvFilePath.getFileName());
+                    logger.error("Available headers: {}", String.join(", ", headers));
+                    logger.error("Supported formats: claimNumber, ClaimNumber, CLAIM_NUMBER, claim_number");
+                    return claimNumbers;
+                }
+            } else {
+                // No header row - assume claimNumber is first column (index 0)
+                claimNumberIndex = 0;
+                logger.warn("No header row - assuming claimNumber is at index 0");
+            }
+            
+            // Read data rows and extract claim numbers
+            String line;
+            int rowNum = 0;
+            while ((line = reader.readLine()) != null) {
+                rowNum++;
+                
+                // Skip empty lines
+                if (line.trim().isEmpty()) {
+                    logger.debug("Skipping empty line at row {}", rowNum);
+                    continue;
+                }
+                
+                String[] cells = line.split("\\|", -1);
+                if (cells.length > claimNumberIndex) {
+                    String claimNumber = safeTrim(cells[claimNumberIndex]);
+                    if (!claimNumber.isEmpty()) {
+                        claimNumbers.add(claimNumber);
+                        logger.debug("Row {}: Found claimNumber '{}'", rowNum, claimNumber);
+                    } else {
+                        logger.debug("Row {}: Empty claimNumber, skipping", rowNum);
+                    }
+                } else {
+                    logger.warn("Row {}: Insufficient columns (expected > {}, got {})", 
+                               rowNum, claimNumberIndex, cells.length);
+                }
+            }
+        }
+        
+        logger.info("Extracted {} unique claim number(s) from CSV (total rows processed)", claimNumbers.size());
+        return claimNumbers;
+    }
+    
+    // ==================== STEP 3: FETCH DOCUMENTS FROM DB ====================
+    
+    /**
+     * Query database for documents of a single claim from CC_Extract_Staging table.
+     * 
+     * Filter conditions:
+     *   - claimNumber matches
+     *   - CC_Extract_file_Name matches (to filter by specific extract file)
+     *   - claimID IS NOT NULL (synced from ClaimInfo)
+     *   - gwDocumentID IS NOT NULL (synced from guidewireIDMapping)
+     *   - isDataMerged = 1 (content synced from Wawa_Doc_Migration_Transit_Data)
+     *   - contentFilePath IS NOT NULL (content file must exist)
+     *   - isIndexed = 0 (not yet indexed)
+     * 
+     * Column mapping from CC_Extract_Staging:
+     *   - Name -> documentTitle
+     *   - Missing columns (amount, claimant, etc.) are set to empty strings
+     * 
+     * @param claimNumber The claim number to fetch documents for
+     * @param ccExtractFileName The CC_Extract_file_Name to filter by
+     */
+    private List<ClaimCenterDocumentDTO> fetchDocumentsForOneClaim(String claimNumber, String ccExtractFileName) throws SQLException {
+        List<ClaimCenterDocumentDTO> documents = new ArrayList<>();
+        
+        try (Connection conn = connectionManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(selectDocumentsByClaimQuery)) {
+            
+            pstmt.setString(1, claimNumber);
+            pstmt.setString(2, ccExtractFileName);
+            
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    ClaimCenterDocumentDTO dto = new ClaimCenterDocumentDTO();
+                    
+                    // Core fields from CC_Extract_Staging
+                    dto.setExternalID(rs.getString("externalID"));
+                    dto.setClaimNumber(rs.getString("claimNumber"));
+                    dto.setClaimID(rs.getString("claimID"));
+                    dto.setGwDocumentID(rs.getString("gwDocumentID"));
+                    dto.setGwDocExternalID(rs.getString("gwDocExternalID"));
+                    dto.setCcExtractFileName(rs.getString("CC_Extract_file_Name"));
+                    
+                    // Document metadata from CC_Extract_Staging
+                    // Note: Name column is aliased as documentTitle in SQL query
+                    dto.setDocumentTitle(rs.getString("documentTitle"));
+                    dto.setDocumentType(rs.getString("documentType"));
+                    dto.setDocumentSubtype(rs.getString("documentSubtype"));
+                    dto.setAuthor(rs.getString("author"));
+                    dto.setDocumentDescription(rs.getString("documentDescription"));
+                    dto.setPolicyNumber(rs.getString("policyNumber"));
+                    dto.setDoNotCreateActivity(rs.getBoolean("doNotCreateActivity") ? "true" : "false");
+                    dto.setInputMethod(rs.getString("inputMethod"));
+                    dto.setMimeType(rs.getString("mimeType"));
+                    dto.setOrigDateCreated(rs.getString("OrigDateCreated"));
+                    dto.setSensitive(rs.getBoolean("sensitive") ? "true" : "false");
+                    dto.setContentFilePath(rs.getString("contentFilePath"));
+                    dto.setContentRetrievalName(rs.getString("contentRetrievalName"));
+                    dto.setContentType(rs.getString("contentType"));
+                    
+                    // Columns NOT in CC_Extract_Staging - set to empty for packaging output
+                    dto.setAmount("");
+                    dto.setClaimant("");
+                    dto.setCoverage("");
+                    dto.setCustomerID("");
+                    dto.setDuplicate("");
+                    dto.setExposureID("");
+                    dto.setHidden("");
+                    dto.setInsuredName("");
+                    dto.setPrimaryMembershipNumber("");
+                    dto.setReviewed("");
+                    
+                    documents.add(dto);
+                }
+            }
+        }
+        
+        logger.debug("Fetched {} documents for claimNumber: {} from file: {}", 
+                    documents.size(), claimNumber, ccExtractFileName);
+        return documents;
+    }
+    
+    // ==================== STEP 3: APPLY BATCHING LOGIC ====================
+    
+    /**
+     * Apply batching and set logic to documents for a single claim
+     * 
+     * Case 1: forceSingleSet = true
+     *   - Create multiple batches, each with 1 set (max setDocCount docs per batch)
+     *   - Example: 27 docs → Batch1(25 docs, 1 set) + Batch2(2 docs, 1 set)
+     * 
+     * Case 2: forceSingleSet = false
+     *   - Create one batch per claim with multiple sets (max setDocCount docs per set)
+     *   - Example: 27 docs → Batch1(27 docs, Set1: 25 docs + Set2: 2 docs)
+     * 
+     * @param documents List of documents for this claim
+     * @param result ProcessingResult to track batch IDs
+     * @param claimNumber Current claim number being processed
+     */
+    private void applyBatchingLogicForClaim(List<ClaimCenterDocumentDTO> documents, 
+                                            ProcessingResult result, 
+                                            String claimNumber) {
+        
+        int totalDocs = documents.size();
+        logger.debug("Applying batching logic for claim: {} with {} documents (forceSingleSet={})", 
+                    claimNumber, totalDocs, forceSingleSet);
+        
+        if (forceSingleSet) {
+            // CASE 1: Create multiple batches, each with 1 set (max setDocCount docs per batch)
+            applyForceSingleSetLogic(documents, result, claimNumber);
+        } else {
+            // CASE 2: Create one batch per claim with multiple sets
+            applyMultiSetPerBatchLogic(documents, result, claimNumber);
+        }
+    }
+    
+    /**
+     * Case 1: Force single set per batch
+     * - Create multiple batches for the claim
+     * - Each batch contains exactly 1 set (max setDocCount docs)
+     * 
+     * Example for 27 documents with setDocCount=25:
+     *   Batch 1: 25 docs (setID=1, setDocCount=25, batchDocCount=25)
+     *   Batch 2: 2 docs (setID=1, setDocCount=2, batchDocCount=2)
+     */
+    private void applyForceSingleSetLogic(List<ClaimCenterDocumentDTO> documents, 
+                                          ProcessingResult result, 
+                                          String claimNumber) {
+        
+        int totalDocs = documents.size();
+        int currentBatchStartIndex = 0;
+        int batchNumber = 1;
+        
+        while (currentBatchStartIndex < totalDocs) {
+            // Determine batch size (max setDocCount)
+            int currentBatchSize = Math.min(setDocCount, totalDocs - currentBatchStartIndex);
+            int batchEndIndex = currentBatchStartIndex + currentBatchSize;
+            
+            // Generate unique batch ID and job ID
+            String batchID = generateBatchID();
+            String jobID = generateJobID();
+            result.batchIDsCreated.add(batchID);
+            
+            logger.info("Claim: {} - Batch {}: batchID={}, docs={}, sets=1", 
+                       claimNumber, batchNumber, batchID, currentBatchSize);
+            
+            // Process documents in current batch (single set)
+            int setDocIndex = 1;
+            
+            for (int i = currentBatchStartIndex; i < batchEndIndex; i++) {
+                ClaimCenterDocumentDTO doc = documents.get(i);
+                
+                // Set batch-level metadata
+                doc.setBatchID(batchID);
+                doc.setJobID(jobID);
+                doc.setBatchDocCount(currentBatchSize);
+                
+                // Set set-level metadata (always setID = 1 for this case)
+                doc.setSetID(1);
+                doc.setSetDocCount(currentBatchSize);
+                doc.setSetDocIndex(setDocIndex);
+                
+                setDocIndex++;
+            }
+            
+            // Move to next batch
+            currentBatchStartIndex = batchEndIndex;
+            batchNumber++;
+        }
+        
+        logger.info("Claim: {} - Created {} batches (forceSingleSet=true)", claimNumber, batchNumber - 1);
+    }
+    
+    /**
+     * Case 2: Multiple sets per batch
+     * - Create one batch for the claim
+     * - Batch contains multiple sets (max setDocCount docs per set)
+     * 
+     * Example for 27 documents with setDocCount=25:
+     *   Batch 1: 27 docs (batchDocCount=27)
+     *     - Set 1: setID=1, setDocCount=25, setDocIndex=1-25
+     *     - Set 2: setID=2, setDocCount=2, setDocIndex=1-2
+     */
+    private void applyMultiSetPerBatchLogic(List<ClaimCenterDocumentDTO> documents, 
+                                            ProcessingResult result, 
+                                            String claimNumber) {
+        
+        int totalDocs = documents.size();
+        
+        // Generate unique batch ID and job ID (one per claim)
+        String batchID = generateBatchID();
+        String jobID = generateJobID();
+        result.batchIDsCreated.add(batchID);
+        
+        // Calculate number of sets needed
+        int numberOfSets = (int) Math.ceil((double) totalDocs / setDocCount);
+        
+        logger.info("Claim: {} - Batch: batchID={}, docs={}, sets={}", 
+                   claimNumber, batchID, totalDocs, numberOfSets);
+        
+        // Process all documents in this single batch
+        int setID = 1;
+        int setDocIndex = 1;
+        int docsInCurrentSet = 0;
+        
+        for (ClaimCenterDocumentDTO doc : documents) {
+            docsInCurrentSet++;
+            
+            // Calculate set doc count for current set
+            int remainingDocs = totalDocs - ((setID - 1) * setDocCount);
+            int currentSetDocCount = Math.min(setDocCount, remainingDocs);
+            
+            // Set batch-level metadata
+            doc.setBatchID(batchID);
+            doc.setJobID(jobID);
+            doc.setBatchDocCount(totalDocs);
+            
+            // Set set-level metadata
+            doc.setSetID(setID);
+            doc.setSetDocCount(currentSetDocCount);
+            doc.setSetDocIndex(setDocIndex);
+            
+            // Increment set document index
+            setDocIndex++;
+            
+            // Move to next set if current set is full
+            if (setDocIndex > setDocCount) {
+                logger.debug("Claim: {} - Completed Set {}: {} documents", claimNumber, setID, docsInCurrentSet);
+                setID++;
+                setDocIndex = 1;
+                docsInCurrentSet = 0;
+            }
+        }
+        
+        // Log last set if it has documents
+        if (docsInCurrentSet > 0) {
+            logger.debug("Claim: {} - Completed Set {}: {} documents", claimNumber, setID, docsInCurrentSet);
+        }
+        
+        logger.info("Claim: {} - Created 1 batch with {} sets (forceSingleSet=false)", claimNumber, numberOfSets);
+    }
+    
+    /**
+     * Generate unique batch ID: wawa_<yyyyMMddHHmmssSSSSS>
+     */
+    private String generateBatchID() {
+        return Constants.BATCH_ID_PREFIX + generateTimestamp();
+    }
+    
+    /**
+     * Generate unique job ID: wawa_migrate_<yyyyMMddHHmmssSSSSS>
+     */
+    private String generateJobID() {
+        return Constants.JOB_ID_PREFIX + generateTimestamp();
+    }
+    
+    /**
+     * Generate timestamp with milliseconds: yyyyMMddHHmmssSSSSS
+     */
+    private String generateTimestamp() {
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMddHHmmssSSSSS");
+        return sdf.format(new Date());
+    }
+    
+    // ==================== STEP 4: UPDATE DATABASE ====================
+    
+    /**
+     * Update database with indexing metadata using JDBC batch processing
+     * Falls back to individual UPDATEs if batch fails
+     */
+    private void updateDatabaseWithIndexing(List<ClaimCenterDocumentDTO> documents, 
+                                           List<String> successLines, 
+                                           List<String> failedLines,
+                                           ProcessingResult result) {
+        
+        // Get batch size from config (default 1000)
+        String batchSizeStr = config.getProperty("db.indexing.batch.update.size");
+        int batchSize = (batchSizeStr != null) ? Integer.parseInt(batchSizeStr) : 1000;
+        
+        try {
+            // Try batch UPDATE first (fast path)
+            updateDatabaseWithIndexingBatch(documents, successLines, failedLines, result, batchSize);
+            
+        } catch (SQLException e) {
+            logger.warn("Batch UPDATE failed, falling back to individual UPDATEs: {}", e.getMessage());
+            // Fallback to individual UPDATEs
+            updateDatabaseWithIndexingIndividual(documents, successLines, failedLines, result);
+        }
+    }
+    
+    /**
+     * Batch UPDATE implementation (100x faster than individual UPDATEs)
+     */
+    private void updateDatabaseWithIndexingBatch(List<ClaimCenterDocumentDTO> documents,
+                                                 List<String> successLines,
+                                                 List<String> failedLines,
+                                                 ProcessingResult result,
+                                                 int batchSize) throws SQLException {
+        
+        long connStartTime = System.currentTimeMillis();
+        try (Connection conn = connectionManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(updateIndexingQuery)) {
+            
+            long connAcquireTime = System.currentTimeMillis() - connStartTime;
+            logger.debug("Connection acquired in {} ms", connAcquireTime);
+            
+            // Note: conn.setAutoCommit(false) already set by ConnectionManager
+            int count = 0;
+            int batchStartIndex = 0;
+            
+            for (int i = 0; i < documents.size(); i++) {
+                ClaimCenterDocumentDTO doc = documents.get(i);
+                
+                pstmt.setInt(1, doc.getBatchDocCount());
+                pstmt.setString(2, doc.getBatchID());
+                pstmt.setString(3, doc.getJobID());
+                pstmt.setInt(4, doc.getSetDocCount());
+                pstmt.setInt(5, doc.getSetID());
+                pstmt.setInt(6, doc.getSetDocIndex());
+                pstmt.setString(7, doc.getExternalID());
+                pstmt.addBatch();
+                count++;
+                
+                // Execute batch when size reached
+                if (count % batchSize == 0) {
+                    int[] results = pstmt.executeBatch();
+                    conn.commit();
+                    
+                    // Track results
+                    for (int j = 0; j < results.length; j++) {
+                        ClaimCenterDocumentDTO batchDoc = documents.get(batchStartIndex + j);
+                        if (results[j] > 0) {
+                            result.indexedSuccessCount++;
+                            successLines.add(batchDoc.getExternalID());
+                        } else {
+                            result.indexedFailureCount++;
+                            failedLines.add(batchDoc.getExternalID() + "|No record found");
+                        }
+                    }
+                    
+                    logger.debug("Executed batch of {} indexing UPDATEs", count);
+                    batchStartIndex = i + 1;
+                }
+            }
+            
+            // Execute remaining batch
+            if (count % batchSize != 0) {
+                int[] results = pstmt.executeBatch();
+                conn.commit();
+                
+                // Track results for remaining batch
+                int remainingStart = (count / batchSize) * batchSize;
+                for (int j = 0; j < results.length; j++) {
+                    ClaimCenterDocumentDTO batchDoc = documents.get(remainingStart + j);
+                    if (results[j] > 0) {
+                        result.indexedSuccessCount++;
+                        successLines.add(batchDoc.getExternalID());
+                    } else {
+                        result.indexedFailureCount++;
+                        failedLines.add(batchDoc.getExternalID() + "|No record found");
+                    }
+                }
+                
+                logger.debug("Executed final batch of {} indexing UPDATEs", count % batchSize);
+            }
+            
+            logger.info("Batch indexing UPDATE completed: {} documents indexed, {} failed", 
+                       result.indexedSuccessCount, result.indexedFailureCount);
+                       
+        } catch (SQLException e) {
+            logger.error("Batch indexing UPDATE failed", e);
+            throw e; // Re-throw to trigger fallback
+        }
+    }
+    
+    /**
+     * Individual UPDATE fallback (for when batch fails)
+     */
+    private void updateDatabaseWithIndexingIndividual(List<ClaimCenterDocumentDTO> documents,
+                                                      List<String> successLines,
+                                                      List<String> failedLines,
+                                                      ProcessingResult result) {
+        
+        long connStartTime = System.currentTimeMillis();
+        try (Connection conn = connectionManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(updateIndexingQuery)) {
+            
+            long connAcquireTime = System.currentTimeMillis() - connStartTime;
+            logger.debug("Connection acquired in {} ms (fallback mode)", connAcquireTime);
+            
+            // Note: conn.setAutoCommit(false) already set by ConnectionManager
+            
+            for (ClaimCenterDocumentDTO doc : documents) {
+                try {
+                    pstmt.setInt(1, doc.getBatchDocCount());
+                    pstmt.setString(2, doc.getBatchID());
+                    pstmt.setString(3, doc.getJobID());
+                    pstmt.setInt(4, doc.getSetDocCount());
+                    pstmt.setInt(5, doc.getSetID());
+                    pstmt.setInt(6, doc.getSetDocIndex());
+                    pstmt.setString(7, doc.getExternalID());
+                    
+                    int rowsUpdated = pstmt.executeUpdate();
+                    
+                    if (rowsUpdated > 0) {
+                        result.indexedSuccessCount++;
+                        successLines.add(doc.getExternalID());
+                    } else {
+                        result.indexedFailureCount++;
+                        failedLines.add(doc.getExternalID() + "|No record found");
+                    }
+                    
+                } catch (SQLException e) {
+                    result.indexedFailureCount++;
+                    failedLines.add(doc.getExternalID() + "|" + e.getMessage());
+                    logger.error("Failed to index: externalID={}", doc.getExternalID(), e);
+                }
+            }
+            
+            conn.commit();
+            logger.info("Individual indexing UPDATE completed (fallback)");
+            
+        } catch (SQLException e) {
+            logger.error("Individual UPDATE fallback also failed", e);
+            // Connection auto-closes and rolls back due to auto-commit=false
+            throw new RuntimeException("Database update failed", e);
+        }
+    }
+    
+    // ==================== STEP 5a: WRITE TRACKING FILES ====================
+    
+    /**
+     * Write success and failed tracking files
+     */
+    private void writeTrackingFiles(String csvFileName, List<String> successLines, List<String> failedLines) 
+            throws IOException {
+        
+        String baseFileName = csvFileName.replace(".csv", "");
+        Path indexingPath = Paths.get(basePath, Constants.INDEXING_FOLDER);
+        
+        // Write success file
+        if (!successLines.isEmpty()) {
+            Path successFile = indexingPath.resolve(Constants.COMPLETED_FOLDER)
+                                          .resolve(baseFileName + Constants.INDEX_SUCCESS_SUFFIX);
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(successFile.toFile()))) {
+                writer.write("externalID");
+                writer.newLine();
+                for (String line : successLines) {
+                    writer.write(line);
+                    writer.newLine();
+                }
+            }
+            logger.info("Created success tracking file: {} ({} records)", successFile.getFileName(), successLines.size());
+        }
+        
+        // Write failed file
+        if (!failedLines.isEmpty()) {
+            Path failedFile = indexingPath.resolve(Constants.FAILED_FOLDER)
+                                         .resolve(baseFileName + Constants.INDEX_FAILED_SUFFIX);
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(failedFile.toFile()))) {
+                writer.write("externalID|error_message");
+                writer.newLine();
+                for (String line : failedLines) {
+                    writer.write(line);
+                    writer.newLine();
+                }
+            }
+            logger.info("Created failed tracking file: {} ({} records)", failedFile.getFileName(), failedLines.size());
+        }
+    }
+    
+    // ==================== STEP 5b: GENERATE PACKAGING FILES ====================
+    
+    /**
+     * Generate packaging CSV files for all batches created
+     * - Query DB for documents with created batchIDs
+     * - Write pipe-delimited CSV with 33 columns
+     * - Max 50,000 rows per file
+     * - Update isProcessed = 1, DateProcessed = current date
+     */
+    private void generatePackagingFiles(Set<String> batchIDs, ProcessingResult result) throws SQLException, IOException {
+        
+        if (batchIDs.isEmpty()) {
+            logger.warn("No batchIDs to process for packaging");
+            return;
+        }
+        
+        // Build IN clause for batch IDs
+        StringBuilder inClause = new StringBuilder();
+        int count = 0;
+        for (int i = 0; i < batchIDs.size(); i++) {
+            if (count > 0) inClause.append(",");
+            inClause.append("?");
+            count++;
+        }
+        
+        // Replace the %IN_CLAUSE% placeholder with the generated IN clause
+        String selectSQL = selectPackagingByBatchIdsQueryTemplate.replace("%IN_CLAUSE%", inClause.toString());
+        
+        List<ClaimCenterDocumentDTO> packagingDocs = new ArrayList<>();
+        
+        try (Connection conn = connectionManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(selectSQL)) {
+            
+            // Set parameters
+            int paramIndex = 1;
+            for (String batchID : batchIDs) {
+                pstmt.setString(paramIndex++, batchID);
+            }
+            
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    ClaimCenterDocumentDTO dto = new ClaimCenterDocumentDTO();
+                    
+                    // Core fields from CC_Extract_Staging
+                    dto.setExternalID(rs.getString("externalID"));
+                    dto.setClaimNumber(rs.getString("claimNumber"));
+                    dto.setClaimID(rs.getString("claimID"));
+                    dto.setGwDocumentID(rs.getString("gwDocumentID"));
+                    dto.setGwDocExternalID(rs.getString("gwDocExternalID"));
+                    dto.setCcExtractFileName(rs.getString("CC_Extract_file_Name"));
+                    
+                    // Batch/Set metadata
+                    dto.setBatchDocCount(rs.getInt("batchDocCount"));
+                    dto.setBatchID(rs.getString("batchID"));
+                    dto.setJobID(rs.getString("jobID"));
+                    dto.setSetDocCount(rs.getInt("setDocCount"));
+                    dto.setSetID(rs.getInt("setID"));
+                    dto.setSetDocIndex(rs.getInt("SetDocIndex"));
+                    
+                    // Document metadata from CC_Extract_Staging
+                    // Note: Name column is aliased as documentTitle in SQL query
+                    dto.setDocumentTitle(rs.getString("documentTitle"));
+                    dto.setDocumentType(rs.getString("documentType"));
+                    dto.setDocumentSubtype(rs.getString("documentSubtype"));
+                    dto.setAuthor(rs.getString("author"));
+                    dto.setDocumentDescription(rs.getString("documentDescription"));
+                    dto.setPolicyNumber(rs.getString("policyNumber"));
+                    dto.setDoNotCreateActivity(rs.getBoolean("doNotCreateActivity") ? "true" : "false");
+                    dto.setInputMethod(rs.getString("inputMethod"));
+                    dto.setMimeType(rs.getString("mimeType"));
+                    dto.setOrigDateCreated(rs.getString("OrigDateCreated"));
+                    dto.setSensitive(rs.getBoolean("sensitive") ? "true" : "false");
+                    dto.setContentFilePath(rs.getString("contentFilePath"));
+                    dto.setContentRetrievalName(rs.getString("contentRetrievalName"));
+                    dto.setContentType(rs.getString("contentType"));
+                    
+                    // Columns NOT in CC_Extract_Staging - set to empty for packaging output
+                    dto.setAmount("");
+                    dto.setClaimant("");
+                    dto.setCoverage("");
+                    dto.setCustomerID("");
+                    dto.setDuplicate("");
+                    dto.setExposureID("");
+                    dto.setHidden("");
+                    dto.setInsuredName("");
+                    dto.setPrimaryMembershipNumber("");
+                    dto.setReviewed("");
+                    
+                    // If config is set to true, clear gwDocumentID (set to empty)
+                    if (setGwDocumentIDAsEmpty) {
+                        dto.setGwDocumentID("");
+                        logger.debug("Set gwDocumentID to empty for externalID={} (config: setgwDocumentIDAsEmpty=true)", 
+                                    dto.getExternalID());
+                    }
+                    
+                    // If documentTitle is null/empty and config allows, set it from contentRetrievalName (without extension)
+                    if (canSetDocTitleAsContentFileNameIfNull && 
+                        (dto.getDocumentTitle() == null || dto.getDocumentTitle().trim().isEmpty())) {
+                        String contentFileName = dto.getContentRetrievalName();
+                        if (contentFileName != null && !contentFileName.trim().isEmpty()) {
+                            // Remove file extension to get the filename without extension
+                            String fileNameWithoutExtension = removeFileExtension(contentFileName);
+                            dto.setDocumentTitle(fileNameWithoutExtension);
+                            logger.debug("Set documentTitle from contentRetrievalName for externalID={}: '{}'", 
+                                        dto.getExternalID(), fileNameWithoutExtension);
+                        }
+                    }
+                    
+                    packagingDocs.add(dto);
+                }
+            }
+        }
+        
+        logger.info("Retrieved {} documents for packaging", packagingDocs.size());
+        
+        // Write packaging CSV files (max 50K rows per file)
+        writePackagingCSVFiles(packagingDocs, result);
+        
+        // Update isProcessed flag in database
+        updateProcessedFlag(packagingDocs);
+    }
+    
+    /**
+     * Write packaging CSV files with max 50,000 rows per file
+     */
+    private void writePackagingCSVFiles(List<ClaimCenterDocumentDTO> documents, ProcessingResult result) 
+            throws IOException {
+        
+        Path packagingDir = Paths.get(basePath, Constants.PACKAGING_FOLDER);
+        
+        int fileCount = 0;
+        int rowCount = 0;
+        BufferedWriter writer = null;
+        
+        try {
+            for (ClaimCenterDocumentDTO doc : documents) {
+                // Create new file if needed
+                if (writer == null || rowCount >= Constants.MAX_PACKAGING_FILE_ROWS) {
+                    // Close previous file
+                    if (writer != null) {
+                        writer.close();
+                        logger.info("Closed packaging file {} with {} rows", fileCount, rowCount);
+                    }
+                    
+                    // Create new file
+                    fileCount++;
+                    rowCount = 0;
+                    String fileName = Constants.PACKAGING_FILE_PREFIX + generateTimestamp() + 
+                                    Constants.PACKAGING_FILE_EXTENSION;
+                    Path filePath = packagingDir.resolve(fileName);
+                    writer = new BufferedWriter(new FileWriter(filePath.toFile()));
+                    
+                    // Write header
+                    writer.write(ClaimCenterDocumentDTO.getPackagingCSVHeader());
+                    writer.newLine();
+                    
+                    logger.info("Created packaging file: {}", fileName);
+                }
+                
+                // Write document row
+                writer.write(doc.toPackagingCSVLine());
+                writer.newLine();
+                rowCount++;
+            }
+            
+            // Close last file
+            if (writer != null) {
+                writer.close();
+                logger.info("Closed packaging file {} with {} rows", fileCount, rowCount);
+            }
+            
+            result.packagingFilesCreated = fileCount;
+            
+        } finally {
+            if (writer != null) {
+                try {
+                    writer.close();
+                } catch (IOException e) {
+                    logger.error("Error closing packaging file", e);
+                }
+            }
+        }
+    }
+    
+    /**
+     * Update isProcessed = 1 and DateProcessed for packaged documents
+     */
+    private void updateProcessedFlag(List<ClaimCenterDocumentDTO> documents) throws SQLException {
+        
+        long connStartTime = System.currentTimeMillis();
+        try (Connection conn = connectionManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(updateProcessedQuery)) {
+            
+            long connAcquireTime = System.currentTimeMillis() - connStartTime;
+            logger.debug("Connection acquired in {} ms (updateProcessedFlag)", connAcquireTime);
+            
+            // Note: conn.setAutoCommit(false) already set by ConnectionManager
+            Date currentDate = new Date();
+            
+            for (ClaimCenterDocumentDTO doc : documents) {
+                pstmt.setTimestamp(1, new java.sql.Timestamp(currentDate.getTime()));
+                pstmt.setString(2, doc.getExternalID());
+                pstmt.addBatch();
+            }
+            
+            int[] results = pstmt.executeBatch();
+            conn.commit();
+            
+            int successCount = 0;
+            for (int result : results) {
+                if (result > 0) successCount++;
+            }
+            
+            logger.info("Updated isProcessed flag for {} documents", successCount);
+        }
+    }
+    
+    // ==================== HELPER METHODS ====================
+    
+    /**
+     * Archive CSV file to Archive folder
+     */
+    private void archiveCSVFile(Path csvFilePath) throws IOException {
+        Path archiveDir = Paths.get(basePath, Constants.INDEXING_FOLDER, Constants.ARCHIVE_FOLDER);
+        Path archiveFile = archiveDir.resolve(csvFilePath.getFileName());
+        Files.move(csvFilePath, archiveFile, StandardCopyOption.REPLACE_EXISTING);
+        logger.info("Archived CSV file to: {}", archiveFile);
+    }
+    
+    /**
+     * Create error log file
+     */
+    private void createErrorLogFile(Path directory, String csvFileName, String errorMessage) {
+        try {
+            String baseFileName = csvFileName.replace(".csv", "");
+            Path errorLogFile = directory.resolve(baseFileName + "_error.log");
+            
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(errorLogFile.toFile()))) {
+                writer.write("Error processing file: " + csvFileName);
+                writer.newLine();
+                writer.write("Timestamp: " + new Date());
+                writer.newLine();
+                writer.write("Error: " + errorMessage);
+                writer.newLine();
+            }
+            
+            logger.info("Created error log file: {}", errorLogFile);
+        } catch (IOException e) {
+            logger.error("Failed to create error log file", e);
+        }
+    }
+    
+    /**
+     * Safe trim utility
+     */
+    private String safeTrim(String value) {
+        if (value == null) return "";
+        String trimmed = value.trim();
+        if (trimmed.equalsIgnoreCase("null")) return "";
+        return trimmed;
+    }
+    
+    /**
+     * Remove file extension from filename
+     * Example: "document.pdf" -> "document"
+     *          "file.name.txt" -> "file.name"
+     *          "noextension" -> "noextension"
+     */
+    private String removeFileExtension(String fileName) {
+        if (fileName == null || fileName.isEmpty()) {
+            return fileName;
+        }
+        
+        int lastDotIndex = fileName.lastIndexOf('.');
+        if (lastDotIndex > 0) {
+            return fileName.substring(0, lastDotIndex);
+        }
+        
+        // No extension found, return as-is
+        return fileName;
+    }
+}
+
+
+
+
+# ===========================================================
+# CCDataIndexAndPackagingUtility - Production Configuration
+# ===========================================================
+# Last Updated: 2025-12-19
+# Updated to use CC_Extract_Staging table instead of Wawa_Doc_Migration_Transit_Data
+# Optimized for high-volume production processing (2M+ documents/day)
+# ===========================================================
+
+# ===== APPLICATION SETTINGS =====
+app.base_path=D:/Rameshwar/ClaimCenterDataMerge/
+app.skipHeaderRow=true
+app.archive.after.processing=true
+
+# ===== BATCHING CONFIGURATION =====
+# Set document count: Maximum documents per set
+app.set.doc.count=25
+
+# Force single set per batch
+# true = Multiple batches per claim (1 set per batch)
+# false = One batch per claim (multiple sets per batch)
+app.batch.force.single.set=false
+
+# ===== PERFORMANCE TUNING =====
+# Thread Pool Size: Number of parallel CSV file processors
+# Recommended: 5-10 for production (multiple CSV files)
+# Note: Each thread processes one complete CSV file
+app.thread.pool.size=5
+
+# Progress Monitoring: Log progress every N minutes
+# Set to 0 to disable progress monitoring
+# Recommended: 5 minutes for production visibility
+app.progress.log.interval.minutes=5
+
+# ===== DOCUMENT TITLE CONFIGURATION =====
+# If documentTitle (Name) is null/empty, set it from contentRetrievalName (without extension)
+app.canSetDocTitleAsContentFileNameIfNULL=false
+
+# Set gwDocumentID as empty during packaging (if needed)
+app.setgwDocumentIDAsEmpty=false
+
+# ===== DATABASE SETTINGS =====
+db.serverName=RAMESHWAR\\SQLEXPRESS
+db.port=1433
+db.dbName=Wawa_DMS_Conversion_UAT
+
+# Database Connection Pool Size
+# IMPORTANT: Should be >= app.thread.pool.size + 5 (buffer for overhead)
+# Recommended: 15-20 for production with 5 threads
+db.pool.size=15
+
+# Target table for indexing and packaging operations
+# CHANGED: Now using CC_Extract_Staging instead of Wawa_Doc_Migration_Transit_Data
+db.staging.claimcenterdbtable=Wawa_DMS_Conversion_UAT.[dbo].[CC_Extract_Staging]
+
+# Batch UPDATE Size for Indexing: Number of rows per JDBC batch
+# CRITICAL FOR PERFORMANCE: Batch UPDATEs are 100x faster than individual UPDATEs
+# Recommended: 1000-2000 rows per batch
+# Default: 1000
+db.indexing.batch.update.size=1000
+
+# ===== MEMORY MANAGEMENT =====
+# Memory warning threshold (percentage of max heap)
+# Warning logged when memory usage exceeds this threshold
+app.memory.warning.threshold=80
+
+# ===== NOTES =====
+# Performance Estimates for 80K claims, 2M documents:
+# - With batch UPDATEs (1000/batch): ~40-50 minutes total
+# - Thread pool of 5: Processes 5 CSV files in parallel
+# - Connection pool of 15: Adequate for 5 threads + overhead
+#
+# JVM Recommended Settings:
+# -Xms2G -Xmx4G -XX:+UseG1GC -XX:MaxGCPauseMillis=200
+#
+# Global Processing Report:
+# - Written to: {app.base_path}/CCDataIndexPackaging_Summary_Report_{timestamp}.csv
+# - Contains: Total CSV files, claims, documents, batches, packaging files
+# - Includes: Success/failure counts, processing time, throughput
+#
+# Packaging Files:
+# - Written to: {app.base_path}/Packaging/wawa_migration_docs_{timestamp}.csv
+# - Max rows per file: 50,000
+# - Format: Pipe-delimited, 32 columns
+#
+# Table Change:
+# - OLD: Wawa_Doc_Migration_Transit_Data
+# - NEW: CC_Extract_Staging
+# - Column Mapping: documentTitle -> Name
+# - Missing columns in packaging output: amount, claimant, coverage, customerID, 
+#   duplicate, exposureID, hidden, insuredName, primaryMembershipNumber, reviewed
+#   (These will be output as empty values)
+
+# ===========================================================================
+# DATABASE QUERIES - Updated for CC_Extract_Staging table
+# ===========================================================================
+
+# SELECT query for fetching documents for one claim
+# Filter conditions:
+#   - claimNumber matches
+#   - CC_Extract_file_Name matches (to filter by specific extract file)
+#   - claimID IS NOT NULL (synced from ClaimInfo)
+#   - gwDocumentID IS NOT NULL (synced from guidewireIDMapping)
+#   - isDataMerged = 1 (content synced from Wawa_Doc_Migration_Transit_Data)
+#   - contentFilePath IS NOT NULL (content file must exist)
+#
+# Column mapping from CC_Extract_Staging:
+#   - Name -> documentTitle (for packaging output)
+#   - Missing columns will be empty: amount, claimant, coverage, customerID,
+#     duplicate, exposureID, hidden, insuredName, primaryMembershipNumber, reviewed
+db.query.select.documents.by.claim=SELECT \
+    externalID, \
+    claimNumber, \
+    CAST(claimID AS VARCHAR(50)) AS claimID, \
+    gwDocumentID, \
+    gwDocExternalID, \
+    Name AS documentTitle, \
+    documentType, \
+    documentSubtype, \
+    author, \
+    documentDescription, \
+    policyNumber, \
+    doNotCreateActivity, \
+    inputMethod, \
+    mimeType, \
+    OrigDateCreated, \
+    sensitive, \
+    contentFilePath, \
+    contentRetrievalName, \
+    contentType, \
+    CC_Extract_file_Name \
+FROM %TABLE_NAME% \
+WHERE claimNumber = ? \
+    AND CC_Extract_file_Name = ? \
+    AND claimID IS NOT NULL \
+    AND gwDocumentID IS NOT NULL \
+    AND isDataMerged = 1 \
+    AND contentFilePath IS NOT NULL \
+    AND isIndexed = 0 \
+ORDER BY externalID
+
+# UPDATE query for batch indexing (setting batch/set metadata)
+# Sets: batchDocCount, batchID, jobID, setDocCount, setID, SetDocIndex, isIndexed=1
+db.query.update.indexing=UPDATE %TABLE_NAME% SET \
+    batchDocCount = ?, \
+    batchID = ?, \
+    jobID = ?, \
+    setDocCount = ?, \
+    setID = ?, \
+    SetDocIndex = ?, \
+    isIndexed = 1 \
+WHERE externalID = ?
+
+# SELECT query for fetching packaging documents by batchID list
+# Returns all columns needed for packaging CSV output
+# Missing columns from CC_Extract_Staging will be handled in Java as empty values
+db.query.select.packaging.by.batchids=SELECT \
+    externalID, \
+    claimNumber, \
+    CAST(claimID AS VARCHAR(50)) AS claimID, \
+    gwDocumentID, \
+    gwDocExternalID, \
+    Name AS documentTitle, \
+    documentType, \
+    documentSubtype, \
+    author, \
+    documentDescription, \
+    policyNumber, \
+    doNotCreateActivity, \
+    inputMethod, \
+    mimeType, \
+    OrigDateCreated, \
+    sensitive, \
+    contentFilePath, \
+    contentRetrievalName, \
+    contentType, \
+    batchDocCount, \
+    batchID, \
+    jobID, \
+    setDocCount, \
+    setID, \
+    SetDocIndex, \
+    CC_Extract_file_Name \
+FROM %TABLE_NAME% \
+WHERE batchID IN (%IN_CLAUSE%) \
+    AND isDataMerged = 1 \
+    AND isIndexed = 1 \
+ORDER BY batchID, setID, SetDocIndex
+
+# UPDATE query for marking documents as processed
+# Sets: isProcessed=1, DateProcessed=current timestamp
+db.query.update.processed=UPDATE %TABLE_NAME% SET \
+    isProcessed = 1, \
+    DateProcessed = ? \
+WHERE externalID = ?
+
+# ===========================================================================
+# END OF CONFIGURATION
+# ===========================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+-- ============================================================================
+-- CCDataMergeUtility - Step 3: Sync ClaimID Stored Procedure
+-- Purpose: Sync claimID from ClaimInfo table to CC_Extract_Staging 
+--          using claimNumber as join key
+-- 
+-- Data Flow:
+--   Step 2: CCDataMergeUtility loads CC Extract CSV into CC_Extract_Staging
+--   Step 3: THIS SP - syncs claimID from ClaimInfo (join on claimNumber)
+--   Step 4: SP syncs gwDocumentID from guidewireIDMapping (join on externalID)
+--   Step 5: SP syncs content columns from Wawa_Doc_Migration_Transit_Data
+--   Step 6: CCDataIndexAndPackagingUtility creates batch packages
+--   Step 7: WawaDocumentMigrationUtility injects documents
+-- 
+-- Source Table: ClaimInfo
+--   - ID (bigint) = claimID
+--   - ClaimNumber (varchar 40) = join key
+-- 
+-- Target Table: CC_Extract_Staging
+--   - claimID (bigint) = populated from ClaimInfo.ID
+--   - claimNumber (varchar 20) = join key
+-- 
+-- Note: This SP runs through ALL records each time it's executed
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- Drop existing procedure if exists
+IF OBJECT_ID('dbo.sp_SyncClaimIDToStaging', 'P') IS NOT NULL
+    DROP PROCEDURE [dbo].[sp_SyncClaimIDToStaging];
+GO
+
+CREATE PROCEDURE [dbo].[sp_SyncClaimIDToStaging]
+    @CC_Extract_file_Name VARCHAR(200) = NULL,  -- Optional: filter by specific file (NULL = all records)
+    @RowsProcessed INT OUTPUT,
+    @RowsSynced INT OUTPUT,
+    @RowsNotMatched INT OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @StartTime DATETIME2 = SYSDATETIME();
+    DECLARE @EndTime DATETIME2;
+    DECLARE @ErrorMessage NVARCHAR(MAX);
+    
+    -- Initialize output parameters
+    SET @RowsProcessed = 0;
+    SET @RowsSynced = 0;
+    SET @RowsNotMatched = 0;
+    
+    BEGIN TRY
+        PRINT '============================================================';
+        PRINT 'STEP 3: SYNC CLAIM ID - STARTED';
+        PRINT 'Start Time: ' + CONVERT(VARCHAR, @StartTime, 121);
+        IF @CC_Extract_file_Name IS NOT NULL
+            PRINT 'Filter: CC_Extract_file_Name = ' + @CC_Extract_file_Name;
+        ELSE
+            PRINT 'Filter: ALL records in CC_Extract_Staging';
+        PRINT '============================================================';
+        
+        -- Count total rows to process
+        SELECT @RowsProcessed = COUNT(*)
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name);
+        
+        PRINT '[INFO] Total rows to process: ' + CAST(@RowsProcessed AS VARCHAR);
+        
+        IF @RowsProcessed = 0
+        BEGIN
+            PRINT '[WARNING] No rows found. Exiting.';
+            RETURN;
+        END
+        
+        BEGIN TRANSACTION;
+        
+        -- ================================================================
+        -- STEP 1: Update CC_Extract_Staging.claimID from ClaimInfo.ID
+        --         where claimNumber matches
+        -- ================================================================
+        UPDATE stg
+        SET 
+            stg.[claimID] = ci.[ID]
+        FROM [dbo].[CC_Extract_Staging] stg
+        INNER JOIN [dbo].[ClaimInfo] ci
+            ON stg.[claimNumber] = ci.[ClaimNumber]
+        WHERE (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name);
+        
+        SET @RowsSynced = @@ROWCOUNT;
+        
+        PRINT '[STEP 1] Synced claimID for ' + CAST(@RowsSynced AS VARCHAR) + ' rows.';
+        
+        -- ================================================================
+        -- STEP 2: Count rows that had no matching claimNumber
+        -- ================================================================
+        SELECT @RowsNotMatched = COUNT(*)
+        FROM [dbo].[CC_Extract_Staging] stg
+        WHERE stg.[claimID] IS NULL
+          AND (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name)
+          AND NOT EXISTS (
+              SELECT 1 
+              FROM [dbo].[ClaimInfo] ci
+              WHERE ci.[ClaimNumber] = stg.[claimNumber]
+          );
+        
+        IF @RowsNotMatched > 0
+            PRINT '[STEP 2] ' + CAST(@RowsNotMatched AS VARCHAR) + ' rows have no matching claimNumber in ClaimInfo.';
+        
+        COMMIT TRANSACTION;
+        
+        SET @EndTime = SYSDATETIME();
+        
+        -- ================================================================
+        -- FINAL SUMMARY
+        -- ================================================================
+        PRINT '';
+        PRINT '============================================================';
+        PRINT 'STEP 3: SYNC CLAIM ID - COMPLETED';
+        PRINT '============================================================';
+        PRINT 'Start Time      : ' + CONVERT(VARCHAR, @StartTime, 121);
+        PRINT 'End Time        : ' + CONVERT(VARCHAR, @EndTime, 121);
+        PRINT 'Duration        : ' + CAST(DATEDIFF(SECOND, @StartTime, @EndTime) AS VARCHAR) + ' seconds';
+        PRINT '------------------------------------------------------------';
+        PRINT 'Rows Processed  : ' + CAST(@RowsProcessed AS VARCHAR);
+        PRINT 'Rows Synced     : ' + CAST(@RowsSynced AS VARCHAR) + ' (claimID populated)';
+        PRINT 'Rows Not Matched: ' + CAST(@RowsNotMatched AS VARCHAR) + ' (claimNumber not found in ClaimInfo)';
+        PRINT '============================================================';
+        
+        -- Show sample of synced rows
+        IF @RowsSynced > 0
+        BEGIN
+            PRINT '';
+            PRINT '--- SAMPLE SYNCED ROWS (first 5) ---';
+            SELECT TOP 5
+                stg.[UniqueID],
+                stg.[claimNumber],
+                stg.[claimID],
+                stg.[externalID],
+                stg.[Name]
+            FROM [dbo].[CC_Extract_Staging] stg
+            WHERE stg.[claimID] IS NOT NULL
+              AND (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name)
+            ORDER BY stg.[UniqueID] DESC;
+        END
+        
+        -- Show not matched rows if any
+        IF @RowsNotMatched > 0
+        BEGIN
+            PRINT '';
+            PRINT '--- NOT MATCHED ROWS (claimNumber not found in ClaimInfo) ---';
+            SELECT TOP 20
+                stg.[UniqueID],
+                stg.[claimNumber],
+                stg.[externalID],
+                stg.[Name]
+            FROM [dbo].[CC_Extract_Staging] stg
+            WHERE stg.[claimID] IS NULL
+              AND (@CC_Extract_file_Name IS NULL OR stg.[CC_Extract_file_Name] = @CC_Extract_file_Name)
+              AND NOT EXISTS (
+                  SELECT 1 
+                  FROM [dbo].[ClaimInfo] ci
+                  WHERE ci.[ClaimNumber] = stg.[claimNumber]
+              )
+            ORDER BY stg.[UniqueID];
+        END
+        
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0
+            ROLLBACK TRANSACTION;
+        
+        SET @ErrorMessage = ERROR_MESSAGE();
+        
+        PRINT '';
+        PRINT '============================================================';
+        PRINT 'STEP 3: SYNC CLAIM ID - FAILED';
+        PRINT 'Error: ' + @ErrorMessage;
+        PRINT '============================================================';
+        
+        -- Re-throw the error
+        THROW;
+    END CATCH
+END;
+GO
+
+PRINT '';
+PRINT '============================================================';
+PRINT 'Stored procedure [sp_SyncClaimIDToStaging] created successfully.';
+PRINT '';
+PRINT 'USAGE:';
+PRINT '  -- Sync ALL records:';
+PRINT '  DECLARE @Processed INT, @Synced INT, @NotMatched INT;';
+PRINT '  EXEC [dbo].[sp_SyncClaimIDToStaging]';
+PRINT '      @CC_Extract_file_Name = NULL,';
+PRINT '      @RowsProcessed = @Processed OUTPUT,';
+PRINT '      @RowsSynced = @Synced OUTPUT,';
+PRINT '      @RowsNotMatched = @NotMatched OUTPUT;';
+PRINT '';
+PRINT '  -- Sync specific file only:';
+PRINT '  EXEC [dbo].[sp_SyncClaimIDToStaging]';
+PRINT '      @CC_Extract_file_Name = ''conv_claims_extract_12192024.csv'',';
+PRINT '      @RowsProcessed = @Processed OUTPUT,';
+PRINT '      @RowsSynced = @Synced OUTPUT,';
+PRINT '      @RowsNotMatched = @NotMatched OUTPUT;';
+PRINT '';
+PRINT 'SOURCE: ClaimInfo.ID -> CC_Extract_Staging.claimID';
+PRINT 'JOIN:   ClaimInfo.ClaimNumber = CC_Extract_Staging.claimNumber';
+PRINT '============================================================';
+GO
+
