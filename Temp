@@ -1,1 +1,1699 @@
-temp
+package com.wawa.ace.migration.processor;
+
+import com.opencsv.CSVParser;
+import com.opencsv.CSVParserBuilder;
+import com.opencsv.CSVReader;
+import com.opencsv.CSVReaderBuilder;
+import com.opencsv.exceptions.CsvValidationException;
+import com.wawa.ace.migration.config.ConfigurationManager;
+import com.wawa.ace.migration.config.ContentSettings;
+import com.wawa.ace.migration.config.MigrationProperties;
+import com.wawa.ace.migration.config.TrackingSettings;
+import com.wawa.ace.migration.model.MigrationDocument;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.*;
+import java.nio.charset.Charset;
+import java.nio.file.Path;
+import java.util.*;
+
+/**
+ * Processor for reading and parsing CSV files.
+ * Converts CSV rows into MigrationDocument objects.
+ */
+public class CSVFileProcessor {
+    
+    private static final Logger logger = LogManager.getLogger(CSVFileProcessor.class);
+    
+    private final ConfigurationManager configManager;
+    private final MigrationProperties properties;
+    
+    public CSVFileProcessor(ConfigurationManager configManager) {
+        this.configManager = configManager;
+        this.properties = configManager.getProperties();
+    }
+    
+    /**
+     * Read all documents from a CSV file.
+     */
+    public List<MigrationDocument> readDocuments(Path csvFile) throws IOException, CsvValidationException {
+        return readDocuments(csvFile, csvFile.getFileName().toString());
+    }
+    
+    /**
+     * Read all documents from a CSV file with source file name.
+     */
+    public List<MigrationDocument> readDocuments(Path csvFile, String sourceFileName) 
+            throws IOException, CsvValidationException {
+        List<MigrationDocument> documents = new ArrayList<>();
+        
+        logger.info("Reading CSV file: {}", csvFile);
+        
+        char delimiter = properties.getCsvDelimiter();
+        Charset charset = Charset.forName(properties.getCsvEncoding());
+        
+        CSVParser parser = new CSVParserBuilder()
+                .withSeparator(delimiter)
+                .withQuoteChar('"')
+                .withIgnoreQuotations(false)
+                .build();
+        
+        try (Reader reader = new BufferedReader(new InputStreamReader(
+                new FileInputStream(csvFile.toFile()), charset));
+             CSVReader csvReader = new CSVReaderBuilder(reader)
+                     .withCSVParser(parser)
+                     .build()) {
+            
+            // Read header
+            String[] headers = csvReader.readNext();
+            if (headers == null || headers.length == 0) {
+                throw new IOException("CSV file is empty or has no headers: " + csvFile);
+            }
+            
+            // Create header index map
+            Map<String, Integer> headerIndex = new HashMap<>();
+            for (int i = 0; i < headers.length; i++) {
+                headerIndex.put(headers[i].trim(), i);
+            }
+            
+            logger.debug("CSV headers: {}", Arrays.toString(headers));
+            
+            // Get column indices for special fields
+            ContentSettings contentSettings = configManager.getMappingConfiguration().getContentSettings();
+            TrackingSettings trackingSettings = configManager.getMappingConfiguration().getTrackingSettings();
+            
+            Integer contentFilePathIdx = headerIndex.get(contentSettings.getContentFilePathColumn());
+            Integer contentRetrievalNameIdx = headerIndex.get(contentSettings.getContentRetrievalNameColumn());
+            Integer mimeTypeIdx = headerIndex.get(contentSettings.getMimeTypeColumn());
+            Integer externalIdIdx = headerIndex.get(trackingSettings.getExternalIdColumn());
+            Integer claimNumberIdx = headerIndex.get(trackingSettings.getClaimNumberColumn());
+            Integer claimIdIdx = headerIndex.get(trackingSettings.getClaimIdColumn());
+            Integer batchIdIdx = headerIndex.get(trackingSettings.getBatchIdColumn());
+            Integer documentTitleIdx = headerIndex.get("documentTitle");
+            Integer ccExtractFileNameIdx = headerIndex.get("CC_Extract_file_Name");
+            Integer gwDocExternalIDIdx = headerIndex.get("gwDocExternalID");
+            
+            // Validate required columns exist
+            if (externalIdIdx == null) {
+                throw new IOException("Missing required column: " + trackingSettings.getExternalIdColumn());
+            }
+            if (contentFilePathIdx == null) {
+                throw new IOException("Missing required column: " + contentSettings.getContentFilePathColumn());
+            }
+            
+            // Read data rows
+            String[] row;
+            int rowNumber = 1; // Start from 1 (after header)
+            
+            while ((row = csvReader.readNext()) != null) {
+                rowNumber++;
+                
+                if (row.length == 0 || (row.length == 1 && row[0].trim().isEmpty())) {
+                    logger.debug("Skipping empty row at line {}", rowNumber);
+                    continue;
+                }
+                
+                try {
+                    MigrationDocument doc = new MigrationDocument();
+                    doc.setRowNumber(rowNumber);
+                    doc.setSourceFileName(sourceFileName);
+                    
+                    // Build CSV data map
+                    Map<String, String> csvData = new LinkedHashMap<>();
+                    for (int i = 0; i < headers.length && i < row.length; i++) {
+                        csvData.put(headers[i].trim(), row[i] != null ? row[i].trim() : "");
+                    }
+                    doc.setCsvData(csvData);
+                    
+                    // Set special fields
+                    doc.setExternalId(getValueSafe(row, externalIdIdx));
+                    doc.setContentFilePath(getValueSafe(row, contentFilePathIdx));
+                    doc.setContentRetrievalName(getValueSafe(row, contentRetrievalNameIdx));
+                    doc.setMimeType(getValueSafe(row, mimeTypeIdx));
+                    doc.setClaimNumber(getValueSafe(row, claimNumberIdx));
+                    doc.setClaimId(getValueSafe(row, claimIdIdx));
+                    doc.setBatchId(getValueSafe(row, batchIdIdx));
+                    doc.setDocumentTitle(getValueSafe(row, documentTitleIdx));
+                    doc.setCcExtractFileName(getValueSafe(row, ccExtractFileNameIdx));
+                    doc.setGwDocExternalID(getValueSafe(row, gwDocExternalIDIdx));
+                    
+                    // Validate required fields
+                    if (doc.getExternalId() == null || doc.getExternalId().isEmpty()) {
+                        logger.warn("Row {} missing externalId, skipping", rowNumber);
+                        continue;
+                    }
+                    
+                    documents.add(doc);
+                    
+                } catch (Exception e) {
+                    logger.error("Error parsing row {}: {}", rowNumber, e.getMessage());
+                }
+            }
+        }
+        
+        logger.info("Read {} documents from {}", documents.size(), csvFile.getFileName());
+        return documents;
+    }
+    
+    /**
+     * Read documents in batches for memory efficiency.
+     * Returns an iterator that reads batches on demand.
+     */
+    public DocumentBatchIterator readDocumentsInBatches(Path csvFile, int batchSize) throws IOException {
+        return new DocumentBatchIterator(csvFile, batchSize, configManager);
+    }
+    
+    /**
+     * Get the headers from a CSV file.
+     */
+    public String[] getHeaders(Path csvFile) throws IOException, CsvValidationException {
+        char delimiter = properties.getCsvDelimiter();
+        Charset charset = Charset.forName(properties.getCsvEncoding());
+        
+        CSVParser parser = new CSVParserBuilder()
+                .withSeparator(delimiter)
+                .withQuoteChar('"')
+                .build();
+        
+        try (Reader reader = new BufferedReader(new InputStreamReader(
+                new FileInputStream(csvFile.toFile()), charset));
+             CSVReader csvReader = new CSVReaderBuilder(reader)
+                     .withCSVParser(parser)
+                     .build()) {
+            
+            return csvReader.readNext();
+        }
+    }
+    
+    /**
+     * Count the number of data rows in a CSV file (excluding header).
+     */
+    public int countRows(Path csvFile) throws IOException, CsvValidationException {
+        int count = 0;
+        char delimiter = properties.getCsvDelimiter();
+        Charset charset = Charset.forName(properties.getCsvEncoding());
+        
+        CSVParser parser = new CSVParserBuilder()
+                .withSeparator(delimiter)
+                .withQuoteChar('"')
+                .build();
+        
+        try (Reader reader = new BufferedReader(new InputStreamReader(
+                new FileInputStream(csvFile.toFile()), charset));
+             CSVReader csvReader = new CSVReaderBuilder(reader)
+                     .withCSVParser(parser)
+                     .build()) {
+            
+            // Skip header
+            csvReader.readNext();
+            
+            // Count rows
+            while (csvReader.readNext() != null) {
+                count++;
+            }
+        }
+        
+        return count;
+    }
+    
+    private String getValueSafe(String[] row, Integer index) {
+        if (index == null || index < 0 || index >= row.length) {
+            return null;
+        }
+        String value = row[index];
+        return value != null ? value.trim() : null;
+    }
+    
+    /**
+     * Iterator for reading documents in batches to conserve memory.
+     */
+    public static class DocumentBatchIterator implements Iterator<List<MigrationDocument>>, Closeable {
+        
+        private final CSVReader csvReader;
+        private final Reader reader;
+        private final int batchSize;
+        private final String[] headers;
+        private final Map<String, Integer> headerIndex;
+        private final String sourceFileName;
+        
+        private int currentRowNumber;
+        private boolean hasNext;
+        private String[] nextRow;
+        
+        // Column indices
+        private final Integer contentFilePathIdx;
+        private final Integer contentRetrievalNameIdx;
+        private final Integer mimeTypeIdx;
+        private final Integer externalIdIdx;
+        private final Integer claimNumberIdx;
+        private final Integer claimIdIdx;
+        private final Integer batchIdIdx;
+        private final Integer documentTitleIdx;
+        private final Integer ccExtractFileNameIdx;
+        private final Integer gwDocExternalIDIdx;
+        
+        public DocumentBatchIterator(Path csvFile, int batchSize, ConfigurationManager configManager) throws IOException {
+            this.batchSize = batchSize;
+            this.sourceFileName = csvFile.getFileName().toString();
+            this.currentRowNumber = 1;
+            
+            MigrationProperties properties = configManager.getProperties();
+            char delimiter = properties.getCsvDelimiter();
+            Charset charset = Charset.forName(properties.getCsvEncoding());
+            
+            CSVParser parser = new CSVParserBuilder()
+                    .withSeparator(delimiter)
+                    .withQuoteChar('"')
+                    .build();
+            
+            this.reader = new BufferedReader(new InputStreamReader(
+                    new FileInputStream(csvFile.toFile()), charset));
+            this.csvReader = new CSVReaderBuilder(reader)
+                    .withCSVParser(parser)
+                    .build();
+            
+            try {
+                // Read headers
+                this.headers = csvReader.readNext();
+                if (headers == null || headers.length == 0) {
+                    throw new IOException("CSV file is empty or has no headers");
+                }
+                
+                // Create header index
+                this.headerIndex = new HashMap<>();
+                for (int i = 0; i < headers.length; i++) {
+                    headerIndex.put(headers[i].trim(), i);
+                }
+                
+                // Get column indices
+                ContentSettings contentSettings = configManager.getMappingConfiguration().getContentSettings();
+                TrackingSettings trackingSettings = configManager.getMappingConfiguration().getTrackingSettings();
+                
+                this.contentFilePathIdx = headerIndex.get(contentSettings.getContentFilePathColumn());
+                this.contentRetrievalNameIdx = headerIndex.get(contentSettings.getContentRetrievalNameColumn());
+                this.mimeTypeIdx = headerIndex.get(contentSettings.getMimeTypeColumn());
+                this.externalIdIdx = headerIndex.get(trackingSettings.getExternalIdColumn());
+                this.claimNumberIdx = headerIndex.get(trackingSettings.getClaimNumberColumn());
+                this.claimIdIdx = headerIndex.get(trackingSettings.getClaimIdColumn());
+                this.batchIdIdx = headerIndex.get(trackingSettings.getBatchIdColumn());
+                this.documentTitleIdx = headerIndex.get("documentTitle");
+                this.ccExtractFileNameIdx = headerIndex.get("CC_Extract_file_Name");
+                this.gwDocExternalIDIdx = headerIndex.get("gwDocExternalID");
+                
+                // Read first row to check if there's data
+                this.nextRow = csvReader.readNext();
+                this.hasNext = (nextRow != null);
+            } catch (CsvValidationException e) {
+                throw new IOException("CSV validation error: " + e.getMessage(), e);
+            }
+        }
+        
+        @Override
+        public boolean hasNext() {
+            return hasNext;
+        }
+        
+        @Override
+        public List<MigrationDocument> next() {
+            if (!hasNext) {
+                throw new NoSuchElementException();
+            }
+            
+            List<MigrationDocument> batch = new ArrayList<>(batchSize);
+            
+            try {
+                while (nextRow != null && batch.size() < batchSize) {
+                    currentRowNumber++;
+                    
+                    if (nextRow.length > 0 && !(nextRow.length == 1 && nextRow[0].trim().isEmpty())) {
+                        MigrationDocument doc = parseRow(nextRow, currentRowNumber);
+                        if (doc != null) {
+                            batch.add(doc);
+                        }
+                    }
+                    
+                    nextRow = csvReader.readNext();
+                }
+                
+                hasNext = (nextRow != null);
+                
+            } catch (IOException | CsvValidationException e) {
+                throw new RuntimeException("Error reading CSV batch", e);
+            }
+            
+            return batch;
+        }
+        
+        private MigrationDocument parseRow(String[] row, int rowNumber) {
+            try {
+                MigrationDocument doc = new MigrationDocument();
+                doc.setRowNumber(rowNumber);
+                doc.setSourceFileName(sourceFileName);
+                
+                // Build CSV data map
+                Map<String, String> csvData = new LinkedHashMap<>();
+                for (int i = 0; i < headers.length && i < row.length; i++) {
+                    csvData.put(headers[i].trim(), row[i] != null ? row[i].trim() : "");
+                }
+                doc.setCsvData(csvData);
+                
+                // Set special fields
+                doc.setExternalId(getValueSafe(row, externalIdIdx));
+                doc.setContentFilePath(getValueSafe(row, contentFilePathIdx));
+                doc.setContentRetrievalName(getValueSafe(row, contentRetrievalNameIdx));
+                doc.setMimeType(getValueSafe(row, mimeTypeIdx));
+                doc.setClaimNumber(getValueSafe(row, claimNumberIdx));
+                doc.setClaimId(getValueSafe(row, claimIdIdx));
+                doc.setBatchId(getValueSafe(row, batchIdIdx));
+                doc.setDocumentTitle(getValueSafe(row, documentTitleIdx));
+                doc.setCcExtractFileName(getValueSafe(row, ccExtractFileNameIdx));
+                doc.setGwDocExternalID(getValueSafe(row, gwDocExternalIDIdx));
+                
+                // Validate required fields
+                if (doc.getExternalId() == null || doc.getExternalId().isEmpty()) {
+                    return null;
+                }
+                
+                return doc;
+                
+            } catch (Exception e) {
+                return null;
+            }
+        }
+        
+        private String getValueSafe(String[] row, Integer index) {
+            if (index == null || index < 0 || index >= row.length) {
+                return null;
+            }
+            String value = row[index];
+            return value != null ? value.trim() : null;
+        }
+        
+        @Override
+        public void close() throws IOException {
+            try {
+                if (csvReader != null) {
+                    csvReader.close();
+                }
+            } finally {
+                if (reader != null) {
+                    reader.close();
+                }
+            }
+        }
+    }
+}
+
+
+
+package com.wawa.ace.migration.service;
+
+import com.wawa.ace.migration.config.MigrationProperties;
+import com.wawa.ace.migration.model.MigrationDocument;
+import com.wawa.ace.migration.model.ProcessingResult;
+import com.wawa.ace.migration.util.PropertyConverter;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.sql.*;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Service for database operations using SQL Server.
+ * Manages connection pooling and tracking of migrated documents.
+ * 
+ * Table Schema:
+ * CREATE TABLE WawaMigratedDocuments (
+ *     id BIGINT IDENTITY(1,1) PRIMARY KEY,
+ *     claimNumber VARCHAR(20) NOT NULL,
+ *     claimID BIGINT NOT NULL,
+ *     externalID VARCHAR(100) NOT NULL UNIQUE,
+ *     batchID VARCHAR(50) NOT NULL,
+ *     document_GUID VARCHAR(50) NOT NULL,
+ *     DateCreated DATETIME NOT NULL DEFAULT GETDATE(),
+ *     packaging_filename VARCHAR(50) NOT NULL,
+ *     Status VARCHAR(10) NOT NULL,
+ *     CC_Extract_file_Name VARCHAR(200) NULL,
+ *     gwDocExternalID VARCHAR(200) NULL
+ * );
+ */
+public class DatabaseService implements AutoCloseable {
+    
+    private static final Logger logger = LogManager.getLogger(DatabaseService.class);
+    
+    // Column length constants matching actual DB schema
+    private static final int MAX_CLAIM_NUMBER_LENGTH = 20;
+    private static final int MAX_EXTERNAL_ID_LENGTH = 100;
+    private static final int MAX_BATCH_ID_LENGTH = 50;
+    private static final int MAX_DOCUMENT_GUID_LENGTH = 50;
+    private static final int MAX_PACKAGING_FILENAME_LENGTH = 50;
+    private static final int MAX_STATUS_LENGTH = 10;
+    private static final int MAX_CC_EXTRACT_FILE_NAME_LENGTH = 200;
+    private static final int MAX_GW_DOC_EXTERNAL_ID_LENGTH = 200;
+    
+    private final MigrationProperties properties;
+    private final HikariDataSource dataSource;
+    private final String tableName;
+    
+    // Pre-formatted SQL statements for performance
+    private final String insertDocumentSql;
+    private final String checkDuplicateSql;
+    private final String updateStatusSql;
+    
+    public DatabaseService(MigrationProperties properties) throws SQLException {
+        this.properties = properties;
+        this.tableName = properties.getDbTable();
+        
+        // Pre-format SQL statements
+        this.insertDocumentSql = String.format(
+                "INSERT INTO %s (claimNumber, claimID, externalID, batchID, document_GUID, DateCreated, packaging_filename, Status, CC_Extract_file_Name, gwDocExternalID) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", tableName);
+        this.checkDuplicateSql = String.format("SELECT COUNT(*) FROM %s WHERE externalID = ?", tableName);
+        this.updateStatusSql = String.format(
+                "UPDATE %s SET Status = ?, document_GUID = ?, DateCreated = ? WHERE externalID = ?", tableName);
+        
+        this.dataSource = createDataSource();
+        
+        // Verify connection
+        try (Connection conn = dataSource.getConnection()) {
+            logger.info("Database connection established successfully");
+            verifyTableExists(conn);
+        }
+    }
+    
+    private HikariDataSource createDataSource() {
+        HikariConfig config = new HikariConfig();
+        
+        // Build connection URL
+        String jdbcUrl;
+        if (properties.isDbIntegratedSecurity()) {
+            // Windows Integrated Authentication
+            jdbcUrl = String.format(
+                    "jdbc:sqlserver://%s:%d;databaseName=%s;integratedSecurity=true;trustServerCertificate=true;encrypt=false;",
+                    properties.getDbServer(),
+                    properties.getDbPort(),
+                    properties.getDbName()
+            );
+            logger.info("Using Windows Integrated Authentication");
+        } else {
+            // SQL Server Authentication with username/password
+            jdbcUrl = String.format(
+                    "jdbc:sqlserver://%s:%d;databaseName=%s;trustServerCertificate=true;encrypt=false;",
+                    properties.getDbServer(),
+                    properties.getDbPort(),
+                    properties.getDbName()
+            );
+            // Set username and password for SQL Server authentication
+            config.setUsername(properties.getDbUsername());
+            config.setPassword(properties.getDbPassword());
+            logger.info("Using SQL Server Authentication with username: {}", properties.getDbUsername());
+        }
+        
+        config.setJdbcUrl(jdbcUrl);
+        config.setDriverClassName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
+        
+        // Pool settings optimized for high-volume processing
+        config.setMaximumPoolSize(properties.getDbPoolSize());
+        config.setMinimumIdle(Math.min(5, properties.getDbPoolSize()));
+        config.setConnectionTimeout(properties.getDbConnectionTimeoutSeconds() * 1000L);
+        config.setIdleTimeout(300000); // 5 minutes
+        config.setMaxLifetime(1800000); // 30 minutes
+        config.setValidationTimeout(5000); // 5 seconds
+        
+        // Performance optimizations
+        config.addDataSourceProperty("cachePrepStmts", "true");
+        config.addDataSourceProperty("prepStmtCacheSize", "250");
+        config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+        config.addDataSourceProperty("useServerPrepStmts", "true");
+        config.addDataSourceProperty("rewriteBatchedStatements", "true");
+        
+        // Connection test
+        config.setConnectionTestQuery("SELECT 1");
+        
+        // Pool name for monitoring
+        config.setPoolName("WawaMigration-Pool");
+        
+        // Leak detection (helpful for debugging)
+        config.setLeakDetectionThreshold(60000); // 1 minute
+        
+        logger.info("Creating database connection pool: {}", jdbcUrl);
+        
+        return new HikariDataSource(config);
+    }
+    
+    /**
+     * Verify the tracking table exists (does not create it).
+     */
+    private void verifyTableExists(Connection conn) throws SQLException {
+        String checkSql = String.format(
+                "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '%s'", tableName);
+        
+        try (Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery(checkSql)) {
+            
+            if (rs.next() && rs.getInt(1) > 0) {
+                logger.info("Table {} exists and is ready", tableName);
+            } else {
+                logger.warn("Table {} does not exist! Please create it before running migration.", tableName);
+                throw new SQLException("Required table " + tableName + " does not exist");
+            }
+        }
+    }
+    
+    /**
+     * Check if a document with the given externalID already exists.
+     */
+    public boolean isDuplicate(String externalId) throws SQLException {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(checkDuplicateSql)) {
+            
+            stmt.setString(1, truncate(externalId, MAX_EXTERNAL_ID_LENGTH));
+            
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getInt(1) > 0;
+                }
+            }
+        }
+        return false;
+    }
+    
+    /**
+     * Check for duplicates in batch.
+     * Returns list of external IDs that already exist.
+     */
+    public List<String> checkDuplicates(List<String> externalIds) throws SQLException {
+        List<String> duplicates = new ArrayList<>();
+        
+        if (externalIds == null || externalIds.isEmpty()) {
+            return duplicates;
+        }
+        
+        // Process in chunks to avoid SQL parameter limits (max ~2100 in SQL Server)
+        int chunkSize = 1000;
+        for (int i = 0; i < externalIds.size(); i += chunkSize) {
+            int end = Math.min(i + chunkSize, externalIds.size());
+            List<String> chunk = externalIds.subList(i, end);
+            duplicates.addAll(checkDuplicatesChunk(chunk));
+        }
+        
+        if (!duplicates.isEmpty()) {
+            logger.warn("Found {} duplicate external IDs", duplicates.size());
+        }
+        
+        return duplicates;
+    }
+    
+    private List<String> checkDuplicatesChunk(List<String> externalIds) throws SQLException {
+        List<String> duplicates = new ArrayList<>();
+        
+        // Build IN clause with proper parameterization
+        StringBuilder inClause = new StringBuilder();
+        for (int i = 0; i < externalIds.size(); i++) {
+            if (i > 0) inClause.append(",");
+            inClause.append("?");
+        }
+        
+        String sql = String.format(
+                "SELECT externalID FROM %s WITH (NOLOCK) WHERE externalID IN (%s)",
+                tableName, inClause);
+        
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            
+            for (int i = 0; i < externalIds.size(); i++) {
+                stmt.setString(i + 1, truncate(externalIds.get(i), MAX_EXTERNAL_ID_LENGTH));
+            }
+            
+            try (ResultSet rs = stmt.executeQuery()) {
+                while (rs.next()) {
+                    duplicates.add(rs.getString("externalID"));
+                }
+            }
+        }
+        
+        return duplicates;
+    }
+    
+    /**
+     * Insert a successfully processed document record.
+     */
+    public void insertDocument(ProcessingResult result, String packagingFilename) throws SQLException {
+        MigrationDocument doc = result.getDocument();
+        
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(insertDocumentSql)) {
+            
+            setInsertParameters(stmt, doc, result.getDocumentGuid(), packagingFilename, 
+                    result.isSuccess() ? "SUCCESS" : "FAILED");
+            
+            stmt.executeUpdate();
+            logger.debug("Inserted document record: {}", doc.getExternalId());
+        }
+    }
+    
+    /**
+     * Batch insert multiple document records.
+     * Optimized for high-volume processing with proper resource management.
+     */
+    public void insertDocumentsBatch(List<ProcessingResult> results, String packagingFilename) throws SQLException {
+        if (results == null || results.isEmpty()) {
+            return;
+        }
+        
+        // Filter only successful results
+        List<ProcessingResult> successResults = results.stream()
+                .filter(ProcessingResult::isSuccess)
+                .toList();
+        
+        if (successResults.isEmpty()) {
+            return;
+        }
+        
+        Connection conn = null;
+        PreparedStatement stmt = null;
+        
+        try {
+            conn = dataSource.getConnection();
+            conn.setAutoCommit(false);
+            
+            stmt = conn.prepareStatement(insertDocumentSql);
+            
+            int batchCount = 0;
+            int totalInserted = 0;
+            
+            for (ProcessingResult result : successResults) {
+                MigrationDocument doc = result.getDocument();
+                
+                setInsertParameters(stmt, doc, result.getDocumentGuid(), packagingFilename, "SUCCESS");
+                stmt.addBatch();
+                batchCount++;
+                
+                // Execute batch every 500 records to manage memory
+                if (batchCount >= 500) {
+                    int[] counts = stmt.executeBatch();
+                    totalInserted += countSuccessful(counts);
+                    stmt.clearBatch();
+                    batchCount = 0;
+                }
+            }
+            
+            // Execute remaining batch
+            if (batchCount > 0) {
+                int[] counts = stmt.executeBatch();
+                totalInserted += countSuccessful(counts);
+            }
+            
+            conn.commit();
+            logger.info("Batch inserted {} document records", totalInserted);
+            
+        } catch (SQLException e) {
+            if (conn != null) {
+                try {
+                    conn.rollback();
+                } catch (SQLException rollbackEx) {
+                    logger.error("Error during rollback", rollbackEx);
+                }
+            }
+            throw e;
+        } finally {
+            // Proper resource cleanup
+            if (stmt != null) {
+                try {
+                    stmt.close();
+                } catch (SQLException e) {
+                    logger.warn("Error closing statement", e);
+                }
+            }
+            if (conn != null) {
+                try {
+                    conn.setAutoCommit(true);
+                    conn.close();
+                } catch (SQLException e) {
+                    logger.warn("Error closing connection", e);
+                }
+            }
+        }
+    }
+    
+    /**
+     * Set parameters for INSERT statement.
+     */
+    private void setInsertParameters(PreparedStatement stmt, MigrationDocument doc, 
+                                      String documentGuid, String packagingFilename, 
+                                      String status) throws SQLException {
+        // claimNumber VARCHAR(20)
+        stmt.setString(1, truncate(doc.getClaimNumber(), MAX_CLAIM_NUMBER_LENGTH));
+        
+        // claimID BIGINT
+        Long claimId = PropertyConverter.parseLongForDb(doc.getClaimId());
+        stmt.setLong(2, claimId != null ? claimId : 0L);
+        
+        // externalID VARCHAR(100)
+        stmt.setString(3, truncate(doc.getExternalId(), MAX_EXTERNAL_ID_LENGTH));
+        
+        // batchID VARCHAR(50)
+        stmt.setString(4, truncate(doc.getBatchId(), MAX_BATCH_ID_LENGTH));
+        
+        // document_GUID VARCHAR(50)
+        stmt.setString(5, truncate(documentGuid, MAX_DOCUMENT_GUID_LENGTH));
+        
+        // DateCreated DATETIME
+        stmt.setTimestamp(6, Timestamp.valueOf(LocalDateTime.now()));
+        
+        // packaging_filename VARCHAR(50)
+        stmt.setString(7, truncate(packagingFilename, MAX_PACKAGING_FILENAME_LENGTH));
+        
+        // Status VARCHAR(10)
+        stmt.setString(8, truncate(status, MAX_STATUS_LENGTH));
+        
+        // CC_Extract_file_Name VARCHAR(200)
+        stmt.setString(9, truncate(doc.getCcExtractFileName(), MAX_CC_EXTRACT_FILE_NAME_LENGTH));
+        
+        // gwDocExternalID VARCHAR(200)
+        stmt.setString(10, truncate(doc.getGwDocExternalID(), MAX_GW_DOC_EXTERNAL_ID_LENGTH));
+    }
+    
+    /**
+     * Count successful batch inserts.
+     */
+    private int countSuccessful(int[] counts) {
+        int count = 0;
+        for (int c : counts) {
+            if (c >= 0 || c == Statement.SUCCESS_NO_INFO) {
+                count++;
+            }
+        }
+        return count;
+    }
+    
+    /**
+     * Update the status of an existing document.
+     */
+    public void updateDocumentStatus(String externalId, String status, String documentGuid) throws SQLException {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(updateStatusSql)) {
+            
+            stmt.setString(1, truncate(status, MAX_STATUS_LENGTH));
+            stmt.setString(2, truncate(documentGuid, MAX_DOCUMENT_GUID_LENGTH));
+            stmt.setTimestamp(3, Timestamp.valueOf(LocalDateTime.now()));
+            stmt.setString(4, truncate(externalId, MAX_EXTERNAL_ID_LENGTH));
+            
+            int updated = stmt.executeUpdate();
+            if (updated > 0) {
+                logger.debug("Updated document status: {} -> {}", externalId, status);
+            }
+        }
+    }
+    
+    /**
+     * Truncate string to max length, handling null.
+     */
+    private String truncate(String value, int maxLength) {
+        if (value == null) {
+            return null;
+        }
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
+    }
+    
+    /**
+     * Get connection pool statistics for monitoring.
+     */
+    public String getPoolStats() {
+        if (dataSource.getHikariPoolMXBean() != null) {
+            return String.format(
+                    "Pool Stats: Active=%d, Idle=%d, Total=%d, Waiting=%d",
+                    dataSource.getHikariPoolMXBean().getActiveConnections(),
+                    dataSource.getHikariPoolMXBean().getIdleConnections(),
+                    dataSource.getHikariPoolMXBean().getTotalConnections(),
+                    dataSource.getHikariPoolMXBean().getThreadsAwaitingConnection()
+            );
+        }
+        return "Pool Stats: N/A";
+    }
+    
+    /**
+     * Test database connection.
+     */
+    public boolean testConnection() {
+        try (Connection conn = dataSource.getConnection()) {
+            return conn.isValid(5);
+        } catch (SQLException e) {
+            logger.error("Database connection test failed", e);
+            return false;
+        }
+    }
+    
+    /**
+     * Check if connection pool is healthy.
+     */
+    public boolean isHealthy() {
+        return dataSource != null && !dataSource.isClosed() && testConnection();
+    }
+    
+    @Override
+    public void close() {
+        if (dataSource != null && !dataSource.isClosed()) {
+            logger.info("Closing database connection pool...");
+            logger.info("Final pool stats: {}", getPoolStats());
+            dataSource.close();
+            logger.info("Database connection pool closed");
+        }
+    }
+}
+
+
+
+package com.wawa.ace.migration.model;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * Represents a document to be migrated to FileNet.
+ * Contains all CSV row data and metadata for processing.
+ */
+public class MigrationDocument {
+    
+    private int rowNumber;
+    private String externalId;
+    private String claimNumber;
+    private String claimId;
+    private String batchId;
+    private String contentFilePath;
+    private String contentRetrievalName;
+    private String mimeType;
+    private String documentTitle;
+    
+    // All CSV columns stored as key-value pairs
+    private Map<String, String> csvData;
+    
+    // Processing metadata
+    private String documentGuid;
+    private String sourceFileName;
+    private ProcessingStatus status;
+    private String errorMessage;
+    private String errorStackTrace;
+    private int retryCount;
+    
+    // Tracking fields from CC_Extract_Staging
+    private String ccExtractFileName;
+    private String gwDocExternalID;
+    
+    public MigrationDocument() {
+        this.csvData = new LinkedHashMap<>();
+        this.status = ProcessingStatus.PENDING;
+        this.retryCount = 0;
+    }
+    
+    public MigrationDocument(int rowNumber, Map<String, String> csvData) {
+        this.rowNumber = rowNumber;
+        this.csvData = new LinkedHashMap<>(csvData);
+        this.status = ProcessingStatus.PENDING;
+        this.retryCount = 0;
+    }
+    
+    // Getters and Setters
+    public int getRowNumber() {
+        return rowNumber;
+    }
+    
+    public void setRowNumber(int rowNumber) {
+        this.rowNumber = rowNumber;
+    }
+    
+    public String getExternalId() {
+        return externalId;
+    }
+    
+    public void setExternalId(String externalId) {
+        this.externalId = externalId;
+    }
+    
+    public String getClaimNumber() {
+        return claimNumber;
+    }
+    
+    public void setClaimNumber(String claimNumber) {
+        this.claimNumber = claimNumber;
+    }
+    
+    public String getClaimId() {
+        return claimId;
+    }
+    
+    public void setClaimId(String claimId) {
+        this.claimId = claimId;
+    }
+    
+    public String getBatchId() {
+        return batchId;
+    }
+    
+    public void setBatchId(String batchId) {
+        this.batchId = batchId;
+    }
+    
+    public String getContentFilePath() {
+        return contentFilePath;
+    }
+    
+    public void setContentFilePath(String contentFilePath) {
+        this.contentFilePath = contentFilePath;
+    }
+    
+    public String getContentRetrievalName() {
+        return contentRetrievalName;
+    }
+    
+    public void setContentRetrievalName(String contentRetrievalName) {
+        this.contentRetrievalName = contentRetrievalName;
+    }
+    
+    public String getMimeType() {
+        return mimeType;
+    }
+    
+    public void setMimeType(String mimeType) {
+        this.mimeType = mimeType;
+    }
+    
+    public String getDocumentTitle() {
+        return documentTitle;
+    }
+    
+    public void setDocumentTitle(String documentTitle) {
+        this.documentTitle = documentTitle;
+    }
+    
+    public Map<String, String> getCsvData() {
+        return csvData;
+    }
+    
+    public void setCsvData(Map<String, String> csvData) {
+        this.csvData = csvData;
+    }
+    
+    public String getCsvValue(String columnName) {
+        return csvData.get(columnName);
+    }
+    
+    public void setCsvValue(String columnName, String value) {
+        csvData.put(columnName, value);
+    }
+    
+    public String getDocumentGuid() {
+        return documentGuid;
+    }
+    
+    public void setDocumentGuid(String documentGuid) {
+        this.documentGuid = documentGuid;
+    }
+    
+    public String getSourceFileName() {
+        return sourceFileName;
+    }
+    
+    public void setSourceFileName(String sourceFileName) {
+        this.sourceFileName = sourceFileName;
+    }
+    
+    public ProcessingStatus getStatus() {
+        return status;
+    }
+    
+    public void setStatus(ProcessingStatus status) {
+        this.status = status;
+    }
+    
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+    
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+    
+    public String getErrorStackTrace() {
+        return errorStackTrace;
+    }
+    
+    public void setErrorStackTrace(String errorStackTrace) {
+        this.errorStackTrace = errorStackTrace;
+    }
+    
+    public int getRetryCount() {
+        return retryCount;
+    }
+    
+    public void setRetryCount(int retryCount) {
+        this.retryCount = retryCount;
+    }
+    
+    public void incrementRetryCount() {
+        this.retryCount++;
+    }
+    
+    public String getCcExtractFileName() {
+        return ccExtractFileName;
+    }
+    
+    public void setCcExtractFileName(String ccExtractFileName) {
+        this.ccExtractFileName = ccExtractFileName;
+    }
+    
+    public String getGwDocExternalID() {
+        return gwDocExternalID;
+    }
+    
+    public void setGwDocExternalID(String gwDocExternalID) {
+        this.gwDocExternalID = gwDocExternalID;
+    }
+    
+    public boolean isSuccess() {
+        return status == ProcessingStatus.SUCCESS;
+    }
+    
+    public boolean isFailed() {
+        return status == ProcessingStatus.FAILED;
+    }
+    
+    @Override
+    public String toString() {
+        return "MigrationDocument{" +
+                "rowNumber=" + rowNumber +
+                ", externalId='" + externalId + '\'' +
+                ", claimNumber='" + claimNumber + '\'' +
+                ", status=" + status +
+                '}';
+    }
+}
+
+
+
+
+
+-- ============================================================================
+-- CCDataMergeUtility - Alter WawaMigratedDocuments Table
+-- Purpose: Add new columns for tracking and joining with CC_Extract_Staging
+-- 
+-- New Columns:
+--   - CC_Extract_file_Name: Source extract file name for tracking
+--   - gwDocExternalID: Composite key (gwDocumentID~~~externalID) for easy joins
+-- 
+-- Benefits:
+--   - Easy tracking of which extract file each migrated document came from
+--   - Join with CC_Extract_Staging using gwDocExternalID for result tracking
+--   - Debugging and audit trail
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- ============================================================================
+-- Add CC_Extract_file_Name column (if not exists)
+-- ============================================================================
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns 
+    WHERE object_id = OBJECT_ID('dbo.WawaMigratedDocuments') 
+    AND name = 'CC_Extract_file_Name'
+)
+BEGIN
+    ALTER TABLE [dbo].[WawaMigratedDocuments]
+    ADD [CC_Extract_file_Name] VARCHAR(200) NULL;
+    
+    PRINT 'Column [CC_Extract_file_Name] added to WawaMigratedDocuments.';
+END
+ELSE
+BEGIN
+    PRINT 'Column [CC_Extract_file_Name] already exists. Skipping.';
+END
+GO
+
+-- ============================================================================
+-- Add gwDocExternalID column (if not exists)
+-- ============================================================================
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns 
+    WHERE object_id = OBJECT_ID('dbo.WawaMigratedDocuments') 
+    AND name = 'gwDocExternalID'
+)
+BEGIN
+    ALTER TABLE [dbo].[WawaMigratedDocuments]
+    ADD [gwDocExternalID] VARCHAR(200) NULL;
+    
+    PRINT 'Column [gwDocExternalID] added to WawaMigratedDocuments.';
+END
+ELSE
+BEGIN
+    PRINT 'Column [gwDocExternalID] already exists. Skipping.';
+END
+GO
+
+-- ============================================================================
+-- Create index on CC_Extract_file_Name for faster joins
+-- ============================================================================
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes 
+    WHERE name = 'IX_WawaMigratedDocuments_CC_Extract_file_Name' 
+    AND object_id = OBJECT_ID('dbo.WawaMigratedDocuments')
+)
+BEGIN
+    CREATE NONCLUSTERED INDEX [IX_WawaMigratedDocuments_CC_Extract_file_Name]
+    ON [dbo].[WawaMigratedDocuments] ([CC_Extract_file_Name]);
+    
+    PRINT 'Index [IX_WawaMigratedDocuments_CC_Extract_file_Name] created.';
+END
+ELSE
+BEGIN
+    PRINT 'Index [IX_WawaMigratedDocuments_CC_Extract_file_Name] already exists. Skipping.';
+END
+GO
+
+-- ============================================================================
+-- Create index on gwDocExternalID for faster joins with CC_Extract_Staging
+-- ============================================================================
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes 
+    WHERE name = 'IX_WawaMigratedDocuments_gwDocExternalID' 
+    AND object_id = OBJECT_ID('dbo.WawaMigratedDocuments')
+)
+BEGIN
+    CREATE NONCLUSTERED INDEX [IX_WawaMigratedDocuments_gwDocExternalID]
+    ON [dbo].[WawaMigratedDocuments] ([gwDocExternalID]);
+    
+    PRINT 'Index [IX_WawaMigratedDocuments_gwDocExternalID] created.';
+END
+ELSE
+BEGIN
+    PRINT 'Index [IX_WawaMigratedDocuments_gwDocExternalID] already exists. Skipping.';
+END
+GO
+
+-- ============================================================================
+-- Summary
+-- ============================================================================
+PRINT '';
+PRINT '============================================================';
+PRINT 'WawaMigratedDocuments Table Updated Successfully';
+PRINT '';
+PRINT 'New Columns Added:';
+PRINT '  - CC_Extract_file_Name (VARCHAR(200)) - Source extract file name';
+PRINT '  - gwDocExternalID (VARCHAR(200)) - Composite key for tracking';
+PRINT '';
+PRINT 'New Indexes Created:';
+PRINT '  - IX_WawaMigratedDocuments_CC_Extract_file_Name';
+PRINT '  - IX_WawaMigratedDocuments_gwDocExternalID';
+PRINT '';
+PRINT 'Sample Join Query:';
+PRINT '  SELECT m.*, s.isProcessed, s.DateProcessed';
+PRINT '  FROM WawaMigratedDocuments m';
+PRINT '  INNER JOIN CC_Extract_Staging s';
+PRINT '    ON m.gwDocExternalID = s.gwDocExternalID';
+PRINT '  WHERE m.CC_Extract_file_Name = ''your_file.csv'';';
+PRINT '============================================================';
+GO
+
+
+
+
+
+package com.wawanesa.ace.index.model;
+
+import java.util.Date;
+
+/**
+ * Data Transfer Object for ClaimCenter Document
+ * Used for indexing, batching, and packaging document metadata
+ */
+public class ClaimCenterDocumentDTO {
+    
+    // ==================== CORE FIELDS ====================
+    private String externalID;          // Unique identifier (Primary key for updates)
+    private String claimNumber;         // Claim number (used for grouping)
+    private String claimID;
+    private String gwDocumentID;
+    private String gwDocExternalID;     // Composite key: gwDocumentID~~~externalID
+    private String ccExtractFileName;   // CC_Extract_file_Name - source extract file
+    
+    // ==================== INDEXING FIELDS (Updated during Step 3-4) ====================
+    private Integer batchDocCount;      // Max documents per batch (e.g., 500)
+    private String batchID;             // Unique batch ID: wawa_<timestamp>
+    private String jobID;               // Job ID: wawa_migrate_<timestamp>
+    private Integer setDocCount;        // Max documents per set (e.g., 25)
+    private Integer setID;              // Set ID within batch (1, 2, 3...)
+    private Integer setDocIndex;        // Document index within set (1-25)
+    private Boolean isIndexed;          // Flag: indexing completed
+    private Boolean isDataMerged;       // Flag: data merge completed (query filter)
+    private Boolean isProcessed;        // Flag: packaging completed
+    private Date dateProcessed;         // Timestamp of packaging
+    
+    // ==================== PACKAGING OUTPUT FIELDS (Step 5) ====================
+    private String amount;
+    private String author;
+    private String claimant;
+    private String coverage;
+    private String customerID;
+    private String documentDescription;
+    private String documentSubtype;
+    private String documentTitle;
+    private String documentType;
+    private String doNotCreateActivity;
+    private String duplicate;
+    private String exposureID;
+    private String hidden;
+    private String inputMethod;
+    private String insuredName;
+    private String mimeType;
+    private String origDateCreated;
+    private String policyNumber;
+    private String primaryMembershipNumber;
+    private String reviewed;
+    private String sensitive;
+    private String contentFilePath;
+    private String contentRetrievalName;
+    private String contentType;         // Content type from CC_Extract_Staging
+    
+    // Metadata
+    private String csvFileName;
+    
+    // ==================== CONSTRUCTORS ====================
+    public ClaimCenterDocumentDTO() {
+    }
+    
+    // ==================== GETTERS AND SETTERS ====================
+    
+    public String getExternalID() {
+        return externalID;
+    }
+    
+    public void setExternalID(String externalID) {
+        this.externalID = externalID;
+    }
+    
+    public String getClaimNumber() {
+        return claimNumber;
+    }
+    
+    public void setClaimNumber(String claimNumber) {
+        this.claimNumber = claimNumber;
+    }
+    
+    public String getClaimID() {
+        return claimID;
+    }
+    
+    public void setClaimID(String claimID) {
+        this.claimID = claimID;
+    }
+    
+    public String getGwDocumentID() {
+        return gwDocumentID;
+    }
+    
+    public void setGwDocumentID(String gwDocumentID) {
+        this.gwDocumentID = gwDocumentID;
+    }
+    
+    public String getGwDocExternalID() {
+        return gwDocExternalID;
+    }
+    
+    public void setGwDocExternalID(String gwDocExternalID) {
+        this.gwDocExternalID = gwDocExternalID;
+    }
+    
+    public String getCcExtractFileName() {
+        return ccExtractFileName;
+    }
+    
+    public void setCcExtractFileName(String ccExtractFileName) {
+        this.ccExtractFileName = ccExtractFileName;
+    }
+    
+    public Integer getBatchDocCount() {
+        return batchDocCount;
+    }
+    
+    public void setBatchDocCount(Integer batchDocCount) {
+        this.batchDocCount = batchDocCount;
+    }
+    
+    public String getBatchID() {
+        return batchID;
+    }
+    
+    public void setBatchID(String batchID) {
+        this.batchID = batchID;
+    }
+    
+    public String getJobID() {
+        return jobID;
+    }
+    
+    public void setJobID(String jobID) {
+        this.jobID = jobID;
+    }
+    
+    public Integer getSetDocCount() {
+        return setDocCount;
+    }
+    
+    public void setSetDocCount(Integer setDocCount) {
+        this.setDocCount = setDocCount;
+    }
+    
+    public Integer getSetID() {
+        return setID;
+    }
+    
+    public void setSetID(Integer setID) {
+        this.setID = setID;
+    }
+    
+    public Integer getSetDocIndex() {
+        return setDocIndex;
+    }
+    
+    public void setSetDocIndex(Integer setDocIndex) {
+        this.setDocIndex = setDocIndex;
+    }
+    
+    public Boolean getIsIndexed() {
+        return isIndexed;
+    }
+    
+    public void setIsIndexed(Boolean isIndexed) {
+        this.isIndexed = isIndexed;
+    }
+    
+    public Boolean getIsDataMerged() {
+        return isDataMerged;
+    }
+    
+    public void setIsDataMerged(Boolean isDataMerged) {
+        this.isDataMerged = isDataMerged;
+    }
+    
+    public Boolean getIsProcessed() {
+        return isProcessed;
+    }
+    
+    public void setIsProcessed(Boolean isProcessed) {
+        this.isProcessed = isProcessed;
+    }
+    
+    public Date getDateProcessed() {
+        return dateProcessed;
+    }
+    
+    public void setDateProcessed(Date dateProcessed) {
+        this.dateProcessed = dateProcessed;
+    }
+    
+    public String getAmount() {
+        return amount;
+    }
+    
+    public void setAmount(String amount) {
+        this.amount = amount;
+    }
+    
+    public String getAuthor() {
+        return author;
+    }
+    
+    public void setAuthor(String author) {
+        this.author = author;
+    }
+    
+    public String getClaimant() {
+        return claimant;
+    }
+    
+    public void setClaimant(String claimant) {
+        this.claimant = claimant;
+    }
+    
+    public String getCoverage() {
+        return coverage;
+    }
+    
+    public void setCoverage(String coverage) {
+        this.coverage = coverage;
+    }
+    
+    public String getCustomerID() {
+        return customerID;
+    }
+    
+    public void setCustomerID(String customerID) {
+        this.customerID = customerID;
+    }
+    
+    public String getDocumentDescription() {
+        return documentDescription;
+    }
+    
+    public void setDocumentDescription(String documentDescription) {
+        this.documentDescription = documentDescription;
+    }
+    
+    public String getDocumentSubtype() {
+        return documentSubtype;
+    }
+    
+    public void setDocumentSubtype(String documentSubtype) {
+        this.documentSubtype = documentSubtype;
+    }
+    
+    public String getDocumentTitle() {
+        return documentTitle;
+    }
+    
+    public void setDocumentTitle(String documentTitle) {
+        this.documentTitle = documentTitle;
+    }
+    
+    public String getDocumentType() {
+        return documentType;
+    }
+    
+    public void setDocumentType(String documentType) {
+        this.documentType = documentType;
+    }
+    
+    public String getDoNotCreateActivity() {
+        return doNotCreateActivity;
+    }
+    
+    public void setDoNotCreateActivity(String doNotCreateActivity) {
+        this.doNotCreateActivity = doNotCreateActivity;
+    }
+    
+    public String getDuplicate() {
+        return duplicate;
+    }
+    
+    public void setDuplicate(String duplicate) {
+        this.duplicate = duplicate;
+    }
+    
+    public String getExposureID() {
+        return exposureID;
+    }
+    
+    public void setExposureID(String exposureID) {
+        this.exposureID = exposureID;
+    }
+    
+    public String getHidden() {
+        return hidden;
+    }
+    
+    public void setHidden(String hidden) {
+        this.hidden = hidden;
+    }
+    
+    public String getInputMethod() {
+        return inputMethod;
+    }
+    
+    public void setInputMethod(String inputMethod) {
+        this.inputMethod = inputMethod;
+    }
+    
+    public String getInsuredName() {
+        return insuredName;
+    }
+    
+    public void setInsuredName(String insuredName) {
+        this.insuredName = insuredName;
+    }
+    
+    public String getMimeType() {
+        return mimeType;
+    }
+    
+    public void setMimeType(String mimeType) {
+        this.mimeType = mimeType;
+    }
+    
+    public String getOrigDateCreated() {
+        return origDateCreated;
+    }
+    
+    public void setOrigDateCreated(String origDateCreated) {
+        this.origDateCreated = origDateCreated;
+    }
+    
+    public String getPolicyNumber() {
+        return policyNumber;
+    }
+    
+    public void setPolicyNumber(String policyNumber) {
+        this.policyNumber = policyNumber;
+    }
+    
+    public String getPrimaryMembershipNumber() {
+        return primaryMembershipNumber;
+    }
+    
+    public void setPrimaryMembershipNumber(String primaryMembershipNumber) {
+        this.primaryMembershipNumber = primaryMembershipNumber;
+    }
+    
+    public String getReviewed() {
+        return reviewed;
+    }
+    
+    public void setReviewed(String reviewed) {
+        this.reviewed = reviewed;
+    }
+    
+    public String getSensitive() {
+        return sensitive;
+    }
+    
+    public void setSensitive(String sensitive) {
+        this.sensitive = sensitive;
+    }
+    
+    public String getContentFilePath() {
+        return contentFilePath;
+    }
+    
+    public void setContentFilePath(String contentFilePath) {
+        this.contentFilePath = contentFilePath;
+    }
+    
+    public String getContentRetrievalName() {
+        return contentRetrievalName;
+    }
+    
+    public void setContentRetrievalName(String contentRetrievalName) {
+        this.contentRetrievalName = contentRetrievalName;
+    }
+    
+    public String getContentType() {
+        return contentType;
+    }
+    
+    public void setContentType(String contentType) {
+        this.contentType = contentType;
+    }
+    
+    public String getCsvFileName() {
+        return csvFileName;
+    }
+    
+    public void setCsvFileName(String csvFileName) {
+        this.csvFileName = csvFileName;
+    }
+    
+    /**
+     * Generates pipe-delimited packaging output line in specified column order
+     * Order: amount|author|batchDocCount|batchID|claimant|claimID|claimNumber|coverage|
+     *        customerID|documentDescription|documentSubtype|documentTitle|documentType|
+     *        doNotCreateActivity|duplicate|exposureID|gwDocumentID|hidden|inputMethod|
+     *        insuredName|jobID|mimeType|OrigDateCreated|policyNumber|primaryMembershipNumber|
+     *        reviewed|sensitive|setDocCount|setID|SetDocIndex|
+     *        contentFilePath|contentRetrievalName|CC_Extract_file_Name|gwDocExternalID
+     * 
+     * NEW columns added for tracking:
+     *   - CC_Extract_file_Name: Source extract file name (for joining with CC_Extract_Staging)
+     *   - gwDocExternalID: Composite key for easy tracking
+     */
+    public String toPackagingCSVLine() {
+        return String.join("|",
+            nullSafe(amount),
+            nullSafe(author),
+            nullSafe(batchDocCount),
+            nullSafe(batchID),
+            nullSafe(claimant),
+            nullSafe(claimID),
+            nullSafe(claimNumber),
+            nullSafe(coverage),
+            nullSafe(customerID),
+            nullSafe(documentDescription),
+            nullSafe(documentSubtype),
+            nullSafe(documentTitle),
+            nullSafe(documentType),
+            nullSafe(doNotCreateActivity),
+            nullSafe(duplicate),
+            nullSafe(exposureID),
+            nullSafe(gwDocumentID),
+            nullSafe(hidden),
+            nullSafe(inputMethod),
+            nullSafe(insuredName),
+            nullSafe(jobID),
+            nullSafe(mimeType),
+            nullSafe(origDateCreated),
+            nullSafe(policyNumber),
+            nullSafe(primaryMembershipNumber),
+            nullSafe(reviewed),
+            nullSafe(sensitive),
+            nullSafe(setDocCount),
+            nullSafe(setID),
+            nullSafe(setDocIndex),
+            nullSafe(contentFilePath),
+            nullSafe(contentRetrievalName),
+            nullSafe(ccExtractFileName),    // NEW: Source extract file name for tracking
+            nullSafe(gwDocExternalID)       // NEW: Composite key for tracking
+        );
+    }
+    
+    /**
+     * Returns packaging CSV header in correct column order (34 columns)
+     * NEW columns: CC_Extract_file_Name, gwDocExternalID (for tracking/joining with CC_Extract_Staging)
+     */
+    public static String getPackagingCSVHeader() {
+        return "amount|author|batchDocCount|batchID|claimant|claimID|claimNumber|coverage|" +
+               "customerID|documentDescription|documentSubtype|documentTitle|documentType|" +
+               "doNotCreateActivity|duplicate|exposureID|gwDocumentID|hidden|inputMethod|" +
+               "insuredName|jobID|mimeType|OrigDateCreated|policyNumber|primaryMembershipNumber|" +
+               "reviewed|sensitive|setDocCount|setID|SetDocIndex|" +
+               "contentFilePath|contentRetrievalName|CC_Extract_file_Name|gwDocExternalID";
+    }
+    
+    private String nullSafe(Object value) {
+        return value == null ? "" : value.toString();
+    }
+    
+    @Override
+    public String toString() {
+        return "ClaimCenterDocumentDTO{" +
+                "externalID='" + externalID + '\'' +
+                ", claimNumber='" + claimNumber + '\'' +
+                ", batchID='" + batchID + '\'' +
+                ", setID=" + setID +
+                ", setDocIndex=" + setDocIndex +
+                '}';
+    }
+}
+
