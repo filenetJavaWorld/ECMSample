@@ -1,1 +1,3746 @@
-temp
+-- ============================================================================
+-- CCDataMergeUtility - Alter WawaMigratedDocuments Table for Rollback Support
+-- Purpose: Add columns to track rollback status and enable re-commit
+-- 
+-- New Columns:
+--   - RollbackStatus: Status of rollback ('ROLLED_BACK', 'ROLLBACK_FAILED')
+--   - RollbackDate: When the rollback was performed
+--   - RollbackBatchID: Groups rollback operations for tracking
+--   - RollbackReason: Reason for rollback
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- ============================================================================
+-- Add RollbackStatus column (if not exists)
+-- ============================================================================
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns 
+    WHERE object_id = OBJECT_ID('dbo.WawaMigratedDocuments') 
+    AND name = 'RollbackStatus'
+)
+BEGIN
+    ALTER TABLE [dbo].[WawaMigratedDocuments]
+    ADD [RollbackStatus] VARCHAR(20) NULL;
+    
+    PRINT 'Column [RollbackStatus] added to WawaMigratedDocuments.';
+END
+ELSE
+BEGIN
+    PRINT 'Column [RollbackStatus] already exists. Skipping.';
+END
+GO
+
+-- ============================================================================
+-- Add RollbackDate column (if not exists)
+-- ============================================================================
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns 
+    WHERE object_id = OBJECT_ID('dbo.WawaMigratedDocuments') 
+    AND name = 'RollbackDate'
+)
+BEGIN
+    ALTER TABLE [dbo].[WawaMigratedDocuments]
+    ADD [RollbackDate] DATETIME2(3) NULL;
+    
+    PRINT 'Column [RollbackDate] added to WawaMigratedDocuments.';
+END
+ELSE
+BEGIN
+    PRINT 'Column [RollbackDate] already exists. Skipping.';
+END
+GO
+
+-- ============================================================================
+-- Add RollbackBatchID column (if not exists)
+-- ============================================================================
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns 
+    WHERE object_id = OBJECT_ID('dbo.WawaMigratedDocuments') 
+    AND name = 'RollbackBatchID'
+)
+BEGIN
+    ALTER TABLE [dbo].[WawaMigratedDocuments]
+    ADD [RollbackBatchID] VARCHAR(50) NULL;
+    
+    PRINT 'Column [RollbackBatchID] added to WawaMigratedDocuments.';
+END
+ELSE
+BEGIN
+    PRINT 'Column [RollbackBatchID] already exists. Skipping.';
+END
+GO
+
+-- ============================================================================
+-- Add RollbackReason column (if not exists)
+-- ============================================================================
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns 
+    WHERE object_id = OBJECT_ID('dbo.WawaMigratedDocuments') 
+    AND name = 'RollbackReason'
+)
+BEGIN
+    ALTER TABLE [dbo].[WawaMigratedDocuments]
+    ADD [RollbackReason] VARCHAR(500) NULL;
+    
+    PRINT 'Column [RollbackReason] added to WawaMigratedDocuments.';
+END
+ELSE
+BEGIN
+    PRINT 'Column [RollbackReason] already exists. Skipping.';
+END
+GO
+
+-- ============================================================================
+-- Create index on RollbackStatus for faster filtering
+-- ============================================================================
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes 
+    WHERE name = 'IX_WawaMigratedDocuments_RollbackStatus' 
+    AND object_id = OBJECT_ID('dbo.WawaMigratedDocuments')
+)
+BEGIN
+    CREATE NONCLUSTERED INDEX [IX_WawaMigratedDocuments_RollbackStatus]
+    ON [dbo].[WawaMigratedDocuments] ([RollbackStatus]);
+    
+    PRINT 'Index [IX_WawaMigratedDocuments_RollbackStatus] created.';
+END
+ELSE
+BEGIN
+    PRINT 'Index [IX_WawaMigratedDocuments_RollbackStatus] already exists. Skipping.';
+END
+GO
+
+-- ============================================================================
+-- Create index on RollbackBatchID for tracking rollback batches
+-- ============================================================================
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes 
+    WHERE name = 'IX_WawaMigratedDocuments_RollbackBatchID' 
+    AND object_id = OBJECT_ID('dbo.WawaMigratedDocuments')
+)
+BEGIN
+    CREATE NONCLUSTERED INDEX [IX_WawaMigratedDocuments_RollbackBatchID]
+    ON [dbo].[WawaMigratedDocuments] ([RollbackBatchID]);
+    
+    PRINT 'Index [IX_WawaMigratedDocuments_RollbackBatchID] created.';
+END
+ELSE
+BEGIN
+    PRINT 'Index [IX_WawaMigratedDocuments_RollbackBatchID] already exists. Skipping.';
+END
+GO
+
+-- ============================================================================
+-- Summary
+-- ============================================================================
+PRINT '';
+PRINT '============================================================';
+PRINT 'WawaMigratedDocuments Table Updated for Rollback Support';
+PRINT '';
+PRINT 'New Columns Added:';
+PRINT '  - RollbackStatus (VARCHAR(20)) - Rollback status tracking';
+PRINT '  - RollbackDate (DATETIME2(3)) - When rollback was performed';
+PRINT '  - RollbackBatchID (VARCHAR(50)) - Groups rollback operations';
+PRINT '  - RollbackReason (VARCHAR(500)) - Reason for rollback';
+PRINT '';
+PRINT 'New Indexes Created:';
+PRINT '  - IX_WawaMigratedDocuments_RollbackStatus';
+PRINT '  - IX_WawaMigratedDocuments_RollbackBatchID';
+PRINT '============================================================';
+GO
+
+
+
+
+-- ============================================================================
+-- CCDataMergeUtility - Create RollbackBatch Table
+-- Purpose: Track rollback operations for audit and reporting
+-- 
+-- This table records each rollback operation including:
+--   - Scope (FILE, BATCH, DATE, SELECTIVE)
+--   - What was rolled back
+--   - Success/failure counts
+--   - Status of the rollback operation
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT];
+GO
+
+-- ============================================================================
+-- Create RollbackBatch Table (if not exists)
+-- ============================================================================
+IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID('dbo.RollbackBatch') AND type = 'U')
+BEGIN
+    CREATE TABLE [dbo].[RollbackBatch]
+    (
+        -- Primary Key
+        [RollbackBatchID]       VARCHAR(50)     NOT NULL
+            CONSTRAINT [PK_RollbackBatch] PRIMARY KEY CLUSTERED,
+        
+        -- Rollback operation details
+        [CreatedDate]           DATETIME2(3)    NOT NULL
+            CONSTRAINT [DF_RollbackBatch_CreatedDate] DEFAULT (GETDATE()),
+        
+        [RollbackScope]         VARCHAR(20)     NOT NULL,   -- 'FILE', 'BATCH', 'DATE', 'SELECTIVE'
+        [ScopeValue]            VARCHAR(500)    NOT NULL,   -- The filter value used
+        [RollbackReason]        VARCHAR(500)    NULL,       -- Reason for rollback
+        
+        -- Document counts
+        [TotalDocuments]        INT             NOT NULL,
+        [RolledBackCount]       INT             NOT NULL
+            CONSTRAINT [DF_RollbackBatch_RolledBackCount] DEFAULT (0),
+        [FailedCount]           INT             NOT NULL
+            CONSTRAINT [DF_RollbackBatch_FailedCount] DEFAULT (0),
+        [StagingResetCount]     INT             NOT NULL
+            CONSTRAINT [DF_RollbackBatch_StagingResetCount] DEFAULT (0),
+        
+        -- Status tracking
+        [Status]                VARCHAR(20)     NOT NULL,   -- 'PENDING', 'IN_PROGRESS', 'COMPLETED', 'PARTIAL', 'FAILED'
+        [CompletedDate]         DATETIME2(3)    NULL,
+        [ErrorMessage]          VARCHAR(1000)   NULL,
+        
+        -- Dry run indicator
+        [IsDryRun]              BIT             NOT NULL
+            CONSTRAINT [DF_RollbackBatch_IsDryRun] DEFAULT (0)
+    );
+    
+    PRINT 'Table [RollbackBatch] created successfully.';
+END
+ELSE
+BEGIN
+    PRINT 'Table [RollbackBatch] already exists. Skipping creation.';
+END
+GO
+
+-- ============================================================================
+-- Create indexes for common queries
+-- ============================================================================
+
+-- Index on Status for filtering active/completed rollbacks
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes 
+    WHERE name = 'IX_RollbackBatch_Status' 
+    AND object_id = OBJECT_ID('dbo.RollbackBatch')
+)
+BEGIN
+    CREATE NONCLUSTERED INDEX [IX_RollbackBatch_Status]
+    ON [dbo].[RollbackBatch] ([Status]);
+    
+    PRINT 'Index [IX_RollbackBatch_Status] created.';
+END
+GO
+
+-- Index on CreatedDate for date-based queries
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes 
+    WHERE name = 'IX_RollbackBatch_CreatedDate' 
+    AND object_id = OBJECT_ID('dbo.RollbackBatch')
+)
+BEGIN
+    CREATE NONCLUSTERED INDEX [IX_RollbackBatch_CreatedDate]
+    ON [dbo].[RollbackBatch] ([CreatedDate]);
+    
+    PRINT 'Index [IX_RollbackBatch_CreatedDate] created.';
+END
+GO
+
+-- Index on RollbackScope for scope-based queries
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes 
+    WHERE name = 'IX_RollbackBatch_RollbackScope' 
+    AND object_id = OBJECT_ID('dbo.RollbackBatch')
+)
+BEGIN
+    CREATE NONCLUSTERED INDEX [IX_RollbackBatch_RollbackScope]
+    ON [dbo].[RollbackBatch] ([RollbackScope]);
+    
+    PRINT 'Index [IX_RollbackBatch_RollbackScope] created.';
+END
+GO
+
+-- ============================================================================
+-- Summary
+-- ============================================================================
+PRINT '';
+PRINT '============================================================';
+PRINT 'RollbackBatch Table Created Successfully';
+PRINT '';
+PRINT 'Columns:';
+PRINT '  - RollbackBatchID (PK) - Unique identifier for rollback batch';
+PRINT '  - CreatedDate - When rollback was initiated';
+PRINT '  - RollbackScope - FILE, BATCH, DATE, or SELECTIVE';
+PRINT '  - ScopeValue - The filter value used';
+PRINT '  - RollbackReason - Reason for rollback';
+PRINT '  - TotalDocuments - Total documents in scope';
+PRINT '  - RolledBackCount - Successfully rolled back';
+PRINT '  - FailedCount - Failed to rollback';
+PRINT '  - StagingResetCount - CC_Extract_Staging records reset';
+PRINT '  - Status - PENDING, IN_PROGRESS, COMPLETED, PARTIAL, FAILED';
+PRINT '  - CompletedDate - When rollback completed';
+PRINT '  - ErrorMessage - Error details if failed';
+PRINT '  - IsDryRun - If this was a dry run';
+PRINT '';
+PRINT 'Indexes Created:';
+PRINT '  - IX_RollbackBatch_Status';
+PRINT '  - IX_RollbackBatch_CreatedDate';
+PRINT '  - IX_RollbackBatch_RollbackScope';
+PRINT '============================================================';
+GO
+
+
+
+
+
+
+package com.wawa.ace.migration;
+
+import com.wawa.ace.migration.config.PropertiesValidator;
+import com.wawa.ace.migration.config.RollbackProperties;
+import com.wawa.ace.migration.model.RollbackResult;
+import com.wawa.ace.migration.report.RollbackReportGenerator;
+import com.wawa.ace.migration.service.DatabaseService;
+import com.wawa.ace.migration.service.FileNetService;
+import com.wawa.ace.migration.service.RollbackService;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+/**
+ * Main entry point for WawaDocumentRollbackUtility.
+ * 
+ * This utility rolls back migrated documents from FileNet and resets
+ * CC_Extract_Staging for re-commit capability.
+ * 
+ * Usage:
+ *   java -jar WawaDocumentRollbackUtility.jar
+ *   
+ * Configuration:
+ *   All settings are read from config/WawaDocumentRollbackUtiltity.properties
+ *   
+ * Process Flow:
+ *   1. Load and validate properties
+ *   2. Connect to database and FileNet
+ *   3. Query documents to rollback based on scope
+ *   4. Delete documents from FileNet
+ *   5. Update WawaMigratedDocuments with rollback status
+ *   6. Reset CC_Extract_Staging flags for re-commit
+ *   7. Generate reports and reprocess CSV
+ */
+public class RollbackApp {
+    
+    private static final Logger logger = LogManager.getLogger(RollbackApp.class);
+    
+    private static final String DEFAULT_PROPERTIES_FILE = "config/WawaDocumentRollbackUtiltity.properties";
+    private static final String LOG4J2_CONFIG_PROPERTY = "log4j2.configurationFile";
+    
+    public static void main(String[] args) {
+        int exitCode = 0;
+        
+        try {
+            // Configure Log4j2
+            configureLogging();
+            
+            logger.info("============================================================");
+            logger.info("       WAWA DOCUMENT ROLLBACK UTILITY - Starting");
+            logger.info("============================================================");
+            logger.info("Version: 1.0.0");
+            logger.info("Working Directory: {}", System.getProperty("user.dir"));
+            
+            // Find and load properties file
+            String propertiesPath = findPropertiesFile();
+            logger.info("Loading configuration from: {}", propertiesPath);
+            
+            RollbackProperties properties = new RollbackProperties(propertiesPath);
+            logger.info("Configuration loaded successfully");
+            logger.info("Rollback Scope: {} = {}", 
+                    properties.getRollbackScope(), properties.getRollbackScopeValue());
+            
+            // Validate properties
+            PropertiesValidator validator = new PropertiesValidator(properties);
+            if (!validator.validate()) {
+                logger.error("Configuration validation failed. Please fix the errors and try again.");
+                logger.error(validator.getValidationSummary());
+                System.exit(1);
+            }
+            
+            // Execute rollback
+            RollbackResult result = executeRollback(properties);
+            
+            // Generate reports
+            if (result != null) {
+                RollbackReportGenerator reportGenerator = new RollbackReportGenerator(properties);
+                reportGenerator.generateReports(result);
+                
+                // Log final status
+                logger.info("============================================================");
+                logger.info("       WAWA DOCUMENT ROLLBACK UTILITY - Completed");
+                logger.info("============================================================");
+                logger.info(result.getSummary());
+                
+                if (result.hasFailures()) {
+                    exitCode = 2; // Partial success
+                    logger.warn("Some documents failed to rollback. Check reports for details.");
+                }
+            }
+            
+        } catch (Exception e) {
+            logger.error("Rollback utility failed with error: {}", e.getMessage(), e);
+            exitCode = 1;
+        }
+        
+        System.exit(exitCode);
+    }
+    
+    /**
+     * Configure Log4j2 from external configuration file
+     */
+    private static void configureLogging() {
+        // Try to find log4j2.xml in config folder
+        String[] configPaths = {
+                "config/Log4j2.xml",
+                "Log4j2.xml",
+                "../config/Log4j2.xml"
+        };
+        
+        for (String configPath : configPaths) {
+            Path path = Paths.get(configPath);
+            if (Files.exists(path)) {
+                System.setProperty(LOG4J2_CONFIG_PROPERTY, path.toAbsolutePath().toString());
+                break;
+            }
+        }
+    }
+    
+    /**
+     * Find the properties file
+     */
+    private static String findPropertiesFile() {
+        String[] possiblePaths = {
+                DEFAULT_PROPERTIES_FILE,
+                "WawaDocumentRollbackUtiltity.properties",
+                "../config/WawaDocumentRollbackUtiltity.properties"
+        };
+        
+        for (String path : possiblePaths) {
+            File file = new File(path);
+            if (file.exists()) {
+                return file.getAbsolutePath();
+            }
+        }
+        
+        // Not found - return default path (will fail with meaningful error)
+        return DEFAULT_PROPERTIES_FILE;
+    }
+    
+    /**
+     * Execute the rollback operation
+     */
+    private static RollbackResult executeRollback(RollbackProperties properties) throws Exception {
+        DatabaseService databaseService = null;
+        FileNetService fileNetService = null;
+        RollbackService rollbackService = null;
+        
+        try {
+            // Initialize database service
+            logger.info("Initializing database connection...");
+            databaseService = new DatabaseService(properties);
+            
+            if (properties.isValidateDatabaseConnection()) {
+                if (!databaseService.testConnection()) {
+                    throw new RuntimeException("Database connection test failed");
+                }
+                logger.info("Database connection validated successfully");
+            }
+            
+            // Initialize FileNet service (skip if dry run)
+            if (!properties.isDryRun()) {
+                logger.info("Initializing FileNet connection...");
+                fileNetService = new FileNetService(properties);
+                
+                if (properties.isValidateFileNetConnection()) {
+                    if (!fileNetService.testConnection()) {
+                        throw new RuntimeException("FileNet connection test failed");
+                    }
+                    logger.info("FileNet connection validated successfully");
+                    logger.info("FileNet: {}", fileNetService.getConnectionInfo());
+                }
+            } else {
+                logger.info("DRY RUN mode - Skipping FileNet connection");
+                // Create a dummy FileNet service for dry run
+                fileNetService = null;
+            }
+            
+            // Create and execute rollback service
+            rollbackService = new RollbackService(properties, databaseService, 
+                    fileNetService != null ? fileNetService : createDryRunFileNetService(properties));
+            
+            return rollbackService.executeRollback();
+            
+        } finally {
+            // Close resources
+            if (rollbackService != null) {
+                try {
+                    rollbackService.close();
+                } catch (Exception e) {
+                    logger.warn("Error closing rollback service", e);
+                }
+            }
+            
+            if (fileNetService != null) {
+                try {
+                    fileNetService.close();
+                } catch (Exception e) {
+                    logger.warn("Error closing FileNet service", e);
+                }
+            }
+            
+            if (databaseService != null) {
+                try {
+                    databaseService.close();
+                } catch (Exception e) {
+                    logger.warn("Error closing database service", e);
+                }
+            }
+        }
+    }
+    
+    /**
+     * Create a mock FileNet service for dry run mode
+     */
+    private static FileNetService createDryRunFileNetService(RollbackProperties properties) {
+        // Return null - RollbackService handles dry run mode by not calling FileNet
+        return null;
+    }
+}
+
+
+package com.wawa.ace.migration.config;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Validates all required properties before execution.
+ * Ensures all configuration is valid and resources are accessible.
+ */
+public class PropertiesValidator {
+    
+    private static final Logger logger = LogManager.getLogger(PropertiesValidator.class);
+    
+    private final RollbackProperties properties;
+    private final List<String> errors;
+    private final List<String> warnings;
+    
+    public PropertiesValidator(RollbackProperties properties) {
+        this.properties = properties;
+        this.errors = new ArrayList<>();
+        this.warnings = new ArrayList<>();
+    }
+    
+    /**
+     * Validate all properties and return validation result.
+     * 
+     * @return true if all validations pass, false otherwise
+     */
+    public boolean validate() {
+        errors.clear();
+        warnings.clear();
+        
+        logger.info("Validating configuration...");
+        
+        validateRollbackConfiguration();
+        validateDatabaseConfiguration();
+        validateFileNetConfiguration();
+        validateOutputConfiguration();
+        validateValidationConfiguration();
+        
+        // Log results
+        if (!warnings.isEmpty()) {
+            logger.warn("Validation warnings:");
+            warnings.forEach(w -> logger.warn("  - {}", w));
+        }
+        
+        if (!errors.isEmpty()) {
+            logger.error("Validation errors:");
+            errors.forEach(e -> logger.error("  - {}", e));
+            return false;
+        }
+        
+        logger.info("Configuration validation passed");
+        return true;
+    }
+    
+    private void validateRollbackConfiguration() {
+        logger.debug("Validating rollback configuration...");
+        
+        // Rollback scope is validated during property parsing
+        
+        // Validate scope value
+        if (properties.getRollbackScopeValue() == null || properties.getRollbackScopeValue().isEmpty()) {
+            errors.add("rollback.scope.value is required");
+        }
+        
+        // Scope-specific validation
+        switch (properties.getRollbackScope()) {
+            case FILE:
+                if (!properties.getRollbackScopeValue().toLowerCase().endsWith(".csv")) {
+                    warnings.add("FILE scope value doesn't end with .csv: " + properties.getRollbackScopeValue());
+                }
+                break;
+                
+            case DATE:
+                validateDateFormat(properties.getDateFrom(), "rollback.scope.value (from date)");
+                validateDateFormat(properties.getDateTo(), "rollback.scope.value (to date)");
+                break;
+                
+            case SELECTIVE:
+                if (properties.getSelectiveIds().isEmpty()) {
+                    errors.add("SELECTIVE scope requires non-empty list of IDs");
+                } else {
+                    logger.info("SELECTIVE scope: {} IDs loaded", properties.getSelectiveIds().size());
+                }
+                break;
+                
+            case BATCH:
+                if (properties.getRollbackScopeValue().length() > 50) {
+                    errors.add("BATCH scope value exceeds maximum length of 50 characters");
+                }
+                break;
+        }
+        
+        // Dry run info
+        if (properties.isDryRun()) {
+            logger.info("DRY RUN MODE ENABLED - No actual changes will be made");
+        }
+    }
+    
+    private void validateDateFormat(String date, String fieldName) {
+        if (date == null || date.isEmpty()) {
+            errors.add(fieldName + " is required for DATE scope");
+            return;
+        }
+        
+        // Basic date format validation (YYYY-MM-DD)
+        if (!date.matches("\\d{4}-\\d{2}-\\d{2}")) {
+            errors.add(fieldName + " must be in YYYY-MM-DD format: " + date);
+        }
+    }
+    
+    private void validateDatabaseConfiguration() {
+        logger.debug("Validating database configuration...");
+        
+        if (properties.getDbServer() == null || properties.getDbServer().isEmpty()) {
+            errors.add("db.server is required");
+        }
+        
+        if (properties.getDbPort() <= 0 || properties.getDbPort() > 65535) {
+            errors.add("db.port must be between 1 and 65535");
+        }
+        
+        if (properties.getDbName() == null || properties.getDbName().isEmpty()) {
+            errors.add("db.name is required");
+        }
+        
+        // If not using integrated security, username is required
+        if (!properties.isDbIntegratedSecurity()) {
+            if (properties.getDbUsername() == null || properties.getDbUsername().isEmpty()) {
+                errors.add("db.username is required when db.integrated.security=false");
+            }
+            if (properties.getDbPassword() == null || properties.getDbPassword().isEmpty()) {
+                warnings.add("db.password is empty - ensure this is intentional");
+            }
+        }
+        
+        if (properties.getDbPoolSize() <= 0) {
+            errors.add("db.pool.size must be greater than 0");
+        }
+        
+        if (properties.getDbConnectionTimeoutSeconds() <= 0) {
+            errors.add("db.connection.timeout.seconds must be greater than 0");
+        }
+    }
+    
+    private void validateFileNetConfiguration() {
+        logger.debug("Validating FileNet configuration...");
+        
+        if (properties.getFileNetUri() == null || properties.getFileNetUri().isEmpty()) {
+            errors.add("filenet.uri is required");
+        } else if (!properties.getFileNetUri().startsWith("http://") && 
+                   !properties.getFileNetUri().startsWith("https://")) {
+            errors.add("filenet.uri must start with http:// or https://");
+        }
+        
+        if (properties.getFileNetUsername() == null || properties.getFileNetUsername().isEmpty()) {
+            errors.add("filenet.username is required");
+        }
+        
+        if (properties.getFileNetPassword() == null || properties.getFileNetPassword().isEmpty()) {
+            errors.add("filenet.password is required");
+        }
+        
+        if (properties.getFileNetObjectStore() == null || properties.getFileNetObjectStore().isEmpty()) {
+            errors.add("filenet.objectstore is required");
+        }
+        
+        if (properties.getFileNetBatchSize() <= 0) {
+            errors.add("filenet.batch.size must be greater than 0");
+        } else if (properties.getFileNetBatchSize() > 100) {
+            warnings.add("filenet.batch.size is large (" + properties.getFileNetBatchSize() + 
+                        "). Consider using 50 or less for better error handling.");
+        }
+    }
+    
+    private void validateOutputConfiguration() {
+        logger.debug("Validating output configuration...");
+        
+        if (properties.getOutputBasePath() == null || properties.getOutputBasePath().isEmpty()) {
+            errors.add("output.base.path is required");
+            return;
+        }
+        
+        Path basePath = Path.of(properties.getOutputBasePath());
+        if (!Files.exists(basePath)) {
+            try {
+                Files.createDirectories(basePath);
+                logger.info("Created output base directory: {}", basePath);
+            } catch (Exception e) {
+                errors.add("Cannot create output.base.path directory: " + e.getMessage());
+                return;
+            }
+        }
+        
+        // Ensure subdirectories can be created
+        try {
+            Path reportsPath = properties.getReportsPath();
+            if (!Files.exists(reportsPath)) {
+                Files.createDirectories(reportsPath);
+                logger.info("Created reports directory: {}", reportsPath);
+            }
+            
+            Path reprocessPath = properties.getReprocessPath();
+            if (!Files.exists(reprocessPath)) {
+                Files.createDirectories(reprocessPath);
+                logger.info("Created reprocess directory: {}", reprocessPath);
+            }
+        } catch (Exception e) {
+            errors.add("Cannot create output subdirectories: " + e.getMessage());
+        }
+    }
+    
+    private void validateValidationConfiguration() {
+        logger.debug("Validating validation configuration...");
+        
+        if (properties.getMaxDocumentsToRollback() < 0) {
+            errors.add("validation.max.documents cannot be negative");
+        } else if (properties.getMaxDocumentsToRollback() > 0) {
+            logger.info("Maximum documents to rollback limit: {}", properties.getMaxDocumentsToRollback());
+        }
+    }
+    
+    /**
+     * Get list of validation errors
+     */
+    public List<String> getErrors() {
+        return new ArrayList<>(errors);
+    }
+    
+    /**
+     * Get list of validation warnings
+     */
+    public List<String> getWarnings() {
+        return new ArrayList<>(warnings);
+    }
+    
+    /**
+     * Check if there are any errors
+     */
+    public boolean hasErrors() {
+        return !errors.isEmpty();
+    }
+    
+    /**
+     * Check if there are any warnings
+     */
+    public boolean hasWarnings() {
+        return !warnings.isEmpty();
+    }
+    
+    /**
+     * Get formatted validation summary
+     */
+    public String getValidationSummary() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Validation Summary:\n");
+        sb.append("==================\n");
+        
+        if (errors.isEmpty() && warnings.isEmpty()) {
+            sb.append("All validations passed.\n");
+        } else {
+            if (!errors.isEmpty()) {
+                sb.append("Errors (").append(errors.size()).append("):\n");
+                errors.forEach(e -> sb.append("  [ERROR] ").append(e).append("\n"));
+            }
+            if (!warnings.isEmpty()) {
+                sb.append("Warnings (").append(warnings.size()).append("):\n");
+                warnings.forEach(w -> sb.append("  [WARN] ").append(w).append("\n"));
+            }
+        }
+        
+        return sb.toString();
+    }
+}
+
+package com.wawa.ace.migration.config;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Properties;
+
+/**
+ * Configuration properties for WawaDocumentRollbackUtility.
+ * Loads all settings from properties file and provides typed accessors.
+ */
+public class RollbackProperties {
+    
+    private static final Logger logger = LogManager.getLogger(RollbackProperties.class);
+    
+    private final Properties properties;
+    private final String propertiesFilePath;
+    
+    // Rollback configuration
+    private RollbackScope rollbackScope;
+    private String rollbackScopeValue;
+    private String rollbackReason;
+    private boolean dryRun;
+    
+    // Database configuration
+    private String dbServer;
+    private int dbPort;
+    private String dbName;
+    private boolean dbIntegratedSecurity;
+    private String dbUsername;
+    private String dbPassword;
+    private int dbPoolSize;
+    private int dbConnectionTimeoutSeconds;
+    private String tableMigratedDocuments;
+    private String tableStaging;
+    private String tableRollbackBatch;
+    
+    // FileNet configuration
+    private String fileNetUri;
+    private String fileNetUsername;
+    private String fileNetPassword;
+    private String fileNetStanza;
+    private String fileNetObjectStore;
+    private int fileNetBatchSize;
+    
+    // Output configuration
+    private String outputBasePath;
+    private String outputFolderReports;
+    private String outputFolderReprocess;
+    private String outputFolderLogs;
+    
+    // Report configuration
+    private boolean generateReport;
+    private boolean generateReprocessCsv;
+    
+    // Validation configuration
+    private boolean validateFileNetConnection;
+    private boolean validateDatabaseConnection;
+    private int maxDocumentsToRollback;
+    
+    // Selective rollback - list of gwDocExternalIDs
+    private List<String> selectiveIds;
+    
+    // Date range for DATE scope
+    private String dateFrom;
+    private String dateTo;
+    
+    public RollbackProperties(String propertiesFilePath) throws IOException {
+        this.propertiesFilePath = propertiesFilePath;
+        this.properties = new Properties();
+        this.selectiveIds = new ArrayList<>();
+        
+        loadProperties();
+        parseProperties();
+    }
+    
+    private void loadProperties() throws IOException {
+        Path path = Paths.get(propertiesFilePath);
+        if (!Files.exists(path)) {
+            throw new IOException("Properties file not found: " + propertiesFilePath);
+        }
+        
+        try (FileInputStream fis = new FileInputStream(path.toFile())) {
+            properties.load(fis);
+            logger.info("Loaded properties from: {}", propertiesFilePath);
+        }
+    }
+    
+    private void parseProperties() throws IOException {
+        // Rollback configuration
+        this.rollbackScope = RollbackScope.fromString(getRequiredProperty("rollback.scope"));
+        this.rollbackScopeValue = getRequiredProperty("rollback.scope.value");
+        this.rollbackReason = getProperty("rollback.reason", "Rollback requested");
+        this.dryRun = getBooleanProperty("rollback.dryrun", false);
+        
+        // Parse scope-specific values
+        parseScopeSpecificValues();
+        
+        // Database configuration
+        this.dbServer = getRequiredProperty("db.server");
+        this.dbPort = getIntProperty("db.port", 1433);
+        this.dbName = getRequiredProperty("db.name");
+        this.dbIntegratedSecurity = getBooleanProperty("db.integrated.security", true);
+        this.dbUsername = getProperty("db.username", "");
+        this.dbPassword = getProperty("db.password", "");
+        this.dbPoolSize = getIntProperty("db.pool.size", 10);
+        this.dbConnectionTimeoutSeconds = getIntProperty("db.connection.timeout.seconds", 30);
+        this.tableMigratedDocuments = getProperty("db.table.migrated.documents", "WawaMigratedDocuments");
+        this.tableStaging = getProperty("db.table.staging", "CC_Extract_Staging");
+        this.tableRollbackBatch = getProperty("db.table.rollback.batch", "RollbackBatch");
+        
+        // FileNet configuration
+        this.fileNetUri = getRequiredProperty("filenet.uri");
+        this.fileNetUsername = getRequiredProperty("filenet.username");
+        this.fileNetPassword = getRequiredProperty("filenet.password");
+        this.fileNetStanza = getProperty("filenet.stanza", "FileNetP8WSI");
+        this.fileNetObjectStore = getRequiredProperty("filenet.objectstore");
+        this.fileNetBatchSize = getIntProperty("filenet.batch.size", 50);
+        
+        // Output configuration
+        this.outputBasePath = getRequiredProperty("output.base.path");
+        this.outputFolderReports = getProperty("output.folder.reports", "Reports");
+        this.outputFolderReprocess = getProperty("output.folder.reprocess", "Reprocess");
+        this.outputFolderLogs = getProperty("output.folder.logs", "Logs");
+        
+        // Report configuration
+        this.generateReport = getBooleanProperty("report.generate", true);
+        this.generateReprocessCsv = getBooleanProperty("report.generate.reprocess.csv", true);
+        
+        // Validation configuration
+        this.validateFileNetConnection = getBooleanProperty("validation.filenet.connection", true);
+        this.validateDatabaseConnection = getBooleanProperty("validation.database.connection", true);
+        this.maxDocumentsToRollback = getIntProperty("validation.max.documents", 0);
+        
+        logger.info("Configuration parsed successfully");
+    }
+    
+    private void parseScopeSpecificValues() throws IOException {
+        switch (rollbackScope) {
+            case DATE:
+                // Parse date range: single date or "from,to"
+                if (rollbackScopeValue.contains(",")) {
+                    String[] dates = rollbackScopeValue.split(",");
+                    if (dates.length != 2) {
+                        throw new IllegalArgumentException(
+                                "DATE scope requires single date or 'from,to' format: " + rollbackScopeValue);
+                    }
+                    this.dateFrom = dates[0].trim();
+                    this.dateTo = dates[1].trim();
+                } else {
+                    this.dateFrom = rollbackScopeValue.trim();
+                    this.dateTo = rollbackScopeValue.trim();
+                }
+                break;
+                
+            case SELECTIVE:
+                // Load IDs from file
+                Path idFilePath = Paths.get(rollbackScopeValue);
+                if (!Files.exists(idFilePath)) {
+                    throw new IOException("Selective rollback ID file not found: " + rollbackScopeValue);
+                }
+                this.selectiveIds = Files.readAllLines(idFilePath);
+                // Remove empty lines and trim
+                this.selectiveIds = selectiveIds.stream()
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty() && !s.startsWith("#"))
+                        .toList();
+                if (selectiveIds.isEmpty()) {
+                    throw new IllegalArgumentException("Selective rollback ID file is empty: " + rollbackScopeValue);
+                }
+                logger.info("Loaded {} IDs from selective rollback file", selectiveIds.size());
+                break;
+                
+            default:
+                // FILE and BATCH scope use the value directly
+                break;
+        }
+    }
+    
+    // Helper methods for property access
+    
+    private String getRequiredProperty(String key) {
+        String value = properties.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException("Required property missing or empty: " + key);
+        }
+        return value.trim();
+    }
+    
+    private String getProperty(String key, String defaultValue) {
+        String value = properties.getProperty(key);
+        return (value != null && !value.trim().isEmpty()) ? value.trim() : defaultValue;
+    }
+    
+    private int getIntProperty(String key, int defaultValue) {
+        String value = properties.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            logger.warn("Invalid integer for property {}: {}, using default: {}", key, value, defaultValue);
+            return defaultValue;
+        }
+    }
+    
+    private boolean getBooleanProperty(String key, boolean defaultValue) {
+        String value = properties.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        return Boolean.parseBoolean(value.trim());
+    }
+    
+    // Getters
+    
+    public RollbackScope getRollbackScope() {
+        return rollbackScope;
+    }
+    
+    public String getRollbackScopeValue() {
+        return rollbackScopeValue;
+    }
+    
+    public String getRollbackReason() {
+        return rollbackReason;
+    }
+    
+    public boolean isDryRun() {
+        return dryRun;
+    }
+    
+    public String getDbServer() {
+        return dbServer;
+    }
+    
+    public int getDbPort() {
+        return dbPort;
+    }
+    
+    public String getDbName() {
+        return dbName;
+    }
+    
+    public boolean isDbIntegratedSecurity() {
+        return dbIntegratedSecurity;
+    }
+    
+    public String getDbUsername() {
+        return dbUsername;
+    }
+    
+    public String getDbPassword() {
+        return dbPassword;
+    }
+    
+    public int getDbPoolSize() {
+        return dbPoolSize;
+    }
+    
+    public int getDbConnectionTimeoutSeconds() {
+        return dbConnectionTimeoutSeconds;
+    }
+    
+    public String getTableMigratedDocuments() {
+        return tableMigratedDocuments;
+    }
+    
+    public String getTableStaging() {
+        return tableStaging;
+    }
+    
+    public String getTableRollbackBatch() {
+        return tableRollbackBatch;
+    }
+    
+    public String getFileNetUri() {
+        return fileNetUri;
+    }
+    
+    public String getFileNetUsername() {
+        return fileNetUsername;
+    }
+    
+    public String getFileNetPassword() {
+        return fileNetPassword;
+    }
+    
+    public String getFileNetStanza() {
+        return fileNetStanza;
+    }
+    
+    public String getFileNetObjectStore() {
+        return fileNetObjectStore;
+    }
+    
+    public int getFileNetBatchSize() {
+        return fileNetBatchSize;
+    }
+    
+    public String getOutputBasePath() {
+        return outputBasePath;
+    }
+    
+    public String getOutputFolderReports() {
+        return outputFolderReports;
+    }
+    
+    public String getOutputFolderReprocess() {
+        return outputFolderReprocess;
+    }
+    
+    public String getOutputFolderLogs() {
+        return outputFolderLogs;
+    }
+    
+    public boolean isGenerateReport() {
+        return generateReport;
+    }
+    
+    public boolean isGenerateReprocessCsv() {
+        return generateReprocessCsv;
+    }
+    
+    public boolean isValidateFileNetConnection() {
+        return validateFileNetConnection;
+    }
+    
+    public boolean isValidateDatabaseConnection() {
+        return validateDatabaseConnection;
+    }
+    
+    public int getMaxDocumentsToRollback() {
+        return maxDocumentsToRollback;
+    }
+    
+    public List<String> getSelectiveIds() {
+        return selectiveIds;
+    }
+    
+    public String getDateFrom() {
+        return dateFrom;
+    }
+    
+    public String getDateTo() {
+        return dateTo;
+    }
+    
+    public String getPropertiesFilePath() {
+        return propertiesFilePath;
+    }
+    
+    /**
+     * Get full path to reports folder
+     */
+    public Path getReportsPath() {
+        return Paths.get(outputBasePath, outputFolderReports);
+    }
+    
+    /**
+     * Get full path to reprocess folder
+     */
+    public Path getReprocessPath() {
+        return Paths.get(outputBasePath, outputFolderReprocess);
+    }
+    
+    /**
+     * Get full path to logs folder
+     */
+    public Path getLogsPath() {
+        return Paths.get(outputBasePath, outputFolderLogs);
+    }
+    
+    @Override
+    public String toString() {
+        return "RollbackProperties{" +
+                "rollbackScope=" + rollbackScope +
+                ", rollbackScopeValue='" + rollbackScopeValue + '\'' +
+                ", dryRun=" + dryRun +
+                ", dbServer='" + dbServer + '\'' +
+                ", dbName='" + dbName + '\'' +
+                ", fileNetObjectStore='" + fileNetObjectStore + '\'' +
+                ", outputBasePath='" + outputBasePath + '\'' +
+                '}';
+    }
+}
+
+package com.wawa.ace.migration.config;
+
+/**
+ * Enum defining the scope of rollback operation.
+ * Determines which documents will be selected for rollback.
+ */
+public enum RollbackScope {
+    
+    /**
+     * Rollback by CC_Extract_file_Name
+     * All documents from a specific CC Extract CSV file
+     */
+    FILE("CC_Extract_file_Name"),
+    
+    /**
+     * Rollback by batchID
+     * All documents in a specific batch
+     */
+    BATCH("batchID"),
+    
+    /**
+     * Rollback by date range
+     * All documents migrated within a date range
+     */
+    DATE("DateCreated"),
+    
+    /**
+     * Rollback selective documents
+     * Specific documents from a list of gwDocExternalID
+     */
+    SELECTIVE("gwDocExternalID");
+    
+    private final String columnName;
+    
+    RollbackScope(String columnName) {
+        this.columnName = columnName;
+    }
+    
+    public String getColumnName() {
+        return columnName;
+    }
+    
+    /**
+     * Parse scope from string value (case-insensitive)
+     */
+    public static RollbackScope fromString(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException("Rollback scope cannot be null or empty");
+        }
+        
+        try {
+            return valueOf(value.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(
+                    "Invalid rollback scope: '" + value + "'. Valid values: FILE, BATCH, DATE, SELECTIVE");
+        }
+    }
+}
+
+package com.wawa.ace.migration.config;
+
+/**
+ * Enum defining the status of a rollback operation.
+ */
+public enum RollbackStatus {
+    
+    /**
+     * Rollback batch created but not started
+     */
+    PENDING("PENDING"),
+    
+    /**
+     * Rollback in progress
+     */
+    IN_PROGRESS("IN_PROGRESS"),
+    
+    /**
+     * Rollback completed successfully (all documents rolled back)
+     */
+    COMPLETED("COMPLETED"),
+    
+    /**
+     * Rollback partially completed (some documents failed)
+     */
+    PARTIAL("PARTIAL"),
+    
+    /**
+     * Rollback failed completely
+     */
+    FAILED("FAILED");
+    
+    private final String value;
+    
+    RollbackStatus(String value) {
+        this.value = value;
+    }
+    
+    public String getValue() {
+        return value;
+    }
+    
+    @Override
+    public String toString() {
+        return value;
+    }
+}
+
+package com.wawa.ace.migration.model;
+
+import com.wawa.ace.migration.config.RollbackScope;
+import com.wawa.ace.migration.config.RollbackStatus;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+
+/**
+ * Model representing a rollback batch operation.
+ * Tracks the status and statistics of a rollback operation.
+ */
+public class RollbackBatch {
+    
+    private static final DateTimeFormatter ID_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
+    
+    private String rollbackBatchId;
+    private LocalDateTime createdDate;
+    private RollbackScope rollbackScope;
+    private String scopeValue;
+    private String rollbackReason;
+    private int totalDocuments;
+    private int rolledBackCount;
+    private int failedCount;
+    private int stagingResetCount;
+    private RollbackStatus status;
+    private LocalDateTime completedDate;
+    private String errorMessage;
+    private boolean isDryRun;
+    
+    // Default constructor
+    public RollbackBatch() {
+        this.createdDate = LocalDateTime.now();
+        this.rollbackBatchId = generateBatchId();
+        this.status = RollbackStatus.PENDING;
+        this.rolledBackCount = 0;
+        this.failedCount = 0;
+        this.stagingResetCount = 0;
+    }
+    
+    /**
+     * Generate unique batch ID
+     */
+    private String generateBatchId() {
+        return "RB_" + ID_FORMATTER.format(LocalDateTime.now());
+    }
+    
+    /**
+     * Create a new rollback batch
+     */
+    public static RollbackBatch create(RollbackScope scope, String scopeValue, String reason, boolean isDryRun) {
+        RollbackBatch batch = new RollbackBatch();
+        batch.rollbackScope = scope;
+        batch.scopeValue = scopeValue;
+        batch.rollbackReason = reason;
+        batch.isDryRun = isDryRun;
+        return batch;
+    }
+    
+    /**
+     * Mark batch as in progress
+     */
+    public void markInProgress() {
+        this.status = RollbackStatus.IN_PROGRESS;
+    }
+    
+    /**
+     * Mark batch as completed
+     */
+    public void markCompleted() {
+        this.completedDate = LocalDateTime.now();
+        if (failedCount == 0) {
+            this.status = RollbackStatus.COMPLETED;
+        } else if (rolledBackCount > 0) {
+            this.status = RollbackStatus.PARTIAL;
+        } else {
+            this.status = RollbackStatus.FAILED;
+        }
+    }
+    
+    /**
+     * Mark batch as failed
+     */
+    public void markFailed(String errorMessage) {
+        this.completedDate = LocalDateTime.now();
+        this.status = RollbackStatus.FAILED;
+        this.errorMessage = errorMessage;
+    }
+    
+    /**
+     * Increment success count
+     */
+    public void incrementRolledBackCount() {
+        this.rolledBackCount++;
+    }
+    
+    /**
+     * Increment failure count
+     */
+    public void incrementFailedCount() {
+        this.failedCount++;
+    }
+    
+    /**
+     * Increment staging reset count
+     */
+    public void incrementStagingResetCount() {
+        this.stagingResetCount++;
+    }
+    
+    // Getters and Setters
+    
+    public String getRollbackBatchId() {
+        return rollbackBatchId;
+    }
+    
+    public void setRollbackBatchId(String rollbackBatchId) {
+        this.rollbackBatchId = rollbackBatchId;
+    }
+    
+    public LocalDateTime getCreatedDate() {
+        return createdDate;
+    }
+    
+    public void setCreatedDate(LocalDateTime createdDate) {
+        this.createdDate = createdDate;
+    }
+    
+    public RollbackScope getRollbackScope() {
+        return rollbackScope;
+    }
+    
+    public void setRollbackScope(RollbackScope rollbackScope) {
+        this.rollbackScope = rollbackScope;
+    }
+    
+    public String getScopeValue() {
+        return scopeValue;
+    }
+    
+    public void setScopeValue(String scopeValue) {
+        this.scopeValue = scopeValue;
+    }
+    
+    public String getRollbackReason() {
+        return rollbackReason;
+    }
+    
+    public void setRollbackReason(String rollbackReason) {
+        this.rollbackReason = rollbackReason;
+    }
+    
+    public int getTotalDocuments() {
+        return totalDocuments;
+    }
+    
+    public void setTotalDocuments(int totalDocuments) {
+        this.totalDocuments = totalDocuments;
+    }
+    
+    public int getRolledBackCount() {
+        return rolledBackCount;
+    }
+    
+    public void setRolledBackCount(int rolledBackCount) {
+        this.rolledBackCount = rolledBackCount;
+    }
+    
+    public int getFailedCount() {
+        return failedCount;
+    }
+    
+    public void setFailedCount(int failedCount) {
+        this.failedCount = failedCount;
+    }
+    
+    public int getStagingResetCount() {
+        return stagingResetCount;
+    }
+    
+    public void setStagingResetCount(int stagingResetCount) {
+        this.stagingResetCount = stagingResetCount;
+    }
+    
+    public RollbackStatus getStatus() {
+        return status;
+    }
+    
+    public void setStatus(RollbackStatus status) {
+        this.status = status;
+    }
+    
+    public LocalDateTime getCompletedDate() {
+        return completedDate;
+    }
+    
+    public void setCompletedDate(LocalDateTime completedDate) {
+        this.completedDate = completedDate;
+    }
+    
+    public String getErrorMessage() {
+        return errorMessage;
+    }
+    
+    public void setErrorMessage(String errorMessage) {
+        this.errorMessage = errorMessage;
+    }
+    
+    public boolean isDryRun() {
+        return isDryRun;
+    }
+    
+    public void setDryRun(boolean dryRun) {
+        isDryRun = dryRun;
+    }
+    
+    /**
+     * Get success rate as percentage
+     */
+    public double getSuccessRate() {
+        if (totalDocuments == 0) return 0.0;
+        return (double) rolledBackCount / totalDocuments * 100.0;
+    }
+    
+    /**
+     * Get duration in seconds
+     */
+    public long getDurationSeconds() {
+        if (completedDate == null) return 0;
+        return java.time.Duration.between(createdDate, completedDate).getSeconds();
+    }
+    
+    @Override
+    public String toString() {
+        return "RollbackBatch{" +
+                "rollbackBatchId='" + rollbackBatchId + '\'' +
+                ", rollbackScope=" + rollbackScope +
+                ", scopeValue='" + scopeValue + '\'' +
+                ", totalDocuments=" + totalDocuments +
+                ", rolledBackCount=" + rolledBackCount +
+                ", failedCount=" + failedCount +
+                ", status=" + status +
+                ", isDryRun=" + isDryRun +
+                '}';
+    }
+}
+
+package com.wawa.ace.migration.model;
+
+import java.time.LocalDateTime;
+
+/**
+ * Model representing a document to be rolled back.
+ * Contains all information needed to delete from FileNet and reset staging.
+ */
+public class RollbackDocument {
+    
+    // From WawaMigratedDocuments table
+    private long id;
+    private String claimNumber;
+    private long claimId;
+    private String externalId;
+    private String batchId;
+    private String documentGuid;          // FileNet document GUID
+    private LocalDateTime dateCreated;
+    private String packagingFilename;
+    private String status;
+    private String ccExtractFileName;
+    private String gwDocExternalId;
+    
+    // Rollback status
+    private boolean rolledBack;
+    private boolean rollbackFailed;
+    private String rollbackErrorMessage;
+    private boolean stagingReset;
+    
+    // Default constructor
+    public RollbackDocument() {
+    }
+    
+    // Builder pattern for easy construction
+    public static Builder builder() {
+        return new Builder();
+    }
+    
+    public static class Builder {
+        private final RollbackDocument doc = new RollbackDocument();
+        
+        public Builder id(long id) {
+            doc.id = id;
+            return this;
+        }
+        
+        public Builder claimNumber(String claimNumber) {
+            doc.claimNumber = claimNumber;
+            return this;
+        }
+        
+        public Builder claimId(long claimId) {
+            doc.claimId = claimId;
+            return this;
+        }
+        
+        public Builder externalId(String externalId) {
+            doc.externalId = externalId;
+            return this;
+        }
+        
+        public Builder batchId(String batchId) {
+            doc.batchId = batchId;
+            return this;
+        }
+        
+        public Builder documentGuid(String documentGuid) {
+            doc.documentGuid = documentGuid;
+            return this;
+        }
+        
+        public Builder dateCreated(LocalDateTime dateCreated) {
+            doc.dateCreated = dateCreated;
+            return this;
+        }
+        
+        public Builder packagingFilename(String packagingFilename) {
+            doc.packagingFilename = packagingFilename;
+            return this;
+        }
+        
+        public Builder status(String status) {
+            doc.status = status;
+            return this;
+        }
+        
+        public Builder ccExtractFileName(String ccExtractFileName) {
+            doc.ccExtractFileName = ccExtractFileName;
+            return this;
+        }
+        
+        public Builder gwDocExternalId(String gwDocExternalId) {
+            doc.gwDocExternalId = gwDocExternalId;
+            return this;
+        }
+        
+        public RollbackDocument build() {
+            return doc;
+        }
+    }
+    
+    // Getters and Setters
+    
+    public long getId() {
+        return id;
+    }
+    
+    public void setId(long id) {
+        this.id = id;
+    }
+    
+    public String getClaimNumber() {
+        return claimNumber;
+    }
+    
+    public void setClaimNumber(String claimNumber) {
+        this.claimNumber = claimNumber;
+    }
+    
+    public long getClaimId() {
+        return claimId;
+    }
+    
+    public void setClaimId(long claimId) {
+        this.claimId = claimId;
+    }
+    
+    public String getExternalId() {
+        return externalId;
+    }
+    
+    public void setExternalId(String externalId) {
+        this.externalId = externalId;
+    }
+    
+    public String getBatchId() {
+        return batchId;
+    }
+    
+    public void setBatchId(String batchId) {
+        this.batchId = batchId;
+    }
+    
+    public String getDocumentGuid() {
+        return documentGuid;
+    }
+    
+    public void setDocumentGuid(String documentGuid) {
+        this.documentGuid = documentGuid;
+    }
+    
+    public LocalDateTime getDateCreated() {
+        return dateCreated;
+    }
+    
+    public void setDateCreated(LocalDateTime dateCreated) {
+        this.dateCreated = dateCreated;
+    }
+    
+    public String getPackagingFilename() {
+        return packagingFilename;
+    }
+    
+    public void setPackagingFilename(String packagingFilename) {
+        this.packagingFilename = packagingFilename;
+    }
+    
+    public String getStatus() {
+        return status;
+    }
+    
+    public void setStatus(String status) {
+        this.status = status;
+    }
+    
+    public String getCcExtractFileName() {
+        return ccExtractFileName;
+    }
+    
+    public void setCcExtractFileName(String ccExtractFileName) {
+        this.ccExtractFileName = ccExtractFileName;
+    }
+    
+    public String getGwDocExternalId() {
+        return gwDocExternalId;
+    }
+    
+    public void setGwDocExternalId(String gwDocExternalId) {
+        this.gwDocExternalId = gwDocExternalId;
+    }
+    
+    public boolean isRolledBack() {
+        return rolledBack;
+    }
+    
+    public void setRolledBack(boolean rolledBack) {
+        this.rolledBack = rolledBack;
+    }
+    
+    public boolean isRollbackFailed() {
+        return rollbackFailed;
+    }
+    
+    public void setRollbackFailed(boolean rollbackFailed) {
+        this.rollbackFailed = rollbackFailed;
+    }
+    
+    public String getRollbackErrorMessage() {
+        return rollbackErrorMessage;
+    }
+    
+    public void setRollbackErrorMessage(String rollbackErrorMessage) {
+        this.rollbackErrorMessage = rollbackErrorMessage;
+    }
+    
+    public boolean isStagingReset() {
+        return stagingReset;
+    }
+    
+    public void setStagingReset(boolean stagingReset) {
+        this.stagingReset = stagingReset;
+    }
+    
+    /**
+     * Mark document as successfully rolled back
+     */
+    public void markRolledBack() {
+        this.rolledBack = true;
+        this.rollbackFailed = false;
+        this.rollbackErrorMessage = null;
+    }
+    
+    /**
+     * Mark document rollback as failed
+     */
+    public void markRollbackFailed(String errorMessage) {
+        this.rolledBack = false;
+        this.rollbackFailed = true;
+        this.rollbackErrorMessage = errorMessage;
+    }
+    
+    @Override
+    public String toString() {
+        return "RollbackDocument{" +
+                "id=" + id +
+                ", externalId='" + externalId + '\'' +
+                ", documentGuid='" + documentGuid + '\'' +
+                ", claimNumber='" + claimNumber + '\'' +
+                ", rolledBack=" + rolledBack +
+                ", rollbackFailed=" + rollbackFailed +
+                '}';
+    }
+}
+
+package com.wawa.ace.migration.model;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Model representing the overall result of a rollback operation.
+ * Contains the batch information and lists of processed documents.
+ */
+public class RollbackResult {
+    
+    private RollbackBatch batch;
+    private List<RollbackDocument> successDocuments;
+    private List<RollbackDocument> failedDocuments;
+    private List<String> claimNumbersForReprocess;
+    private long startTimeMs;
+    private long endTimeMs;
+    
+    public RollbackResult() {
+        this.successDocuments = new ArrayList<>();
+        this.failedDocuments = new ArrayList<>();
+        this.claimNumbersForReprocess = new ArrayList<>();
+        this.startTimeMs = System.currentTimeMillis();
+    }
+    
+    public RollbackResult(RollbackBatch batch) {
+        this();
+        this.batch = batch;
+    }
+    
+    /**
+     * Add a successfully rolled back document
+     */
+    public void addSuccess(RollbackDocument doc) {
+        successDocuments.add(doc);
+        batch.incrementRolledBackCount();
+        
+        // Track unique claim numbers for reprocess CSV
+        if (doc.getClaimNumber() != null && !claimNumbersForReprocess.contains(doc.getClaimNumber())) {
+            claimNumbersForReprocess.add(doc.getClaimNumber());
+        }
+    }
+    
+    /**
+     * Add a failed rollback document
+     */
+    public void addFailed(RollbackDocument doc) {
+        failedDocuments.add(doc);
+        batch.incrementFailedCount();
+    }
+    
+    /**
+     * Mark staging reset for document
+     */
+    public void markStagingReset() {
+        batch.incrementStagingResetCount();
+    }
+    
+    /**
+     * Complete the rollback result
+     */
+    public void complete() {
+        this.endTimeMs = System.currentTimeMillis();
+        batch.markCompleted();
+    }
+    
+    /**
+     * Mark as failed
+     */
+    public void fail(String errorMessage) {
+        this.endTimeMs = System.currentTimeMillis();
+        batch.markFailed(errorMessage);
+    }
+    
+    // Getters and Setters
+    
+    public RollbackBatch getBatch() {
+        return batch;
+    }
+    
+    public void setBatch(RollbackBatch batch) {
+        this.batch = batch;
+    }
+    
+    public List<RollbackDocument> getSuccessDocuments() {
+        return successDocuments;
+    }
+    
+    public void setSuccessDocuments(List<RollbackDocument> successDocuments) {
+        this.successDocuments = successDocuments;
+    }
+    
+    public List<RollbackDocument> getFailedDocuments() {
+        return failedDocuments;
+    }
+    
+    public void setFailedDocuments(List<RollbackDocument> failedDocuments) {
+        this.failedDocuments = failedDocuments;
+    }
+    
+    public List<String> getClaimNumbersForReprocess() {
+        return claimNumbersForReprocess;
+    }
+    
+    public void setClaimNumbersForReprocess(List<String> claimNumbersForReprocess) {
+        this.claimNumbersForReprocess = claimNumbersForReprocess;
+    }
+    
+    public long getStartTimeMs() {
+        return startTimeMs;
+    }
+    
+    public void setStartTimeMs(long startTimeMs) {
+        this.startTimeMs = startTimeMs;
+    }
+    
+    public long getEndTimeMs() {
+        return endTimeMs;
+    }
+    
+    public void setEndTimeMs(long endTimeMs) {
+        this.endTimeMs = endTimeMs;
+    }
+    
+    /**
+     * Get total processing time in milliseconds
+     */
+    public long getDurationMs() {
+        return endTimeMs - startTimeMs;
+    }
+    
+    /**
+     * Get formatted duration string
+     */
+    public String getFormattedDuration() {
+        long durationMs = getDurationMs();
+        long seconds = durationMs / 1000;
+        long minutes = seconds / 60;
+        long hours = minutes / 60;
+        
+        if (hours > 0) {
+            return String.format("%d hours, %d minutes, %d seconds", 
+                    hours, minutes % 60, seconds % 60);
+        } else if (minutes > 0) {
+            return String.format("%d minutes, %d seconds", minutes, seconds % 60);
+        } else {
+            return String.format("%d seconds", seconds);
+        }
+    }
+    
+    /**
+     * Get success count
+     */
+    public int getSuccessCount() {
+        return successDocuments.size();
+    }
+    
+    /**
+     * Get failed count
+     */
+    public int getFailedCount() {
+        return failedDocuments.size();
+    }
+    
+    /**
+     * Get total count
+     */
+    public int getTotalCount() {
+        return successDocuments.size() + failedDocuments.size();
+    }
+    
+    /**
+     * Check if all documents were successfully rolled back
+     */
+    public boolean isComplete() {
+        return failedDocuments.isEmpty() && !successDocuments.isEmpty();
+    }
+    
+    /**
+     * Check if any documents were rolled back
+     */
+    public boolean hasSuccesses() {
+        return !successDocuments.isEmpty();
+    }
+    
+    /**
+     * Check if any documents failed
+     */
+    public boolean hasFailures() {
+        return !failedDocuments.isEmpty();
+    }
+    
+    /**
+     * Get summary string
+     */
+    public String getSummary() {
+        return String.format(
+                "Rollback %s: Total=%d, Success=%d, Failed=%d, Duration=%s",
+                batch.getRollbackBatchId(),
+                getTotalCount(),
+                getSuccessCount(),
+                getFailedCount(),
+                getFormattedDuration()
+        );
+    }
+    
+    @Override
+    public String toString() {
+        return getSummary();
+    }
+}
+
+package com.wawa.ace.migration.report;
+
+import com.wawa.ace.migration.config.RollbackProperties;
+import com.wawa.ace.migration.model.RollbackBatch;
+import com.wawa.ace.migration.model.RollbackDocument;
+import com.wawa.ace.migration.model.RollbackResult;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+
+/**
+ * Generates rollback reports and reprocess CSV files.
+ */
+public class RollbackReportGenerator {
+    
+    private static final Logger logger = LogManager.getLogger(RollbackReportGenerator.class);
+    
+    private static final DateTimeFormatter TIMESTAMP_FORMATTER = 
+            DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
+    private static final DateTimeFormatter DISPLAY_FORMATTER = 
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    
+    private final RollbackProperties properties;
+    
+    public RollbackReportGenerator(RollbackProperties properties) {
+        this.properties = properties;
+    }
+    
+    /**
+     * Generate all reports for a rollback result
+     */
+    public void generateReports(RollbackResult result) throws IOException {
+        logger.info("Generating rollback reports...");
+        
+        String batchId = result.getBatch().getRollbackBatchId();
+        
+        // Ensure output directories exist
+        Files.createDirectories(properties.getReportsPath());
+        Files.createDirectories(properties.getReprocessPath());
+        
+        // Generate main rollback report
+        if (properties.isGenerateReport()) {
+            generateMainReport(result, batchId);
+            generateSuccessReport(result, batchId);
+            generateFailedReport(result, batchId);
+        }
+        
+        // Generate reprocess CSV for CCDataIndexAndPackagingUtility
+        if (properties.isGenerateReprocessCsv() && !result.getClaimNumbersForReprocess().isEmpty()) {
+            generateReprocessCsv(result, batchId);
+        }
+        
+        logger.info("Report generation completed");
+    }
+    
+    /**
+     * Generate main rollback summary report
+     */
+    private void generateMainReport(RollbackResult result, String batchId) throws IOException {
+        String filename = String.format("rollback_report_%s.txt", batchId);
+        Path reportPath = properties.getReportsPath().resolve(filename);
+        
+        RollbackBatch batch = result.getBatch();
+        
+        try (BufferedWriter writer = Files.newBufferedWriter(reportPath, StandardCharsets.UTF_8)) {
+            writer.write("============================================================");
+            writer.newLine();
+            writer.write("           WAWA DOCUMENT ROLLBACK UTILITY REPORT");
+            writer.newLine();
+            writer.write("============================================================");
+            writer.newLine();
+            writer.newLine();
+            
+            // Batch Information
+            writer.write("ROLLBACK BATCH INFORMATION");
+            writer.newLine();
+            writer.write("------------------------------------------------------------");
+            writer.newLine();
+            writer.write(String.format("Rollback Batch ID:    %s", batchId));
+            writer.newLine();
+            writer.write(String.format("Execution Mode:       %s", batch.isDryRun() ? "DRY RUN" : "LIVE"));
+            writer.newLine();
+            writer.write(String.format("Rollback Scope:       %s", batch.getRollbackScope()));
+            writer.newLine();
+            writer.write(String.format("Scope Value:          %s", batch.getScopeValue()));
+            writer.newLine();
+            writer.write(String.format("Rollback Reason:      %s", batch.getRollbackReason()));
+            writer.newLine();
+            writer.write(String.format("Status:               %s", batch.getStatus()));
+            writer.newLine();
+            writer.newLine();
+            
+            // Timing
+            writer.write("TIMING");
+            writer.newLine();
+            writer.write("------------------------------------------------------------");
+            writer.newLine();
+            writer.write(String.format("Started:              %s", 
+                    batch.getCreatedDate().format(DISPLAY_FORMATTER)));
+            writer.newLine();
+            if (batch.getCompletedDate() != null) {
+                writer.write(String.format("Completed:            %s", 
+                        batch.getCompletedDate().format(DISPLAY_FORMATTER)));
+                writer.newLine();
+            }
+            writer.write(String.format("Duration:             %s", result.getFormattedDuration()));
+            writer.newLine();
+            writer.newLine();
+            
+            // Statistics
+            writer.write("STATISTICS");
+            writer.newLine();
+            writer.write("------------------------------------------------------------");
+            writer.newLine();
+            writer.write(String.format("Total Documents:      %d", batch.getTotalDocuments()));
+            writer.newLine();
+            writer.write(String.format("Rolled Back:          %d", batch.getRolledBackCount()));
+            writer.newLine();
+            writer.write(String.format("Failed:               %d", batch.getFailedCount()));
+            writer.newLine();
+            writer.write(String.format("Staging Reset:        %d", batch.getStagingResetCount()));
+            writer.newLine();
+            writer.write(String.format("Success Rate:         %.1f%%", batch.getSuccessRate()));
+            writer.newLine();
+            writer.newLine();
+            
+            // Reprocess Information
+            writer.write("REPROCESS INFORMATION");
+            writer.newLine();
+            writer.write("------------------------------------------------------------");
+            writer.newLine();
+            writer.write(String.format("Unique Claim Numbers: %d", 
+                    result.getClaimNumbersForReprocess().size()));
+            writer.newLine();
+            if (!result.getClaimNumbersForReprocess().isEmpty()) {
+                writer.write("Reprocess CSV:        reprocess_claims_" + batchId + ".csv");
+                writer.newLine();
+            }
+            writer.newLine();
+            
+            // Error Information
+            if (batch.getErrorMessage() != null && !batch.getErrorMessage().isEmpty()) {
+                writer.write("ERROR INFORMATION");
+                writer.newLine();
+                writer.write("------------------------------------------------------------");
+                writer.newLine();
+                writer.write(batch.getErrorMessage());
+                writer.newLine();
+                writer.newLine();
+            }
+            
+            // Configuration Used
+            writer.write("CONFIGURATION USED");
+            writer.newLine();
+            writer.write("------------------------------------------------------------");
+            writer.newLine();
+            writer.write(String.format("Properties File:      %s", properties.getPropertiesFilePath()));
+            writer.newLine();
+            writer.write(String.format("Database:             %s:%d/%s", 
+                    properties.getDbServer(), properties.getDbPort(), properties.getDbName()));
+            writer.newLine();
+            writer.write(String.format("FileNet ObjectStore:  %s", properties.getFileNetObjectStore()));
+            writer.newLine();
+            writer.write(String.format("Output Path:          %s", properties.getOutputBasePath()));
+            writer.newLine();
+            writer.newLine();
+            
+            // Next Steps
+            writer.write("NEXT STEPS");
+            writer.newLine();
+            writer.write("------------------------------------------------------------");
+            writer.newLine();
+            if (batch.isDryRun()) {
+                writer.write("1. Review this report to verify the rollback scope is correct");
+                writer.newLine();
+                writer.write("2. Set 'rollback.dryrun=false' in the properties file");
+                writer.newLine();
+                writer.write("3. Run the utility again to execute the actual rollback");
+                writer.newLine();
+            } else if (batch.getRolledBackCount() > 0) {
+                writer.write("1. Review successful and failed document lists");
+                writer.newLine();
+                writer.write("2. To re-commit documents, run CCDataIndexAndPackagingUtility:");
+                writer.newLine();
+                writer.write(String.format("   - Use input file: reprocess_claims_%s.csv", batchId));
+                writer.newLine();
+                writer.write("   - Or run without input to process all pending documents");
+                writer.newLine();
+                writer.write("3. After re-indexing, run WawaDocumentMigrationUtility");
+                writer.newLine();
+            }
+            writer.newLine();
+            
+            writer.write("============================================================");
+            writer.newLine();
+            writer.write("                    END OF REPORT");
+            writer.newLine();
+            writer.write("============================================================");
+            writer.newLine();
+        }
+        
+        logger.info("Generated main report: {}", reportPath);
+    }
+    
+    /**
+     * Generate CSV report of successfully rolled back documents
+     */
+    private void generateSuccessReport(RollbackResult result, String batchId) throws IOException {
+        if (result.getSuccessDocuments().isEmpty()) {
+            logger.info("No successful rollbacks to report");
+            return;
+        }
+        
+        String filename = String.format("rollback_success_%s.csv", batchId);
+        Path reportPath = properties.getReportsPath().resolve(filename);
+        
+        try (BufferedWriter writer = Files.newBufferedWriter(reportPath, StandardCharsets.UTF_8)) {
+            // Header
+            writer.write("externalID,gwDocExternalID,claimNumber,batchID,document_GUID,CC_Extract_file_Name,DateCreated");
+            writer.newLine();
+            
+            // Data
+            for (RollbackDocument doc : result.getSuccessDocuments()) {
+                writer.write(String.format("%s,%s,%s,%s,%s,%s,%s",
+                        escapeCsv(doc.getExternalId()),
+                        escapeCsv(doc.getGwDocExternalId()),
+                        escapeCsv(doc.getClaimNumber()),
+                        escapeCsv(doc.getBatchId()),
+                        escapeCsv(doc.getDocumentGuid()),
+                        escapeCsv(doc.getCcExtractFileName()),
+                        doc.getDateCreated() != null ? doc.getDateCreated().format(DISPLAY_FORMATTER) : ""
+                ));
+                writer.newLine();
+            }
+        }
+        
+        logger.info("Generated success report: {} ({} records)", 
+                reportPath, result.getSuccessDocuments().size());
+    }
+    
+    /**
+     * Generate CSV report of failed rollback documents
+     */
+    private void generateFailedReport(RollbackResult result, String batchId) throws IOException {
+        if (result.getFailedDocuments().isEmpty()) {
+            logger.info("No failed rollbacks to report");
+            return;
+        }
+        
+        String filename = String.format("rollback_failed_%s.csv", batchId);
+        Path reportPath = properties.getReportsPath().resolve(filename);
+        
+        try (BufferedWriter writer = Files.newBufferedWriter(reportPath, StandardCharsets.UTF_8)) {
+            // Header
+            writer.write("externalID,gwDocExternalID,claimNumber,document_GUID,errorMessage");
+            writer.newLine();
+            
+            // Data
+            for (RollbackDocument doc : result.getFailedDocuments()) {
+                writer.write(String.format("%s,%s,%s,%s,%s",
+                        escapeCsv(doc.getExternalId()),
+                        escapeCsv(doc.getGwDocExternalId()),
+                        escapeCsv(doc.getClaimNumber()),
+                        escapeCsv(doc.getDocumentGuid()),
+                        escapeCsv(doc.getRollbackErrorMessage())
+                ));
+                writer.newLine();
+            }
+        }
+        
+        logger.info("Generated failed report: {} ({} records)", 
+                reportPath, result.getFailedDocuments().size());
+    }
+    
+    /**
+     * Generate reprocess CSV for CCDataIndexAndPackagingUtility
+     */
+    private void generateReprocessCsv(RollbackResult result, String batchId) throws IOException {
+        List<String> claimNumbers = result.getClaimNumbersForReprocess();
+        if (claimNumbers.isEmpty()) {
+            logger.info("No claim numbers to generate reprocess CSV");
+            return;
+        }
+        
+        String filename = String.format("reprocess_claims_%s.csv", batchId);
+        Path csvPath = properties.getReprocessPath().resolve(filename);
+        
+        try (BufferedWriter writer = Files.newBufferedWriter(csvPath, StandardCharsets.UTF_8)) {
+            // Header (matches CCDataIndexAndPackagingUtility expected format)
+            writer.write("claimNumber");
+            writer.newLine();
+            
+            // Data - unique claim numbers
+            for (String claimNumber : claimNumbers) {
+                writer.write(claimNumber);
+                writer.newLine();
+            }
+        }
+        
+        logger.info("Generated reprocess CSV: {} ({} claim numbers)", csvPath, claimNumbers.size());
+        logger.info("Use this file as input for CCDataIndexAndPackagingUtility to re-process rolled back documents");
+    }
+    
+    /**
+     * Escape CSV field value
+     */
+    private String escapeCsv(String value) {
+        if (value == null) {
+            return "";
+        }
+        
+        // If contains comma, quote, or newline, wrap in quotes and escape quotes
+        if (value.contains(",") || value.contains("\"") || value.contains("\n")) {
+            return "\"" + value.replace("\"", "\"\"") + "\"";
+        }
+        
+        return value;
+    }
+}
+
+package com.wawa.ace.migration.service;
+
+import com.wawa.ace.migration.config.RollbackProperties;
+import com.wawa.ace.migration.config.RollbackScope;
+import com.wawa.ace.migration.config.RollbackStatus;
+import com.wawa.ace.migration.model.RollbackBatch;
+import com.wawa.ace.migration.model.RollbackDocument;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.sql.*;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Service for database operations related to rollback.
+ * Handles querying documents to rollback, updating status, and resetting staging.
+ */
+public class DatabaseService implements AutoCloseable {
+    
+    private static final Logger logger = LogManager.getLogger(DatabaseService.class);
+    
+    private final RollbackProperties properties;
+    private final HikariDataSource dataSource;
+    
+    // SQL statements
+    private final String selectByFileSql;
+    private final String selectByBatchSql;
+    private final String selectByDateSql;
+    private final String selectByIdsSql;
+    private final String updateRollbackStatusSql;
+    private final String resetStagingSql;
+    private final String insertRollbackBatchSql;
+    private final String updateRollbackBatchSql;
+    
+    public DatabaseService(RollbackProperties properties) throws SQLException {
+        this.properties = properties;
+        this.dataSource = createDataSource();
+        
+        String migratedTable = properties.getTableMigratedDocuments();
+        String stagingTable = properties.getTableStaging();
+        String rollbackBatchTable = properties.getTableRollbackBatch();
+        
+        // Build SQL statements
+        this.selectByFileSql = String.format(
+                "SELECT id, claimNumber, claimID, externalID, batchID, document_GUID, " +
+                "DateCreated, packaging_filename, Status, CC_Extract_file_Name, gwDocExternalID " +
+                "FROM %s WHERE CC_Extract_file_Name = ? AND Status = 'SUCCESS' " +
+                "AND (RollbackStatus IS NULL OR RollbackStatus = '')", migratedTable);
+        
+        this.selectByBatchSql = String.format(
+                "SELECT id, claimNumber, claimID, externalID, batchID, document_GUID, " +
+                "DateCreated, packaging_filename, Status, CC_Extract_file_Name, gwDocExternalID " +
+                "FROM %s WHERE batchID = ? AND Status = 'SUCCESS' " +
+                "AND (RollbackStatus IS NULL OR RollbackStatus = '')", migratedTable);
+        
+        this.selectByDateSql = String.format(
+                "SELECT id, claimNumber, claimID, externalID, batchID, document_GUID, " +
+                "DateCreated, packaging_filename, Status, CC_Extract_file_Name, gwDocExternalID " +
+                "FROM %s WHERE CAST(DateCreated AS DATE) BETWEEN ? AND ? AND Status = 'SUCCESS' " +
+                "AND (RollbackStatus IS NULL OR RollbackStatus = '')", migratedTable);
+        
+        this.selectByIdsSql = String.format(
+                "SELECT id, claimNumber, claimID, externalID, batchID, document_GUID, " +
+                "DateCreated, packaging_filename, Status, CC_Extract_file_Name, gwDocExternalID " +
+                "FROM %s WHERE gwDocExternalID IN (%%s) AND Status = 'SUCCESS' " +
+                "AND (RollbackStatus IS NULL OR RollbackStatus = '')", migratedTable);
+        
+        this.updateRollbackStatusSql = String.format(
+                "UPDATE %s SET RollbackStatus = ?, RollbackDate = ?, RollbackBatchID = ?, RollbackReason = ? " +
+                "WHERE id = ?", migratedTable);
+        
+        this.resetStagingSql = String.format(
+                "UPDATE %s SET isIndexed = 0, isProcessed = 0, DateProcessed = NULL, " +
+                "batchDocCount = NULL, batchID = NULL, jobID = NULL, " +
+                "setDocCount = NULL, setID = NULL, SetDocIndex = NULL " +
+                "WHERE gwDocExternalID = ?", stagingTable);
+        
+        this.insertRollbackBatchSql = String.format(
+                "INSERT INTO %s (RollbackBatchID, CreatedDate, RollbackScope, ScopeValue, RollbackReason, " +
+                "TotalDocuments, RolledBackCount, FailedCount, StagingResetCount, Status, IsDryRun) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rollbackBatchTable);
+        
+        this.updateRollbackBatchSql = String.format(
+                "UPDATE %s SET RolledBackCount = ?, FailedCount = ?, StagingResetCount = ?, " +
+                "Status = ?, CompletedDate = ?, ErrorMessage = ? WHERE RollbackBatchID = ?", rollbackBatchTable);
+        
+        // Verify connection
+        try (Connection conn = dataSource.getConnection()) {
+            logger.info("Database connection established successfully");
+            verifyTables(conn);
+        }
+    }
+    
+    private HikariDataSource createDataSource() {
+        HikariConfig config = new HikariConfig();
+        
+        String jdbcUrl;
+        if (properties.isDbIntegratedSecurity()) {
+            jdbcUrl = String.format(
+                    "jdbc:sqlserver://%s:%d;databaseName=%s;integratedSecurity=true;trustServerCertificate=true;encrypt=false;",
+                    properties.getDbServer(),
+                    properties.getDbPort(),
+                    properties.getDbName()
+            );
+            logger.info("Using Windows Integrated Authentication");
+        } else {
+            jdbcUrl = String.format(
+                    "jdbc:sqlserver://%s:%d;databaseName=%s;trustServerCertificate=true;encrypt=false;",
+                    properties.getDbServer(),
+                    properties.getDbPort(),
+                    properties.getDbName()
+            );
+            config.setUsername(properties.getDbUsername());
+            config.setPassword(properties.getDbPassword());
+            logger.info("Using SQL Server Authentication with username: {}", properties.getDbUsername());
+        }
+        
+        config.setJdbcUrl(jdbcUrl);
+        config.setDriverClassName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
+        
+        config.setMaximumPoolSize(properties.getDbPoolSize());
+        config.setMinimumIdle(Math.min(5, properties.getDbPoolSize()));
+        config.setConnectionTimeout(properties.getDbConnectionTimeoutSeconds() * 1000L);
+        config.setIdleTimeout(300000);
+        config.setMaxLifetime(1800000);
+        config.setValidationTimeout(5000);
+        
+        config.addDataSourceProperty("cachePrepStmts", "true");
+        config.addDataSourceProperty("prepStmtCacheSize", "250");
+        config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+        
+        config.setConnectionTestQuery("SELECT 1");
+        config.setPoolName("WawaRollback-Pool");
+        config.setLeakDetectionThreshold(60000);
+        
+        logger.info("Creating database connection pool: {}", jdbcUrl);
+        
+        return new HikariDataSource(config);
+    }
+    
+    private void verifyTables(Connection conn) throws SQLException {
+        String[] tables = {
+                properties.getTableMigratedDocuments(),
+                properties.getTableStaging(),
+                properties.getTableRollbackBatch()
+        };
+        
+        for (String table : tables) {
+            String checkSql = String.format(
+                    "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = '%s'", table);
+            
+            try (Statement stmt = conn.createStatement();
+                 ResultSet rs = stmt.executeQuery(checkSql)) {
+                
+                if (rs.next() && rs.getInt(1) > 0) {
+                    logger.info("Table {} exists and is ready", table);
+                } else {
+                    logger.error("Table {} does not exist!", table);
+                    throw new SQLException("Required table " + table + " does not exist");
+                }
+            }
+        }
+    }
+    
+    /**
+     * Test database connection
+     */
+    public boolean testConnection() {
+        try (Connection conn = dataSource.getConnection()) {
+            return conn.isValid(5);
+        } catch (SQLException e) {
+            logger.error("Database connection test failed", e);
+            return false;
+        }
+    }
+    
+    /**
+     * Query documents to rollback based on scope
+     */
+    public List<RollbackDocument> queryDocumentsToRollback(RollbackScope scope, String scopeValue, 
+                                                           List<String> selectiveIds,
+                                                           String dateFrom, String dateTo) throws SQLException {
+        
+        logger.info("Querying documents to rollback: scope={}, value={}", scope, scopeValue);
+        
+        List<RollbackDocument> documents = new ArrayList<>();
+        
+        try (Connection conn = dataSource.getConnection()) {
+            PreparedStatement pstmt;
+            
+            switch (scope) {
+                case FILE:
+                    pstmt = conn.prepareStatement(selectByFileSql);
+                    pstmt.setString(1, scopeValue);
+                    break;
+                    
+                case BATCH:
+                    pstmt = conn.prepareStatement(selectByBatchSql);
+                    pstmt.setString(1, scopeValue);
+                    break;
+                    
+                case DATE:
+                    pstmt = conn.prepareStatement(selectByDateSql);
+                    pstmt.setString(1, dateFrom);
+                    pstmt.setString(2, dateTo);
+                    break;
+                    
+                case SELECTIVE:
+                    // Build IN clause with parameters
+                    StringBuilder placeholders = new StringBuilder();
+                    for (int i = 0; i < selectiveIds.size(); i++) {
+                        if (i > 0) placeholders.append(",");
+                        placeholders.append("?");
+                    }
+                    String sql = String.format(selectByIdsSql, placeholders);
+                    pstmt = conn.prepareStatement(sql);
+                    for (int i = 0; i < selectiveIds.size(); i++) {
+                        pstmt.setString(i + 1, selectiveIds.get(i));
+                    }
+                    break;
+                    
+                default:
+                    throw new IllegalArgumentException("Unsupported rollback scope: " + scope);
+            }
+            
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    RollbackDocument doc = RollbackDocument.builder()
+                            .id(rs.getLong("id"))
+                            .claimNumber(rs.getString("claimNumber"))
+                            .claimId(rs.getLong("claimID"))
+                            .externalId(rs.getString("externalID"))
+                            .batchId(rs.getString("batchID"))
+                            .documentGuid(rs.getString("document_GUID"))
+                            .dateCreated(rs.getTimestamp("DateCreated") != null ? 
+                                    rs.getTimestamp("DateCreated").toLocalDateTime() : null)
+                            .packagingFilename(rs.getString("packaging_filename"))
+                            .status(rs.getString("Status"))
+                            .ccExtractFileName(rs.getString("CC_Extract_file_Name"))
+                            .gwDocExternalId(rs.getString("gwDocExternalID"))
+                            .build();
+                    
+                    documents.add(doc);
+                }
+            }
+            
+            pstmt.close();
+        }
+        
+        logger.info("Found {} documents to rollback", documents.size());
+        return documents;
+    }
+    
+    /**
+     * Update rollback status for a document in WawaMigratedDocuments
+     */
+    public void updateRollbackStatus(RollbackDocument doc, String rollbackBatchId, 
+                                      String reason, boolean success) throws SQLException {
+        
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(updateRollbackStatusSql)) {
+            
+            pstmt.setString(1, success ? "ROLLED_BACK" : "ROLLBACK_FAILED");
+            pstmt.setTimestamp(2, Timestamp.valueOf(LocalDateTime.now()));
+            pstmt.setString(3, rollbackBatchId);
+            pstmt.setString(4, truncate(reason, 500));
+            pstmt.setLong(5, doc.getId());
+            
+            int updated = pstmt.executeUpdate();
+            if (updated > 0) {
+                logger.debug("Updated rollback status for document id={}: success={}", doc.getId(), success);
+            }
+        }
+    }
+    
+    /**
+     * Batch update rollback status for multiple documents
+     */
+    public void updateRollbackStatusBatch(List<RollbackDocument> documents, String rollbackBatchId,
+                                           String reason) throws SQLException {
+        
+        if (documents == null || documents.isEmpty()) {
+            return;
+        }
+        
+        try (Connection conn = dataSource.getConnection()) {
+            conn.setAutoCommit(false);
+            
+            try (PreparedStatement pstmt = conn.prepareStatement(updateRollbackStatusSql)) {
+                int batchCount = 0;
+                
+                for (RollbackDocument doc : documents) {
+                    pstmt.setString(1, doc.isRolledBack() ? "ROLLED_BACK" : "ROLLBACK_FAILED");
+                    pstmt.setTimestamp(2, Timestamp.valueOf(LocalDateTime.now()));
+                    pstmt.setString(3, rollbackBatchId);
+                    pstmt.setString(4, truncate(doc.isRolledBack() ? reason : doc.getRollbackErrorMessage(), 500));
+                    pstmt.setLong(5, doc.getId());
+                    pstmt.addBatch();
+                    batchCount++;
+                    
+                    if (batchCount >= 500) {
+                        pstmt.executeBatch();
+                        batchCount = 0;
+                    }
+                }
+                
+                if (batchCount > 0) {
+                    pstmt.executeBatch();
+                }
+                
+                conn.commit();
+                logger.info("Batch updated rollback status for {} documents", documents.size());
+                
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        }
+    }
+    
+    /**
+     * Reset CC_Extract_Staging flags for a document
+     */
+    public boolean resetStagingFlags(String gwDocExternalId) throws SQLException {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(resetStagingSql)) {
+            
+            pstmt.setString(1, gwDocExternalId);
+            int updated = pstmt.executeUpdate();
+            
+            if (updated > 0) {
+                logger.debug("Reset staging flags for gwDocExternalId={}", gwDocExternalId);
+                return true;
+            } else {
+                logger.warn("No staging record found for gwDocExternalId={}", gwDocExternalId);
+                return false;
+            }
+        }
+    }
+    
+    /**
+     * Batch reset CC_Extract_Staging flags for multiple documents
+     */
+    public int resetStagingFlagsBatch(List<String> gwDocExternalIds) throws SQLException {
+        if (gwDocExternalIds == null || gwDocExternalIds.isEmpty()) {
+            return 0;
+        }
+        
+        int totalReset = 0;
+        
+        try (Connection conn = dataSource.getConnection()) {
+            conn.setAutoCommit(false);
+            
+            try (PreparedStatement pstmt = conn.prepareStatement(resetStagingSql)) {
+                int batchCount = 0;
+                
+                for (String gwDocExternalId : gwDocExternalIds) {
+                    pstmt.setString(1, gwDocExternalId);
+                    pstmt.addBatch();
+                    batchCount++;
+                    
+                    if (batchCount >= 500) {
+                        int[] results = pstmt.executeBatch();
+                        for (int r : results) {
+                            if (r > 0) totalReset++;
+                        }
+                        batchCount = 0;
+                    }
+                }
+                
+                if (batchCount > 0) {
+                    int[] results = pstmt.executeBatch();
+                    for (int r : results) {
+                        if (r > 0) totalReset++;
+                    }
+                }
+                
+                conn.commit();
+                logger.info("Reset staging flags for {} records", totalReset);
+                
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            } finally {
+                conn.setAutoCommit(true);
+            }
+        }
+        
+        return totalReset;
+    }
+    
+    /**
+     * Insert rollback batch record
+     */
+    public void insertRollbackBatch(RollbackBatch batch) throws SQLException {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(insertRollbackBatchSql)) {
+            
+            pstmt.setString(1, batch.getRollbackBatchId());
+            pstmt.setTimestamp(2, Timestamp.valueOf(batch.getCreatedDate()));
+            pstmt.setString(3, batch.getRollbackScope().name());
+            pstmt.setString(4, truncate(batch.getScopeValue(), 500));
+            pstmt.setString(5, truncate(batch.getRollbackReason(), 500));
+            pstmt.setInt(6, batch.getTotalDocuments());
+            pstmt.setInt(7, batch.getRolledBackCount());
+            pstmt.setInt(8, batch.getFailedCount());
+            pstmt.setInt(9, batch.getStagingResetCount());
+            pstmt.setString(10, batch.getStatus().getValue());
+            pstmt.setBoolean(11, batch.isDryRun());
+            
+            pstmt.executeUpdate();
+            logger.info("Inserted rollback batch: {}", batch.getRollbackBatchId());
+        }
+    }
+    
+    /**
+     * Update rollback batch record
+     */
+    public void updateRollbackBatch(RollbackBatch batch) throws SQLException {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(updateRollbackBatchSql)) {
+            
+            pstmt.setInt(1, batch.getRolledBackCount());
+            pstmt.setInt(2, batch.getFailedCount());
+            pstmt.setInt(3, batch.getStagingResetCount());
+            pstmt.setString(4, batch.getStatus().getValue());
+            pstmt.setTimestamp(5, batch.getCompletedDate() != null ? 
+                    Timestamp.valueOf(batch.getCompletedDate()) : null);
+            pstmt.setString(6, truncate(batch.getErrorMessage(), 1000));
+            pstmt.setString(7, batch.getRollbackBatchId());
+            
+            pstmt.executeUpdate();
+            logger.debug("Updated rollback batch: {}", batch.getRollbackBatchId());
+        }
+    }
+    
+    /**
+     * Get count of documents to rollback (for validation)
+     */
+    public int countDocumentsToRollback(RollbackScope scope, String scopeValue,
+                                         List<String> selectiveIds,
+                                         String dateFrom, String dateTo) throws SQLException {
+        
+        List<RollbackDocument> docs = queryDocumentsToRollback(scope, scopeValue, selectiveIds, dateFrom, dateTo);
+        return docs.size();
+    }
+    
+    private String truncate(String value, int maxLength) {
+        if (value == null) return null;
+        return value.length() <= maxLength ? value : value.substring(0, maxLength);
+    }
+    
+    /**
+     * Get pool statistics
+     */
+    public String getPoolStats() {
+        if (dataSource.getHikariPoolMXBean() != null) {
+            return String.format(
+                    "Pool Stats: Active=%d, Idle=%d, Total=%d, Waiting=%d",
+                    dataSource.getHikariPoolMXBean().getActiveConnections(),
+                    dataSource.getHikariPoolMXBean().getIdleConnections(),
+                    dataSource.getHikariPoolMXBean().getTotalConnections(),
+                    dataSource.getHikariPoolMXBean().getThreadsAwaitingConnection()
+            );
+        }
+        return "Pool Stats: N/A";
+    }
+    
+    @Override
+    public void close() {
+        if (dataSource != null && !dataSource.isClosed()) {
+            logger.info("Closing database connection pool...");
+            logger.info("Final pool stats: {}", getPoolStats());
+            dataSource.close();
+            logger.info("Database connection pool closed");
+        }
+    }
+}
+
+package com.wawa.ace.migration.service;
+
+import com.wawa.ace.migration.config.RollbackProperties;
+import com.wawa.ace.migration.model.RollbackDocument;
+
+import com.filenet.api.constants.RefreshMode;
+import com.filenet.api.core.*;
+import com.filenet.api.util.Id;
+import com.filenet.api.util.UserContext;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import javax.security.auth.Subject;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Service for FileNet Content Engine operations.
+ * Handles document deletion for rollback.
+ */
+public class FileNetService implements AutoCloseable {
+    
+    private static final Logger logger = LogManager.getLogger(FileNetService.class);
+    
+    private final RollbackProperties properties;
+    private final Connection connection;
+    private final Domain domain;
+    private final ObjectStore objectStore;
+    private final Subject subject;
+    
+    private final ThreadLocal<Boolean> subjectPushed = ThreadLocal.withInitial(() -> Boolean.FALSE);
+    
+    public FileNetService(RollbackProperties properties) {
+        this.properties = properties;
+        
+        logger.info("Connecting to FileNet CE: {}", properties.getFileNetUri());
+        
+        this.connection = Factory.Connection.getConnection(properties.getFileNetUri());
+        
+        this.subject = UserContext.createSubject(
+                connection,
+                properties.getFileNetUsername(),
+                properties.getFileNetPassword(),
+                properties.getFileNetStanza()
+        );
+        
+        UserContext.get().pushSubject(subject);
+        subjectPushed.set(Boolean.TRUE);
+        
+        this.domain = Factory.Domain.fetchInstance(connection, null, null);
+        logger.info("Connected to domain: {}", domain.get_Name());
+        
+        this.objectStore = Factory.ObjectStore.fetchInstance(
+                domain,
+                properties.getFileNetObjectStore(),
+                null
+        );
+        logger.info("Connected to object store: {}", objectStore.get_Name());
+    }
+    
+    private void ensureSubjectPushed() {
+        if (!Boolean.TRUE.equals(subjectPushed.get())) {
+            UserContext.get().pushSubject(subject);
+            subjectPushed.set(Boolean.TRUE);
+        }
+    }
+    
+    /**
+     * Test the FileNet connection
+     */
+    public boolean testConnection() {
+        try {
+            ensureSubjectPushed();
+            Factory.ObjectStore.fetchInstance(
+                    domain,
+                    properties.getFileNetObjectStore(),
+                    null
+            );
+            return true;
+        } catch (Exception e) {
+            logger.error("FileNet connection test failed", e);
+            return false;
+        }
+    }
+    
+    /**
+     * Delete a single document from FileNet
+     * 
+     * @param documentGuid The GUID of the document to delete
+     * @return true if deleted successfully, false otherwise
+     */
+    public boolean deleteDocument(String documentGuid) {
+        try {
+            ensureSubjectPushed();
+            
+            if (documentGuid == null || documentGuid.isEmpty()) {
+                logger.warn("Cannot delete document: GUID is null or empty");
+                return false;
+            }
+            
+            // Clean GUID format if needed
+            String cleanGuid = cleanGuid(documentGuid);
+            
+            // Fetch the document
+            Document document = Factory.Document.fetchInstance(
+                    objectStore,
+                    new Id(cleanGuid),
+                    null
+            );
+            
+            // Delete the document
+            document.delete();
+            document.save(RefreshMode.REFRESH);
+            
+            logger.debug("Deleted document: {}", documentGuid);
+            return true;
+            
+        } catch (Exception e) {
+            logger.error("Failed to delete document {}: {}", documentGuid, e.getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * Delete a single document and update the RollbackDocument with result
+     */
+    public void deleteDocument(RollbackDocument doc) {
+        try {
+            ensureSubjectPushed();
+            
+            String documentGuid = doc.getDocumentGuid();
+            if (documentGuid == null || documentGuid.isEmpty()) {
+                doc.markRollbackFailed("Document GUID is null or empty");
+                return;
+            }
+            
+            String cleanGuid = cleanGuid(documentGuid);
+            
+            Document document = Factory.Document.fetchInstance(
+                    objectStore,
+                    new Id(cleanGuid),
+                    null
+            );
+            
+            document.delete();
+            document.save(RefreshMode.REFRESH);
+            
+            doc.markRolledBack();
+            logger.debug("Deleted document: {} (externalId: {})", documentGuid, doc.getExternalId());
+            
+        } catch (Exception e) {
+            String errorMsg = e.getMessage();
+            if (errorMsg != null && errorMsg.length() > 500) {
+                errorMsg = errorMsg.substring(0, 500);
+            }
+            doc.markRollbackFailed(errorMsg);
+            logger.error("Failed to delete document {} (externalId: {}): {}", 
+                    doc.getDocumentGuid(), doc.getExternalId(), e.getMessage());
+        }
+    }
+    
+    /**
+     * Delete multiple documents in batch
+     * 
+     * @param documents List of documents to delete
+     * @return List of documents with rollback status updated
+     */
+    public List<RollbackDocument> deleteDocumentsBatch(List<RollbackDocument> documents) {
+        if (documents == null || documents.isEmpty()) {
+            return new ArrayList<>();
+        }
+        
+        logger.info("Starting batch delete of {} documents...", documents.size());
+        
+        int successCount = 0;
+        int failCount = 0;
+        int batchSize = properties.getFileNetBatchSize();
+        
+        try {
+            ensureSubjectPushed();
+            
+            // Process in batches
+            for (int i = 0; i < documents.size(); i += batchSize) {
+                int end = Math.min(i + batchSize, documents.size());
+                List<RollbackDocument> batch = documents.subList(i, end);
+                
+                logger.debug("Processing batch {}-{} of {}", i + 1, end, documents.size());
+                
+                // Create updating batch for delete operations
+                UpdatingBatch updatingBatch = UpdatingBatch.createUpdatingBatchInstance(
+                        domain,
+                        RefreshMode.NO_REFRESH
+                );
+                
+                List<RollbackDocument> batchDocs = new ArrayList<>();
+                
+                for (RollbackDocument doc : batch) {
+                    try {
+                        String documentGuid = doc.getDocumentGuid();
+                        if (documentGuid == null || documentGuid.isEmpty()) {
+                            doc.markRollbackFailed("Document GUID is null or empty");
+                            failCount++;
+                            continue;
+                        }
+                        
+                        String cleanGuid = cleanGuid(documentGuid);
+                        
+                        Document document = Factory.Document.fetchInstance(
+                                objectStore,
+                                new Id(cleanGuid),
+                                null
+                        );
+                        
+                        document.delete();
+                        updatingBatch.add(document, null);
+                        batchDocs.add(doc);
+                        
+                    } catch (Exception e) {
+                        String errorMsg = truncateError(e.getMessage());
+                        doc.markRollbackFailed(errorMsg);
+                        failCount++;
+                        logger.warn("Failed to prepare document {} for delete: {}", 
+                                doc.getDocumentGuid(), e.getMessage());
+                    }
+                }
+                
+                // Execute the batch
+                if (!batchDocs.isEmpty()) {
+                    try {
+                        updatingBatch.updateBatch();
+                        
+                        // Mark all successfully batched documents as rolled back
+                        for (RollbackDocument doc : batchDocs) {
+                            doc.markRolledBack();
+                            successCount++;
+                        }
+                        
+                        logger.debug("Batch delete completed: {} documents", batchDocs.size());
+                        
+                    } catch (Exception e) {
+                        // If batch fails, try individual deletes
+                        logger.warn("Batch delete failed, falling back to individual deletes: {}", e.getMessage());
+                        
+                        for (RollbackDocument doc : batchDocs) {
+                            deleteDocument(doc);
+                            if (doc.isRolledBack()) {
+                                successCount++;
+                            } else {
+                                failCount++;
+                            }
+                        }
+                    }
+                }
+                
+                // Log progress
+                if ((i + batchSize) % 100 == 0 || end == documents.size()) {
+                    logger.info("Delete progress: {}/{} processed (success: {}, failed: {})", 
+                            end, documents.size(), successCount, failCount);
+                }
+            }
+            
+        } catch (Exception e) {
+            logger.error("Batch delete operation failed: {}", e.getMessage(), e);
+        }
+        
+        logger.info("Batch delete completed: {} success, {} failed out of {} total", 
+                successCount, failCount, documents.size());
+        
+        return documents;
+    }
+    
+    /**
+     * Clean GUID format (remove curly braces if present)
+     */
+    private String cleanGuid(String guid) {
+        if (guid == null) return null;
+        guid = guid.trim();
+        if (guid.startsWith("{") && guid.endsWith("}")) {
+            return guid; // FileNet expects braces
+        }
+        if (!guid.startsWith("{")) {
+            guid = "{" + guid;
+        }
+        if (!guid.endsWith("}")) {
+            guid = guid + "}";
+        }
+        return guid;
+    }
+    
+    private String truncateError(String error) {
+        if (error == null) return null;
+        return error.length() > 500 ? error.substring(0, 500) : error;
+    }
+    
+    /**
+     * Get connection information
+     */
+    public String getConnectionInfo() {
+        return String.format("FileNet CE: %s, ObjectStore: %s, Domain: %s",
+                properties.getFileNetUri(),
+                objectStore.get_Name(),
+                domain.get_Name());
+    }
+    
+    /**
+     * Check if service is healthy
+     */
+    public boolean isHealthy() {
+        return connection != null && testConnection();
+    }
+    
+    @Override
+    public void close() {
+        logger.info("Closing FileNet connection...");
+        
+        try {
+            if (Boolean.TRUE.equals(subjectPushed.get())) {
+                try {
+                    UserContext.get().popSubject();
+                } catch (Exception e) {
+                    logger.warn("Error popping subject: {}", e.getMessage());
+                }
+                subjectPushed.set(Boolean.FALSE);
+            }
+            
+            subjectPushed.remove();
+            
+            logger.info("FileNet connection closed");
+        } catch (Exception e) {
+            logger.error("Error closing FileNet connection", e);
+        }
+    }
+}
+
+package com.wawa.ace.migration.service;
+
+import com.wawa.ace.migration.config.RollbackProperties;
+import com.wawa.ace.migration.config.RollbackScope;
+import com.wawa.ace.migration.model.RollbackBatch;
+import com.wawa.ace.migration.model.RollbackDocument;
+import com.wawa.ace.migration.model.RollbackResult;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Main service for orchestrating the rollback process.
+ * Coordinates between DatabaseService and FileNetService to:
+ * 1. Query documents to rollback
+ * 2. Delete documents from FileNet
+ * 3. Update WawaMigratedDocuments status
+ * 4. Reset CC_Extract_Staging flags
+ */
+public class RollbackService implements AutoCloseable {
+    
+    private static final Logger logger = LogManager.getLogger(RollbackService.class);
+    
+    private final RollbackProperties properties;
+    private final DatabaseService databaseService;
+    private final FileNetService fileNetService;
+    
+    public RollbackService(RollbackProperties properties, 
+                           DatabaseService databaseService,
+                           FileNetService fileNetService) {
+        this.properties = properties;
+        this.databaseService = databaseService;
+        this.fileNetService = fileNetService;
+    }
+    
+    /**
+     * Execute the rollback operation
+     * 
+     * @return RollbackResult containing statistics and processed documents
+     */
+    public RollbackResult executeRollback() throws SQLException {
+        logger.info("============================================================");
+        logger.info("Starting Rollback Operation");
+        logger.info("============================================================");
+        logger.info("Scope: {}", properties.getRollbackScope());
+        logger.info("Scope Value: {}", properties.getRollbackScopeValue());
+        logger.info("Reason: {}", properties.getRollbackReason());
+        logger.info("Dry Run: {}", properties.isDryRun());
+        logger.info("============================================================");
+        
+        // Create rollback batch
+        RollbackBatch batch = RollbackBatch.create(
+                properties.getRollbackScope(),
+                properties.getRollbackScopeValue(),
+                properties.getRollbackReason(),
+                properties.isDryRun()
+        );
+        
+        RollbackResult result = new RollbackResult(batch);
+        
+        try {
+            // Step 1: Query documents to rollback
+            logger.info("STEP 1: Querying documents to rollback...");
+            List<RollbackDocument> documents = queryDocumentsToRollback();
+            
+            if (documents.isEmpty()) {
+                logger.warn("No documents found to rollback. Exiting.");
+                batch.setTotalDocuments(0);
+                batch.markCompleted();
+                if (!properties.isDryRun()) {
+                    databaseService.insertRollbackBatch(batch);
+                }
+                result.complete();
+                return result;
+            }
+            
+            batch.setTotalDocuments(documents.size());
+            logger.info("Found {} documents to rollback", documents.size());
+            
+            // Check max documents limit
+            if (properties.getMaxDocumentsToRollback() > 0 && 
+                documents.size() > properties.getMaxDocumentsToRollback()) {
+                String errorMsg = String.format(
+                        "Document count (%d) exceeds maximum limit (%d). Aborting rollback.",
+                        documents.size(), properties.getMaxDocumentsToRollback());
+                logger.error(errorMsg);
+                batch.markFailed(errorMsg);
+                if (!properties.isDryRun()) {
+                    databaseService.insertRollbackBatch(batch);
+                }
+                result.fail(errorMsg);
+                return result;
+            }
+            
+            // Insert rollback batch record
+            batch.markInProgress();
+            if (!properties.isDryRun()) {
+                databaseService.insertRollbackBatch(batch);
+            }
+            
+            // Step 2: Delete documents from FileNet
+            if (properties.isDryRun() || fileNetService == null) {
+                logger.info("STEP 2: [DRY RUN] Would delete {} documents from FileNet", documents.size());
+                // In dry run, mark all as "rolled back" for reporting
+                for (RollbackDocument doc : documents) {
+                    doc.markRolledBack();
+                    result.addSuccess(doc);
+                }
+            } else {
+                logger.info("STEP 2: Deleting {} documents from FileNet...", documents.size());
+                deleteDocumentsFromFileNet(documents, result);
+            }
+            
+            // Step 3: Update WawaMigratedDocuments status
+            if (!properties.isDryRun() && !result.getSuccessDocuments().isEmpty()) {
+                logger.info("STEP 3: Updating rollback status in WawaMigratedDocuments...");
+                updateRollbackStatus(result.getSuccessDocuments(), batch.getRollbackBatchId());
+                
+                // Also update failed ones
+                if (!result.getFailedDocuments().isEmpty()) {
+                    updateRollbackStatus(result.getFailedDocuments(), batch.getRollbackBatchId());
+                }
+            } else if (properties.isDryRun()) {
+                logger.info("STEP 3: [DRY RUN] Would update {} records in WawaMigratedDocuments", 
+                        documents.size());
+            }
+            
+            // Step 4: Reset CC_Extract_Staging flags
+            if (!properties.isDryRun() && !result.getSuccessDocuments().isEmpty()) {
+                logger.info("STEP 4: Resetting CC_Extract_Staging flags for re-commit...");
+                resetStagingFlags(result.getSuccessDocuments(), batch);
+            } else if (properties.isDryRun()) {
+                logger.info("STEP 4: [DRY RUN] Would reset {} records in CC_Extract_Staging", 
+                        documents.size());
+                batch.setStagingResetCount(documents.size());
+            }
+            
+            // Complete the rollback
+            result.complete();
+            
+            // Update rollback batch in database
+            if (!properties.isDryRun()) {
+                databaseService.updateRollbackBatch(batch);
+            }
+            
+            // Log summary
+            logSummary(result);
+            
+            return result;
+            
+        } catch (Exception e) {
+            logger.error("Rollback operation failed: {}", e.getMessage(), e);
+            batch.markFailed(e.getMessage());
+            if (!properties.isDryRun()) {
+                try {
+                    databaseService.updateRollbackBatch(batch);
+                } catch (SQLException sqlEx) {
+                    logger.error("Failed to update rollback batch status", sqlEx);
+                }
+            }
+            result.fail(e.getMessage());
+            throw e;
+        }
+    }
+    
+    /**
+     * Query documents to rollback based on configured scope
+     */
+    private List<RollbackDocument> queryDocumentsToRollback() throws SQLException {
+        RollbackScope scope = properties.getRollbackScope();
+        String scopeValue = properties.getRollbackScopeValue();
+        List<String> selectiveIds = properties.getSelectiveIds();
+        String dateFrom = properties.getDateFrom();
+        String dateTo = properties.getDateTo();
+        
+        return databaseService.queryDocumentsToRollback(
+                scope, scopeValue, selectiveIds, dateFrom, dateTo);
+    }
+    
+    /**
+     * Delete documents from FileNet
+     */
+    private void deleteDocumentsFromFileNet(List<RollbackDocument> documents, 
+                                             RollbackResult result) {
+        
+        // Use batch delete
+        List<RollbackDocument> processedDocs = fileNetService.deleteDocumentsBatch(documents);
+        
+        // Categorize results
+        for (RollbackDocument doc : processedDocs) {
+            if (doc.isRolledBack()) {
+                result.addSuccess(doc);
+            } else {
+                result.addFailed(doc);
+            }
+        }
+        
+        logger.info("FileNet delete completed: {} success, {} failed", 
+                result.getSuccessCount(), result.getFailedCount());
+    }
+    
+    /**
+     * Update rollback status in WawaMigratedDocuments
+     */
+    private void updateRollbackStatus(List<RollbackDocument> documents, 
+                                       String rollbackBatchId) throws SQLException {
+        
+        databaseService.updateRollbackStatusBatch(
+                documents, 
+                rollbackBatchId, 
+                properties.getRollbackReason()
+        );
+        
+        logger.info("Updated rollback status for {} documents", documents.size());
+    }
+    
+    /**
+     * Reset CC_Extract_Staging flags for re-commit
+     */
+    private void resetStagingFlags(List<RollbackDocument> documents, 
+                                    RollbackBatch batch) throws SQLException {
+        
+        // Extract gwDocExternalIds
+        List<String> gwDocExternalIds = new ArrayList<>();
+        for (RollbackDocument doc : documents) {
+            if (doc.getGwDocExternalId() != null && !doc.getGwDocExternalId().isEmpty()) {
+                gwDocExternalIds.add(doc.getGwDocExternalId());
+            }
+        }
+        
+        if (gwDocExternalIds.isEmpty()) {
+            logger.warn("No gwDocExternalIds found to reset staging flags");
+            return;
+        }
+        
+        int resetCount = databaseService.resetStagingFlagsBatch(gwDocExternalIds);
+        batch.setStagingResetCount(resetCount);
+        
+        logger.info("Reset staging flags for {} records (requested: {})", 
+                resetCount, gwDocExternalIds.size());
+    }
+    
+    /**
+     * Log rollback summary
+     */
+    private void logSummary(RollbackResult result) {
+        RollbackBatch batch = result.getBatch();
+        
+        logger.info("============================================================");
+        logger.info("ROLLBACK OPERATION {} COMPLETED", 
+                properties.isDryRun() ? "[DRY RUN]" : "");
+        logger.info("============================================================");
+        logger.info("Rollback Batch ID: {}", batch.getRollbackBatchId());
+        logger.info("Scope: {} = {}", batch.getRollbackScope(), batch.getScopeValue());
+        logger.info("Status: {}", batch.getStatus());
+        logger.info("------------------------------------------------------------");
+        logger.info("Total Documents: {}", batch.getTotalDocuments());
+        logger.info("Successfully Rolled Back: {}", batch.getRolledBackCount());
+        logger.info("Failed: {}", batch.getFailedCount());
+        logger.info("Staging Records Reset: {}", batch.getStagingResetCount());
+        logger.info("------------------------------------------------------------");
+        logger.info("Duration: {}", result.getFormattedDuration());
+        logger.info("Success Rate: {:.1f}%", batch.getSuccessRate());
+        logger.info("Unique Claim Numbers for Reprocess: {}", 
+                result.getClaimNumbersForReprocess().size());
+        logger.info("============================================================");
+        
+        if (result.hasFailures()) {
+            logger.warn("ATTENTION: {} documents failed to rollback. Check error log for details.", 
+                    batch.getFailedCount());
+        }
+        
+        if (properties.isDryRun()) {
+            logger.info("NOTE: This was a DRY RUN. No actual changes were made.");
+            logger.info("Remove 'rollback.dryrun=true' from properties to execute actual rollback.");
+        }
+    }
+    
+    @Override
+    public void close() {
+        // Nothing to close - services are closed by the caller
+    }
+}
+
+
+
+# ============================================================================
+# WawaDocumentRollbackUtility Configuration
+# ============================================================================
+# This utility rolls back migrated documents from FileNet and resets
+# CC_Extract_Staging for re-commit capability.
+# ============================================================================
+
+# ============================================================================
+# ROLLBACK SCOPE CONFIGURATION (REQUIRED)
+# ============================================================================
+# Rollback scope determines which documents to rollback
+# Valid values: FILE, BATCH, DATE, SELECTIVE
+rollback.scope=FILE
+
+# Scope value based on rollback.scope:
+#   FILE      -> CC_Extract_file_Name (e.g., CC_Extract_2024_01.csv)
+#   BATCH     -> batchID (e.g., B001)
+#   DATE      -> Single date or range (e.g., 2024-12-20 or 2024-12-20,2024-12-22)
+#   SELECTIVE -> Path to file containing gwDocExternalID list (one per line)
+rollback.scope.value=CC_Extract_2024_01.csv
+
+# Reason for rollback (will be stored in RollbackReason column)
+rollback.reason=Data quality issue - need to re-process
+
+# ============================================================================
+# DRY RUN MODE (OPTIONAL)
+# ============================================================================
+# When true, shows what would be rolled back without actually doing it
+# Default: false
+rollback.dryrun=false
+
+# ============================================================================
+# DATABASE CONFIGURATION (REQUIRED)
+# ============================================================================
+# SQL Server connection settings
+db.server=localhost
+db.port=1433
+db.name=Wawa_DMS_Conversion_UAT
+
+# Authentication mode: true = Windows Integrated, false = SQL Server Auth
+db.integrated.security=true
+
+# SQL Server Authentication credentials (only if integrated.security=false)
+db.username=
+db.password=
+
+# Connection pool settings
+db.pool.size=10
+db.connection.timeout.seconds=30
+
+# Table names
+db.table.migrated.documents=WawaMigratedDocuments
+db.table.staging=CC_Extract_Staging
+db.table.rollback.batch=RollbackBatch
+
+# ============================================================================
+# FILENET CONFIGURATION (REQUIRED)
+# ============================================================================
+# FileNet Content Engine connection
+filenet.uri=http://localhost:9080/wsi/FNCEWS40MTOM/
+filenet.username=P8Admin
+filenet.password=password
+filenet.stanza=FileNetP8WSI
+filenet.objectstore=WAWAOS
+
+# FileNet batch delete size (documents per batch)
+filenet.batch.size=50
+
+# ============================================================================
+# OUTPUT CONFIGURATION (REQUIRED)
+# ============================================================================
+# Base path for output files (reports, reprocess CSV, logs)
+# Note: Use double backslash (\\) for Windows paths or forward slash (/)
+output.base.path=D:/Rameshwar/WawaDocumentRollbackUtiltity/Rollback
+
+# Output folder names
+output.folder.reports=Reports
+output.folder.reprocess=Reprocess
+output.folder.logs=Logs
+
+# ============================================================================
+# REPORT CONFIGURATION (OPTIONAL)
+# ============================================================================
+# Generate detailed rollback report
+report.generate=true
+
+# Generate reprocess CSV file (for CCDataIndexAndPackagingUtility input)
+report.generate.reprocess.csv=true
+
+# ============================================================================
+# VALIDATION CONFIGURATION (OPTIONAL)
+# ============================================================================
+# Validate FileNet connection before processing
+validation.filenet.connection=true
+
+# Validate database connection before processing
+validation.database.connection=true
+
+# Maximum documents to rollback in single execution (0 = unlimited)
+# Safety limit to prevent accidental mass rollback
+validation.max.documents=0
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# ============================================================================
+# Log4j2 configuration file path
+log4j2.config.path=config/Log4j2.xml
+
+
+
+
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN" monitorInterval="30">
+    
+    <Properties>
+        <Property name="LOG_PATH">logs</Property>
+        <Property name="LOG_PATTERN">%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n</Property>
+        <Property name="LOG_PATTERN_DETAILED">%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} [%M:%L] - %msg%n</Property>
+    </Properties>
+    
+    <Appenders>
+        <!-- Console Appender -->
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="${LOG_PATTERN}"/>
+            <ThresholdFilter level="INFO" onMatch="ACCEPT" onMismatch="DENY"/>
+        </Console>
+        
+        <!-- Main Application Log -->
+        <RollingFile name="RollbackLog" 
+                     fileName="${LOG_PATH}/WawaDocumentRollback.log"
+                     filePattern="${LOG_PATH}/archive/WawaDocumentRollback-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${LOG_PATTERN_DETAILED}"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="50MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="30"/>
+        </RollingFile>
+        
+        <!-- Database Operations Log -->
+        <RollingFile name="DatabaseLog" 
+                     fileName="${LOG_PATH}/DatabaseOperations.log"
+                     filePattern="${LOG_PATH}/archive/DatabaseOperations-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${LOG_PATTERN_DETAILED}"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="50MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="30"/>
+        </RollingFile>
+        
+        <!-- FileNet Operations Log -->
+        <RollingFile name="FileNetLog" 
+                     fileName="${LOG_PATH}/FileNetOperations.log"
+                     filePattern="${LOG_PATH}/archive/FileNetOperations-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${LOG_PATTERN_DETAILED}"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="50MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="30"/>
+        </RollingFile>
+        
+        <!-- Error Log -->
+        <RollingFile name="ErrorLog" 
+                     fileName="${LOG_PATH}/Errors.log"
+                     filePattern="${LOG_PATH}/archive/Errors-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="${LOG_PATTERN_DETAILED}"/>
+            <ThresholdFilter level="ERROR" onMatch="ACCEPT" onMismatch="DENY"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="50MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="30"/>
+        </RollingFile>
+        
+        <!-- Progress Log (INFO level only for tracking progress) -->
+        <RollingFile name="ProgressLog" 
+                     fileName="${LOG_PATH}/Progress.log"
+                     filePattern="${LOG_PATH}/archive/Progress-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss} - %msg%n"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="50MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="30"/>
+        </RollingFile>
+    </Appenders>
+    
+    <Loggers>
+        <!-- Database Service Logger -->
+        <Logger name="com.wawa.ace.migration.service.DatabaseService" level="DEBUG" additivity="false">
+            <AppenderRef ref="DatabaseLog"/>
+            <AppenderRef ref="RollbackLog"/>
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="ErrorLog"/>
+        </Logger>
+        
+        <!-- FileNet Service Logger -->
+        <Logger name="com.wawa.ace.migration.service.FileNetService" level="DEBUG" additivity="false">
+            <AppenderRef ref="FileNetLog"/>
+            <AppenderRef ref="RollbackLog"/>
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="ErrorLog"/>
+        </Logger>
+        
+        <!-- Rollback Service Logger -->
+        <Logger name="com.wawa.ace.migration.service.RollbackService" level="DEBUG" additivity="false">
+            <AppenderRef ref="RollbackLog"/>
+            <AppenderRef ref="ProgressLog"/>
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="ErrorLog"/>
+        </Logger>
+        
+        <!-- Report Generator Logger -->
+        <Logger name="com.wawa.ace.migration.report" level="DEBUG" additivity="false">
+            <AppenderRef ref="RollbackLog"/>
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="ErrorLog"/>
+        </Logger>
+        
+        <!-- Config Logger -->
+        <Logger name="com.wawa.ace.migration.config" level="INFO" additivity="false">
+            <AppenderRef ref="RollbackLog"/>
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="ErrorLog"/>
+        </Logger>
+        
+        <!-- HikariCP Logger (connection pool) -->
+        <Logger name="com.zaxxer.hikari" level="WARN" additivity="false">
+            <AppenderRef ref="DatabaseLog"/>
+            <AppenderRef ref="ErrorLog"/>
+        </Logger>
+        
+        <!-- SQL Server JDBC Logger -->
+        <Logger name="com.microsoft.sqlserver" level="WARN" additivity="false">
+            <AppenderRef ref="DatabaseLog"/>
+            <AppenderRef ref="ErrorLog"/>
+        </Logger>
+        
+        <!-- Root Logger -->
+        <Root level="INFO">
+            <AppenderRef ref="RollbackLog"/>
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="ErrorLog"/>
+        </Root>
+    </Loggers>
+    
+</Configuration>
+
+
+
+
+
+Rollback Scope Configuration Examples
+1️⃣ FILE Scope - Rollback by CC Extract Source File
+Rolls back ALL documents that came from a specific CC Extract CSV file.
+# Example 1: Rollback all documents from a specific CC Extract filerollback.scope=FILErollback.scope.value=CC_Extract_2024_01.csvrollback.reason=Bad data in source file - need to re-extract# Example 2: Another filerollback.scope=FILErollback.scope.value=CC_Extract_Claims_Dec2024.csvrollback.reason=Incorrect claim mappings
+Where this value comes from:
+The CC_Extract_file_Name column in CC_Extract_Staging and WawaMigratedDocuments tables
+This is set when CCDataMergeUtility loads the CSV file
+Use Case: "The entire file CC_Extract_2024_01.csv had incorrect data. I need to rollback all 500 documents from that file and re-process."
+2️⃣ BATCH Scope - Rollback by Batch ID
+Rolls back documents that were packaged in a specific batch by CCDataIndexAndPackagingUtility.
+# Example 1: Rollback a specific batchrollback.scope=BATCHrollback.scope.value=B_20241220_001rollback.reason=Batch failed during FileNet injection# Example 2: Another batch formatrollback.scope=BATCHrollback.scope.value=CLM123456_B001rollback.reason=Wrong document class used
+Where this value comes from:
+The batchID column in CC_Extract_Staging and WawaMigratedDocuments tables
+Generated by CCDataIndexAndPackagingUtility during Step 6
+Use Case: "Batch B_20241220_001 failed mid-way during migration. I need to rollback the 50 documents in that batch and retry."
+3️⃣ DATE Scope - Rollback by Migration Date
+Rolls back documents migrated within a specific date or date range.
+# Example 1: Single date - rollback everything migrated on Dec 20, 2024rollback.scope=DATErollback.scope.value=2024-12-20rollback.reason=Wrong configuration used on this day# Example 2: Date range - rollback Dec 20 through Dec 22rollback.scope=DATErollback.scope.value=2024-12-20,2024-12-22rollback.reason=All migrations during this period had issues# Example 3: Just todayrollback.scope=DATErollback.scope.value=2024-12-22,2024-12-22rollback.reason=Today's run had incorrect settings
+Format:
+Single date: YYYY-MM-DD
+Date range: YYYY-MM-DD,YYYY-MM-DD (from,to - inclusive)
+Where this value comes from:
+The DateCreated column in WawaMigratedDocuments table
+Set when WawaDocumentMigrationUtility creates the document
+Use Case: "Everything we migrated on December 20th used wrong FileNet properties. Rollback all 1,200 documents from that day."
+4️⃣ SELECTIVE Scope - Rollback Specific Documents
+Rolls back specific documents identified by a list of gwDocExternalID values in a text file.
+# Example: Rollback specific documents from a list filerollback.scope=SELECTIVErollback.scope.value=D:/Rameshwar/WawaDocumentRollbackUtiltity/input/rollback_ids.txtrollback.reason=These specific documents have data issues
+The input file format (rollback_ids.txt):
+# Lines starting with # are comments and ignored# Empty lines are also ignored# One gwDocExternalID per lineDOC123~~~EXT001DOC124~~~EXT002DOC125~~~EXT003CLM456_DOC001~~~789CLM456_DOC002~~~790
+Where this value comes from:
+The gwDocExternalID column in WawaMigratedDocuments table
+This is the composite key: gwDocumentID~~~externalID
+Use Case: "Only 5 specific documents out of 1,000 need to be fixed. I have a list of their IDs."
