@@ -1,1 +1,675 @@
-temp
+-- ============================================================================
+-- CREATE cc_document_externalID TABLE
+-- ============================================================================
+-- Purpose: Store externalIDs from CC document CSV files
+-- Database: Wawa_DMS_Conversion_UAT
+-- 
+-- Expected CSV Format (after conversion):
+--   externalID
+--   10001:{75C7C6AD-A593-4669-A88F-8D804FXXXXXX}
+--   10001:{A3A4A179-F40F-490F-80A9-920671XXXXXX}
+--
+-- Volume: ~23 Million rows
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT]
+GO
+
+-- ============================================================================
+-- STEP 1: DROP EXISTING OBJECTS (if exists)
+-- ============================================================================
+
+PRINT '============================================================================'
+PRINT 'Step 1: Dropping existing objects...'
+PRINT '============================================================================'
+GO
+
+-- Drop staging table
+IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[cc_document_externalID_Staging]') AND type in (N'U'))
+BEGIN
+    DROP TABLE [dbo].[cc_document_externalID_Staging]
+    PRINT '  Dropped table: cc_document_externalID_Staging'
+END
+GO
+
+-- Drop error/duplicate tracking table
+IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[cc_document_externalID_Errors]') AND type in (N'U'))
+BEGIN
+    DROP TABLE [dbo].[cc_document_externalID_Errors]
+    PRINT '  Dropped table: cc_document_externalID_Errors'
+END
+GO
+
+-- Drop main table
+IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[cc_document_externalID]') AND type in (N'U'))
+BEGIN
+    DROP TABLE [dbo].[cc_document_externalID]
+    PRINT '  Dropped table: cc_document_externalID'
+END
+GO
+
+PRINT 'Step 1: Complete'
+PRINT ''
+GO
+
+-- ============================================================================
+-- STEP 2: CREATE MAIN TABLE
+-- ============================================================================
+
+PRINT '============================================================================'
+PRINT 'Step 2: Creating main table [cc_document_externalID]...'
+PRINT '============================================================================'
+GO
+
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+CREATE TABLE [dbo].[cc_document_externalID](
+    [ID] [BIGINT] IDENTITY(1,1) NOT NULL,
+    [externalID] [VARCHAR](100) NOT NULL,
+    
+    CONSTRAINT [PK_cc_document_externalID] PRIMARY KEY CLUSTERED 
+    (
+        [ID] ASC
+    )
+    WITH (
+        PAD_INDEX = OFF,
+        STATISTICS_NORECOMPUTE = OFF,
+        IGNORE_DUP_KEY = OFF,
+        ALLOW_ROW_LOCKS = ON,
+        ALLOW_PAGE_LOCKS = ON,
+        FILLFACTOR = 95,
+        OPTIMIZE_FOR_SEQUENTIAL_KEY = ON,    -- Optimized for IDENTITY inserts
+        DATA_COMPRESSION = PAGE              -- Compression for 23M rows
+    ) ON [PRIMARY],
+    
+    -- Unique constraint on externalID (no duplicates allowed)
+    CONSTRAINT [UQ_cc_document_externalID_externalID] UNIQUE NONCLUSTERED
+    (
+        [externalID] ASC
+    )
+    WITH (
+        PAD_INDEX = OFF,
+        STATISTICS_NORECOMPUTE = OFF,
+        IGNORE_DUP_KEY = OFF,
+        ALLOW_ROW_LOCKS = ON,
+        ALLOW_PAGE_LOCKS = ON,
+        FILLFACTOR = 90,
+        DATA_COMPRESSION = PAGE
+    ) ON [PRIMARY]
+) ON [PRIMARY]
+GO
+
+PRINT '  Created table: cc_document_externalID'
+PRINT '  - ID: BIGINT IDENTITY (auto-generated)'
+PRINT '  - externalID: VARCHAR(100) UNIQUE'
+GO
+
+-- ============================================================================
+-- STEP 3: CREATE INDEX ON externalID
+-- ============================================================================
+
+PRINT ''
+PRINT '============================================================================'
+PRINT 'Step 3: Creating index on externalID...'
+PRINT '============================================================================'
+GO
+
+-- Note: The UNIQUE constraint already creates an index, but we add a covering index for lookups
+CREATE NONCLUSTERED INDEX [IX_cc_document_externalID_externalID] 
+ON [dbo].[cc_document_externalID]
+(
+    [externalID] ASC
+)
+INCLUDE (
+    [ID]
+)
+WITH (
+    PAD_INDEX = OFF,
+    STATISTICS_NORECOMPUTE = OFF,
+    SORT_IN_TEMPDB = ON,
+    DROP_EXISTING = OFF,
+    ONLINE = OFF,
+    ALLOW_ROW_LOCKS = ON,
+    ALLOW_PAGE_LOCKS = ON,
+    FILLFACTOR = 90,
+    DATA_COMPRESSION = PAGE
+) ON [PRIMARY]
+GO
+
+PRINT '  Created index: IX_cc_document_externalID_externalID'
+GO
+
+-- ============================================================================
+-- STEP 4: CREATE STAGING TABLE (for BULK INSERT)
+-- ============================================================================
+
+PRINT ''
+PRINT '============================================================================'
+PRINT 'Step 4: Creating staging table for BULK INSERT...'
+PRINT '============================================================================'
+GO
+
+CREATE TABLE [dbo].[cc_document_externalID_Staging](
+    [externalID] [VARCHAR](100) NOT NULL
+) ON [PRIMARY]
+GO
+
+PRINT '  Created table: cc_document_externalID_Staging'
+GO
+
+-- ============================================================================
+-- STEP 5: CREATE ERROR/DUPLICATE TRACKING TABLE
+-- ============================================================================
+
+PRINT ''
+PRINT '============================================================================'
+PRINT 'Step 5: Creating error/duplicate tracking table...'
+PRINT '============================================================================'
+GO
+
+CREATE TABLE [dbo].[cc_document_externalID_Errors](
+    [ID] [BIGINT] IDENTITY(1,1) NOT NULL,
+    [externalID] [VARCHAR](100) NOT NULL,
+    [sourceFileName] [VARCHAR](200) NULL,
+    [errorType] [VARCHAR](50) NOT NULL,        -- 'DUPLICATE' or 'ERROR'
+    [errorMessage] [VARCHAR](500) NULL,
+    [dateLogged] [DATETIME2](3) NOT NULL DEFAULT(GETDATE()),
+    
+    CONSTRAINT [PK_cc_document_externalID_Errors] PRIMARY KEY CLUSTERED 
+    (
+        [ID] ASC
+    )
+    WITH (
+        PAD_INDEX = OFF,
+        STATISTICS_NORECOMPUTE = OFF,
+        IGNORE_DUP_KEY = OFF,
+        ALLOW_ROW_LOCKS = ON,
+        ALLOW_PAGE_LOCKS = ON
+    ) ON [PRIMARY]
+) ON [PRIMARY]
+GO
+
+-- Index for querying by source file
+CREATE NONCLUSTERED INDEX [IX_cc_document_externalID_Errors_sourceFileName] 
+ON [dbo].[cc_document_externalID_Errors]
+(
+    [sourceFileName] ASC
+)
+INCLUDE (
+    [externalID],
+    [errorType]
+)
+ON [PRIMARY]
+GO
+
+PRINT '  Created table: cc_document_externalID_Errors'
+PRINT '  - Tracks duplicates and errors by source file'
+GO
+
+-- ============================================================================
+-- STEP 6: VERIFICATION
+-- ============================================================================
+
+PRINT ''
+PRINT '============================================================================'
+PRINT 'Step 6: Verification...'
+PRINT '============================================================================'
+GO
+
+PRINT 'Tables Created:'
+SELECT 
+    t.name AS [Table Name],
+    p.rows AS [Row Count],
+    CAST(SUM(a.total_pages) * 8 / 1024.0 AS DECIMAL(10,2)) AS [Size (MB)]
+FROM sys.tables t
+INNER JOIN sys.indexes i ON t.object_id = i.object_id
+INNER JOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id
+INNER JOIN sys.allocation_units a ON p.partition_id = a.container_id
+WHERE t.name IN ('cc_document_externalID', 'cc_document_externalID_Staging', 'cc_document_externalID_Errors')
+GROUP BY t.name, p.rows
+ORDER BY t.name
+GO
+
+PRINT ''
+PRINT 'Indexes Created:'
+SELECT 
+    t.name AS [Table],
+    i.name AS [Index Name],
+    i.type_desc AS [Type],
+    i.is_unique AS [Is Unique]
+FROM sys.indexes i
+INNER JOIN sys.tables t ON i.object_id = t.object_id
+WHERE t.name IN ('cc_document_externalID', 'cc_document_externalID_Staging', 'cc_document_externalID_Errors')
+    AND i.name IS NOT NULL
+ORDER BY t.name, i.index_id
+GO
+
+-- ============================================================================
+-- COMPLETE
+-- ============================================================================
+
+PRINT ''
+PRINT '============================================================================'
+PRINT 'TABLE CREATION COMPLETE!'
+PRINT '============================================================================'
+PRINT ''
+PRINT 'Tables Created:'
+PRINT '  1. [cc_document_externalID]         - Main table (ID, externalID)'
+PRINT '  2. [cc_document_externalID_Staging] - Staging for BULK INSERT'
+PRINT '  3. [cc_document_externalID_Errors]  - Duplicate/Error tracking'
+PRINT ''
+PRINT 'Next Steps:'
+PRINT '  1. Prepare CSV files with header: externalID'
+PRINT '  2. Run 02_bulk_insert_cc_document_externalID.sql for each CSV file'
+PRINT '  3. Run 03_find_missing_externalIDs.sql to find missing records'
+PRINT ''
+PRINT '============================================================================'
+GO
+
+
+
+
+
+
+-- ============================================================================
+-- STORED PROCEDURE: Bulk Insert CSV into cc_document_externalID
+-- ============================================================================
+-- Purpose: Reusable stored procedure to load CSV files
+-- Database: Wawa_DMS_Conversion_UAT
+--
+-- Usage:
+--   EXEC sp_BulkInsert_cc_document_externalID 'D:\Rameshwar\cc_document\file1.csv'
+--   EXEC sp_BulkInsert_cc_document_externalID 'D:\Rameshwar\cc_document\file2.csv'
+--
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT]
+GO
+
+-- Drop if exists
+IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[sp_BulkInsert_cc_document_externalID]') AND type = N'P')
+BEGIN
+    DROP PROCEDURE [dbo].[sp_BulkInsert_cc_document_externalID]
+    PRINT 'Dropped existing procedure: sp_BulkInsert_cc_document_externalID'
+END
+GO
+
+CREATE PROCEDURE [dbo].[sp_BulkInsert_cc_document_externalID]
+    @CSVFilePath NVARCHAR(500)
+AS
+BEGIN
+    SET NOCOUNT ON
+    
+    DECLARE @FileName NVARCHAR(200)
+    DECLARE @SQL NVARCHAR(MAX)
+    DECLARE @StagingCount BIGINT = 0
+    DECLARE @DuplicateCount BIGINT = 0
+    DECLARE @InFileDuplicateCount BIGINT = 0
+    DECLARE @InsertedCount BIGINT = 0
+    DECLARE @TotalInTable BIGINT = 0
+    DECLARE @StartTime DATETIME2 = GETDATE()
+    
+    -- Extract filename from path
+    SET @FileName = RIGHT(@CSVFilePath, CHARINDEX('\', REVERSE(@CSVFilePath)) - 1)
+    
+    PRINT '============================================================================'
+    PRINT 'BULK INSERT: ' + @FileName
+    PRINT 'Started: ' + CONVERT(VARCHAR, @StartTime, 121)
+    PRINT '============================================================================'
+    
+    -- ========================================================================
+    -- STEP 1: CLEAR STAGING TABLE
+    -- ========================================================================
+    PRINT ''
+    PRINT 'Step 1: Clearing staging table...'
+    TRUNCATE TABLE [dbo].[cc_document_externalID_Staging]
+    PRINT '  Done'
+    
+    -- ========================================================================
+    -- STEP 2: BULK INSERT INTO STAGING
+    -- ========================================================================
+    PRINT ''
+    PRINT 'Step 2: BULK INSERT from: ' + @CSVFilePath
+    
+    BEGIN TRY
+        SET @SQL = N'
+        BULK INSERT [dbo].[cc_document_externalID_Staging]
+        FROM ''' + @CSVFilePath + '''
+        WITH (
+            FIELDTERMINATOR = '','',
+            ROWTERMINATOR = ''\n'',
+            FIRSTROW = 2,
+            TABLOCK,
+            BATCHSIZE = 100000,
+            MAXERRORS = 0
+        )'
+        
+        EXEC sp_executesql @SQL
+        
+        SELECT @StagingCount = COUNT(*) FROM [dbo].[cc_document_externalID_Staging]
+        PRINT '  Loaded: ' + FORMAT(@StagingCount, 'N0') + ' rows'
+        
+    END TRY
+    BEGIN CATCH
+        PRINT '  ERROR: ' + ERROR_MESSAGE()
+        
+        -- Log error
+        INSERT INTO [dbo].[cc_document_externalID_Errors] 
+            (externalID, sourceFileName, errorType, errorMessage)
+        VALUES 
+            ('N/A', @FileName, 'BULK_INSERT_ERROR', ERROR_MESSAGE())
+        
+        RETURN -1
+    END CATCH
+    
+    -- ========================================================================
+    -- STEP 3: LOG DUPLICATES (already in main table)
+    -- ========================================================================
+    PRINT ''
+    PRINT 'Step 3: Checking for existing duplicates...'
+    
+    INSERT INTO [dbo].[cc_document_externalID_Errors] 
+        (externalID, sourceFileName, errorType, errorMessage)
+    SELECT 
+        s.externalID,
+        @FileName,
+        'DUPLICATE',
+        'Already exists in cc_document_externalID'
+    FROM [dbo].[cc_document_externalID_Staging] s
+    WHERE EXISTS (
+        SELECT 1 FROM [dbo].[cc_document_externalID] m 
+        WHERE m.externalID = s.externalID
+    )
+    
+    SET @DuplicateCount = @@ROWCOUNT
+    PRINT '  Duplicates found: ' + FORMAT(@DuplicateCount, 'N0')
+    
+    -- ========================================================================
+    -- STEP 4: LOG DUPLICATES WITHIN FILE
+    -- ========================================================================
+    PRINT ''
+    PRINT 'Step 4: Checking for duplicates within file...'
+    
+    ;WITH DuplicatesInFile AS (
+        SELECT externalID, COUNT(*) as cnt
+        FROM [dbo].[cc_document_externalID_Staging]
+        GROUP BY externalID
+        HAVING COUNT(*) > 1
+    )
+    INSERT INTO [dbo].[cc_document_externalID_Errors] 
+        (externalID, sourceFileName, errorType, errorMessage)
+    SELECT 
+        d.externalID,
+        @FileName,
+        'DUPLICATE_IN_FILE',
+        'Appears ' + CAST(d.cnt AS VARCHAR(10)) + ' times in file'
+    FROM DuplicatesInFile d
+    
+    SET @InFileDuplicateCount = @@ROWCOUNT
+    PRINT '  In-file duplicates: ' + FORMAT(@InFileDuplicateCount, 'N0')
+    
+    -- ========================================================================
+    -- STEP 5: INSERT UNIQUE RECORDS
+    -- ========================================================================
+    PRINT ''
+    PRINT 'Step 5: Inserting unique records...'
+    
+    INSERT INTO [dbo].[cc_document_externalID] (externalID)
+    SELECT DISTINCT s.externalID
+    FROM [dbo].[cc_document_externalID_Staging] s
+    WHERE NOT EXISTS (
+        SELECT 1 FROM [dbo].[cc_document_externalID] m 
+        WHERE m.externalID = s.externalID
+    )
+    
+    SET @InsertedCount = @@ROWCOUNT
+    PRINT '  Inserted: ' + FORMAT(@InsertedCount, 'N0') + ' records'
+    
+    -- ========================================================================
+    -- SUMMARY
+    -- ========================================================================
+    SELECT @TotalInTable = COUNT(*) FROM [dbo].[cc_document_externalID]
+    
+    DECLARE @Duration INT = DATEDIFF(SECOND, @StartTime, GETDATE())
+    
+    PRINT ''
+    PRINT '============================================================================'
+    PRINT 'SUMMARY: ' + @FileName
+    PRINT '============================================================================'
+    PRINT '  Rows in CSV:           ' + FORMAT(@StagingCount, 'N0')
+    PRINT '  Duplicates (existing): ' + FORMAT(@DuplicateCount, 'N0')
+    PRINT '  Duplicates (in file):  ' + FORMAT(@InFileDuplicateCount, 'N0')
+    PRINT '  New records inserted:  ' + FORMAT(@InsertedCount, 'N0')
+    PRINT '  ----------------------------------------'
+    PRINT '  Total in main table:   ' + FORMAT(@TotalInTable, 'N0')
+    PRINT '  Duration:              ' + CAST(@Duration AS VARCHAR(10)) + ' seconds'
+    PRINT '============================================================================'
+    
+    RETURN @InsertedCount
+END
+GO
+
+PRINT ''
+PRINT 'Stored Procedure Created: sp_BulkInsert_cc_document_externalID'
+PRINT ''
+PRINT 'Usage:'
+PRINT '  EXEC sp_BulkInsert_cc_document_externalID ''D:\path\to\file1.csv'''
+PRINT '  EXEC sp_BulkInsert_cc_document_externalID ''D:\path\to\file2.csv'''
+PRINT ''
+GO
+
+
+
+
+
+
+
+
+
+
+
+
+-- ============================================================================
+-- FIND MISSING EXTERNAL IDs
+-- ============================================================================
+-- Purpose: Find externalIDs that exist in cc_document_externalID
+--          but are MISSING from Wawa_Doc_Migration_Transit_Data
+--
+-- Database: Wawa_DMS_Conversion_UAT
+--
+-- This identifies CC documents that have not yet been processed/migrated
+-- ============================================================================
+
+USE [Wawa_DMS_Conversion_UAT]
+GO
+
+SET NOCOUNT ON
+GO
+
+PRINT '============================================================================'
+PRINT 'FIND MISSING EXTERNAL IDs'
+PRINT 'Started: ' + CONVERT(VARCHAR, GETDATE(), 121)
+PRINT '============================================================================'
+PRINT ''
+
+-- ============================================================================
+-- STEP 1: COUNT SUMMARY
+-- ============================================================================
+
+DECLARE @CCDocCount BIGINT
+DECLARE @TransitCount BIGINT
+DECLARE @MatchCount BIGINT
+DECLARE @MissingCount BIGINT
+
+SELECT @CCDocCount = COUNT(*) FROM [dbo].[cc_document_externalID]
+SELECT @TransitCount = COUNT(*) FROM [dbo].[Wawa_Doc_Migration_Transit_Data]
+
+PRINT 'Record Counts:'
+PRINT '  cc_document_externalID:           ' + FORMAT(@CCDocCount, 'N0')
+PRINT '  Wawa_Doc_Migration_Transit_Data:  ' + FORMAT(@TransitCount, 'N0')
+PRINT ''
+
+-- ============================================================================
+-- STEP 2: COUNT MATCHING RECORDS
+-- ============================================================================
+
+PRINT 'Analyzing matches...'
+
+SELECT @MatchCount = COUNT(*)
+FROM [dbo].[cc_document_externalID] cc
+WHERE EXISTS (
+    SELECT 1 
+    FROM [dbo].[Wawa_Doc_Migration_Transit_Data] t 
+    WHERE t.externalID = cc.externalID
+)
+
+SET @MissingCount = @CCDocCount - @MatchCount
+
+PRINT ''
+PRINT 'Match Analysis:'
+PRINT '  Found in Transit Data:    ' + FORMAT(@MatchCount, 'N0')
+PRINT '  MISSING from Transit Data: ' + FORMAT(@MissingCount, 'N0')
+PRINT ''
+
+-- ============================================================================
+-- STEP 3: GET LIST OF MISSING EXTERNAL IDs
+-- ============================================================================
+-- This query returns all externalIDs that are in cc_document_externalID
+-- but NOT in Wawa_Doc_Migration_Transit_Data
+
+PRINT '============================================================================'
+PRINT 'MISSING EXTERNAL IDs (First 100 rows for preview)'
+PRINT '============================================================================'
+
+SELECT TOP 100
+    cc.ID,
+    cc.externalID AS [Missing_ExternalID]
+FROM [dbo].[cc_document_externalID] cc
+WHERE NOT EXISTS (
+    SELECT 1 
+    FROM [dbo].[Wawa_Doc_Migration_Transit_Data] t 
+    WHERE t.externalID = cc.externalID
+)
+ORDER BY cc.ID
+
+PRINT ''
+PRINT 'Showing first 100 missing externalIDs. See full query below.'
+PRINT ''
+GO
+
+-- ============================================================================
+-- FULL QUERY: ALL MISSING EXTERNAL IDs
+-- ============================================================================
+-- Use this query to get the complete list of missing externalIDs
+-- You can export this to CSV using SSMS: Right-click results > Save As > CSV
+
+/*
+-- OPTION 1: Simple list of missing externalIDs
+SELECT 
+    cc.externalID AS [Missing_ExternalID]
+FROM [dbo].[cc_document_externalID] cc
+WHERE NOT EXISTS (
+    SELECT 1 
+    FROM [dbo].[Wawa_Doc_Migration_Transit_Data] t 
+    WHERE t.externalID = cc.externalID
+)
+ORDER BY cc.externalID
+*/
+
+-- ============================================================================
+-- OPTION 2: Missing externalIDs with ID (for tracking)
+-- ============================================================================
+
+/*
+SELECT 
+    cc.ID,
+    cc.externalID AS [Missing_ExternalID]
+FROM [dbo].[cc_document_externalID] cc
+WHERE NOT EXISTS (
+    SELECT 1 
+    FROM [dbo].[Wawa_Doc_Migration_Transit_Data] t 
+    WHERE t.externalID = cc.externalID
+)
+ORDER BY cc.ID
+*/
+
+-- ============================================================================
+-- OPTION 3: Export to a table for further processing
+-- ============================================================================
+-- Uncomment to create a table with missing externalIDs
+
+/*
+-- Drop if exists
+IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[cc_document_missing_externalIDs]') AND type in (N'U'))
+    DROP TABLE [dbo].[cc_document_missing_externalIDs]
+
+-- Create table with missing externalIDs
+SELECT 
+    cc.ID,
+    cc.externalID AS [Missing_ExternalID],
+    GETDATE() AS [DateIdentified]
+INTO [dbo].[cc_document_missing_externalIDs]
+FROM [dbo].[cc_document_externalID] cc
+WHERE NOT EXISTS (
+    SELECT 1 
+    FROM [dbo].[Wawa_Doc_Migration_Transit_Data] t 
+    WHERE t.externalID = cc.externalID
+)
+
+PRINT 'Created table: cc_document_missing_externalIDs'
+SELECT COUNT(*) AS [Missing Count] FROM [dbo].[cc_document_missing_externalIDs]
+*/
+
+-- ============================================================================
+-- SUMMARY STATISTICS
+-- ============================================================================
+
+PRINT ''
+PRINT '============================================================================'
+PRINT 'SUMMARY'
+PRINT '============================================================================'
+
+SELECT 
+    'cc_document_externalID' AS [Table],
+    COUNT(*) AS [Total Records]
+FROM [dbo].[cc_document_externalID]
+UNION ALL
+SELECT 
+    'Wawa_Doc_Migration_Transit_Data',
+    COUNT(*)
+FROM [dbo].[Wawa_Doc_Migration_Transit_Data]
+UNION ALL
+SELECT 
+    'MATCHING (in both tables)',
+    COUNT(*)
+FROM [dbo].[cc_document_externalID] cc
+WHERE EXISTS (
+    SELECT 1 
+    FROM [dbo].[Wawa_Doc_Migration_Transit_Data] t 
+    WHERE t.externalID = cc.externalID
+)
+UNION ALL
+SELECT 
+    'MISSING (in CC but not Transit)',
+    COUNT(*)
+FROM [dbo].[cc_document_externalID] cc
+WHERE NOT EXISTS (
+    SELECT 1 
+    FROM [dbo].[Wawa_Doc_Migration_Transit_Data] t 
+    WHERE t.externalID = cc.externalID
+)
+GO
+
+PRINT ''
+PRINT '============================================================================'
+PRINT 'Completed: ' + CONVERT(VARCHAR, GETDATE(), 121)
+PRINT '============================================================================'
+GO
+
+
+
+
