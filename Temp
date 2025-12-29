@@ -1,1 +1,3628 @@
-temp
+CNBMultiRepoSearchPlugin
+
+
+package com.cnb.search;
+
+import java.util.Locale;
+
+import javax.servlet.http.HttpServletRequest;
+
+import com.cnb.search.feature.MultiRepoSearchFeature;
+import com.cnb.search.service.MultiRepoSearchService;
+import com.ibm.ecm.extension.Plugin;
+import com.ibm.ecm.extension.PluginAction;
+import com.ibm.ecm.extension.PluginFeature;
+import com.ibm.ecm.extension.PluginLayout;
+import com.ibm.ecm.extension.PluginMenu;
+import com.ibm.ecm.extension.PluginMenuType;
+import com.ibm.ecm.extension.PluginODAuthenticationService;
+import com.ibm.ecm.extension.PluginOpenAction;
+import com.ibm.ecm.extension.PluginRequestFilter;
+import com.ibm.ecm.extension.PluginResponseFilter;
+import com.ibm.ecm.extension.PluginService;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.ecm.extension.PluginViewerDef;
+import com.ibm.ecm.extension.PluginRepositoryType;
+import com.ibm.ecm.extension.PluginAPI;
+
+/**
+ * Provides the main class of an IBM Content Navigator plug-in. The abstract
+ * methods provide the name and version of the plug-in, and identify the
+ * components such as actions, services, and scripts that are included in the
+ * plug-in. The name of the <code>Plugin</code> subclass is specified in the
+ * plug-in JAR file by using the following property in the manifest:
+ * 
+ * <pre>
+ *     Plugin-Class: <i>pluginClassName</i>
+ * </pre>
+ * 
+ * The location of the plug-in JAR file is specified in the IBM Content
+ * Navigator <code>AppConfig.xml</code> file. An administrator can edit this
+ * file by adding the plug-in to the IBM Content Navigator configuration by
+ * using the IBM Content Navigator administration tool.
+ * <p>
+ */
+public class CNBMultiRepoSearchPlugin extends Plugin {
+
+	private PluginAction[] pluginActions = new PluginAction[0];
+	private PluginOpenAction[]  pluginOpenActions = new PluginOpenAction[0];
+	private PluginRequestFilter[] pluginRequestFilters = new PluginRequestFilter[0];
+	private PluginResponseFilter[] pluginResponseFilters = new PluginResponseFilter[0];
+	private PluginService[] pluginServices = new PluginService[] { new MultiRepoSearchService() };
+	private PluginODAuthenticationService odAuthenticationService = null;
+	private PluginViewerDef[] pluginViewerDefs = new PluginViewerDef[0];
+	private PluginLayout[] pluginLayouts = new PluginLayout[0];
+	private PluginFeature[] pluginFeatures = new PluginFeature[] { new MultiRepoSearchFeature() };
+	private PluginMenuType[] pluginMenuTypes = new PluginMenuType[0];
+	private PluginMenu[] pluginMenus = new PluginMenu[0];
+	private PluginRepositoryType[] pluginRepositoryTypes = new PluginRepositoryType[0];
+	private PluginAPI[] pluginAPIs = new PluginAPI[0];
+
+	/**
+	 * Initializes this plug-in in the web client. A plug-in can perform
+	 * initialization that would be shared for all users of the application in
+	 * the method. This method differs from the constructor because this method
+	 * is called only when the plug-in is used within the web application. This
+	 * method is invoked when the application is initializing. This is an optional 
+	 * method and may be removed from the plug-in if no applicationInit is required.
+	 */
+	public void applicationInit(HttpServletRequest request, PluginServiceCallbacks callbacks) throws Exception {
+	}
+
+	/**
+	 * Provides an identifier for the plug-in.
+	 * <p>
+	 * <strong>Important:</strong> This identifier is used in path names and
+	 * URLs so it must contain only alphanumeric characters.
+	 * </p>
+	 */
+	public String getId() {
+		return "CNBMultiRepoSearchPlugin";
+	}
+
+	/**
+	 * Provides a descriptive name for this plug-in. The name identifies the
+	 * plug-in in the IBM Content Navigator administration tool
+	 * 
+	 * @parm locale The locale currently in use. The name should be returned in
+	 *       the language for this locale if it is translated.
+	 */
+	public String getName(Locale locale) {
+		return "CNBMultiRepoSearchPlugin";
+	}
+
+	/**
+	 * Provides a version indicator for this plug-in. The version information is
+	 * displayed in the administration tool to help the administrator validate
+	 * the version of the plug-in that is being used. The plug-in writer needs
+	 * to update this indicator when redistributing a modified version of the
+	 * plug-in.
+	 * 
+	 * @return A <code>String</code> representation of the version indicator for
+	 *         the plug-in.
+	 */
+	public String getVersion() {
+		return "2.0.3";
+	}
+
+	/**
+	 * Provides the copyright license for this plug-in. The information is
+	 * displayed in the About dialog Plugins tab. The license is provided by the
+	 * plugin creator. This is an optional method and may be removed from the plug-in
+	 * if no copyright is specified.
+	 * 
+	 * @return A <code>String</code> representation of the license for the
+	 *         plug-in.
+	 * @since 2.0.2
+	 */
+	public String getCopyright() {
+		return "Optionally add a Copyright statement here";
+	}
+
+	/**
+	 * Returns the name of a JavaScript file provided by this plug-in. This file
+	 * is downloaded to the web browser during the initialization of the web
+	 * client, before login. A script can be used to perform customization that
+	 * cannot be performed by other extension mechanisms, such as features or
+	 * layouts. However, it is preferable to use these other extension
+	 * mechanisms to provide more flexibility to the administrator when
+	 * configuring desktops.
+	 */
+	public String getScript() {
+		return "CNBMultiRepoSearchPlugin.js";
+	}
+
+	/**
+	 * Returns the name of a debug version of the JavaScript file provided by
+	 * getScript(). The default implementation invokes getScript().
+	 * 
+	 * @since 2.0.2
+	 */
+	public String getDebugScript() {
+		return getScript();
+	}
+
+	/**
+	 * Returns the name of a Dojo module or widget that is contained in the
+	 * resources for this plug-in. IBM Content Navigator performs the necessary
+	 * <code>dojo.registerModulePath</code> mapping to allow modules or widgets
+	 * with mapped path names to be loaded by using the
+	 * <code>dojo.require</code> method. A specified module can be the directory
+	 * or package name for a set of Dojo modules or widgets.
+	 */
+	public String getDojoModule() {
+		return "cNBMultiRepoSearchPluginDojo";
+	}
+
+	/**
+	 * Returns the name of a CSS file that contains styles for this plug-in. IBM
+	 * Content Navigator generates the necessary style tag to pull in this file
+	 * when IBM Content Navigator loads the plug-in.
+	 */
+	public String getCSSFileName() {
+		return "CNBMultiRepoSearchPlugin.css";
+	}
+
+	/**
+	 * Returns a debug version of the CSS file returned by getCSSFileName. The
+	 * default implementation invokes getCSSFileName.
+	 * 
+	 * @since 2.0.2
+	 * @return
+	 */
+	public String getDebugCSSFileName() {
+		return getCSSFileName();
+	}
+		
+	/**
+	 * Returns the name of a Dojo <code>dijit</code> class that provides a
+	 * configuration interface widget for this plug-in. The widget must extend
+	 * the <code>ecm.widget.admin.PluginConfigurationPane</code> widget. An
+	 * instance of the widget is created and displayed in the IBM Content
+	 * Navigator administration tool for configuration that is specific to the
+	 * plug-in.
+	 * <p>
+	 * Refer to the documentation on
+	 * {@link ecm.widget.admin.PluginConfigurationPane PluginConfigurationPane}
+	 * for more information on what is required for a plug-in configuration user
+	 * interface.
+	 * </p>
+	 */
+	public String getConfigurationDijitClass() {
+		return "cNBMultiRepoSearchPluginDojo.ConfigurationPane";
+	}
+
+	/**
+	 * Provides a list of actions that this plug-in adds to the main toolbar of
+	 * the web client.
+	 * 
+	 * @return An array of
+	 *         <code>{@link com.ibm.ecm.extension.PluginAction PluginAction}</code>
+	 *         objects. The plug-in should return the same set of objects on
+	 *         every call.
+	 */
+	public PluginAction[] getActions() {
+		return pluginActions;
+	}
+
+	/**
+	 * Provides a list of open actions that this plug-in provides for supported
+	 * items.
+	 * 
+	 * @since 2.0.2
+	 * @return An array of
+	 *         <code>{@link com.ibm.ecm.extension.PluginOpenAction PluginOpenAction}</code>
+	 *         objects. The plug-in should return the same set of objects on
+	 *         every call.
+	 */
+	public PluginOpenAction[] getOpenActions() {
+		return pluginOpenActions;
+	}
+
+	/**
+	 * Provides a list of filters that are run before a requested service. This
+	 * method can be used to modify the request or block the request.
+	 * 
+	 * @return An array of
+	 *         <code>{@link com.ibm.ecm.extension.PluginRequestFilter PluginRequestFilter}</code>
+	 *         objects.
+	 */
+	public PluginRequestFilter[] getRequestFilters() {
+		return pluginRequestFilters;
+	}
+
+	/**
+	 * Provides a list of filters that are run after a requested service. This
+	 * list of filters can be used to modify the response that is returned.
+	 * 
+	 * @return An array of
+	 *         <code>{@link com.ibm.ecm.extension.PluginResponseFilter PluginResponseFilter}</code>
+	 *         objects.
+	 */
+	public PluginResponseFilter[] getResponseFilters() {
+		return pluginResponseFilters;
+	}
+
+	/**
+	 * Provides a list of services that are provided by this plug-in. The
+	 * services run on the web server, and can be called by the web browser
+	 * logic component of the plug-in.
+	 * 
+	 * @return An array of {@link com.ibm.ecm.extension.PluginService
+	 *         PluginService} objects. The plug-in should return the same set of
+	 *         objects on every call. If there are no services defined by the
+	 *         plug-in, the call should return an empty array.
+	 */
+	public PluginService[] getServices() {
+		return pluginServices;
+	}
+
+	/**
+	 * Provides a custom service used for Content Manager OnDemand single
+	 * sign-on (SSO). This is an optional service that will be called when SSO
+	 * is enabled on a Content Manager OnDemand server. The result of the
+	 * service will be the information passed through the Content Manager
+	 * OnDemand Web Enablement Kit "passThru" API.
+	 * 
+	 * @since 2.0.2
+	 * @return A {@link com.ibm.ecm.extension.PluginODAuthenticationService
+	 *         PluginODAuthenticationService} object used as an authentication
+	 *         exit for Content Manager OnDemand single sign-on.
+	 */
+	public PluginODAuthenticationService getODAuthenticationService() {
+		return odAuthenticationService;
+	}
+
+	/**
+	 * Provides a list of viewers that are provided by this plug-in. The viewers
+	 * become available in the viewer configuration area of the IBM Content
+	 * Navigator administration tool. The viewers can be mapped to be used to
+	 * view certain document types.
+	 * <p>
+	 * <strong>Note:</strong> Typically, a plug-in does not define multiple
+	 * viewers. However, this method can be used to provide multiple
+	 * configurations of the same viewer, such as a view-only version and an
+	 * editing mode version of the same viewer.
+	 * </p>
+	 * 
+	 * @return An array of {@link ecm.widget.admin.PluginViewerDef
+	 *         PluginViewerDef} objects describing the viewers provided by the
+	 *         plug-in.
+	 */
+	public PluginViewerDef[] getViewers() {
+		return pluginViewerDefs;
+	}
+
+	/**
+	 * Specifies one or more custom layouts that are provided by this plug-in.
+	 * Custom layouts can display the features and other user interface
+	 * components of IBM Content Navigator in a different arrangement. The IBM
+	 * Content Navigator administration tool is used to select the layout to use
+	 * for a desktop.
+	 * 
+	 * @return An array of plug-in layout objects.
+	 */
+	public PluginLayout[] getLayouts() {
+		return pluginLayouts;
+	}
+
+	/**
+	 * Provides a list of new menu types defined by the plug-in.
+	 * 
+	 * @return An array of new menu type objects.
+	 */
+	public PluginMenuType[] getMenuTypes() {
+		return pluginMenuTypes;
+	}
+
+	/**
+	 * Provides a list of menus defined by the plug-in.
+	 * 
+	 * @return An array of plug-in menu objects.
+	 */
+	public PluginMenu[] getMenus() {
+		return pluginMenus;
+	}
+	
+	/**
+	 * Provides a list of one or more custom repositories that are provided by this plug-in.
+	 *
+	 * @return An array of plug-in repository types.
+	 */
+	 public PluginRepositoryType[] getRepositoryTypes() {
+	 	 return pluginRepositoryTypes;
+	 }
+	 
+	 /**
+	 * Provides a list of one or more custom APIs that are provided by this plug-in.
+	 *
+	 * @return An array of plug-in APIs.
+	 */
+	 public PluginAPI[] getPluginAPIs() {
+	 	 return pluginAPIs;
+	 }
+
+	/**
+	 * Specifies custom features that are provided by this plug-in. Features are
+	 * the major user interface sections, which appear as icons on the left side
+	 * of the user interface in the default layout. Examples of features include
+	 * Search, Favorites, and Teamspaces.
+	 * 
+	 * @return An array of custom plug-in feature objects.
+	 */
+	public PluginFeature[] getFeatures() {
+		return pluginFeatures;
+	}
+}
+
+
+package com.cnb.search.feature;
+
+import java.util.Locale;
+
+import com.ibm.ecm.extension.PluginFeature;
+
+/**
+ * Provides an abstract class that is extended to define a feature provided by
+ * the plug-in. Features are major functional areas that typically appear as
+ * icons along the left side of the user interface. Features are configurable
+ * for each desktop. Examples of features include Browse and Favorites.
+ */
+public class MultiRepoSearchFeature extends PluginFeature {
+
+	/**
+	 * Returns an identifier that is used to describe this feature.
+	 * <p>
+	 * <strong>Important:</strong> This identifier is used in URLs so it must
+	 * contain only alphanumeric characters.
+	 * </p>
+	 * 
+	 * @return An alphanumeric <code>String</code> that is used to identify the
+	 *         feature.
+	 */
+	public String getId() {
+		return "MultiRepoSearchFeature";
+	}
+
+	/**
+	 * Returns a descriptive label for this feature that is displayed in the IBM
+	 * Content Navigator administration tool.
+	 * 
+	 * @return A short description for the menu.
+	 */
+	public String getName(Locale locale) {
+		return "Multi-Repository Search";
+	}
+
+	/**
+	 * Returns descriptive text for this feature that is displayed in the IBM
+	 * Content Navigator administration tool.
+	 * 
+	 * @return A short description for the feature.
+	 */
+	public String getDescription(Locale locale) {
+		return "Search across multiple P8 object stores with a single query";
+	}
+
+	/**
+	 * Returns a CSS class representing the image to use as the icon displayed for this feature. This icon typically
+	 * appears on the left side of the desktop.
+	 * <p>
+	 * An icon file is a 32x32 pixel transparent image, for example, a transparent GIF image or PNG image or is defined
+	 * as an SVG file. The icon file must be included in the <code><i>pluginPackage</i>/WebContent</code> subdirectory
+	 * of the JAR file for the plug-in that contains this action.
+	 * </p>
+	 * 
+	 * @return A CSS style class name for the image.
+	 */
+	public String getIconUrl() {
+		return "CNBMultiRepoSearchPluginLaunchIcon";
+	}
+
+	/**
+	 * Returns the path to an SVG file specified as the image to use for the feature icon. An SVG file is used when you
+	 * want to style the feature icon according to custom themes applied to desktops. The SVG file must adhere to rules
+	 * outlined in the IBM Content Navigator documentation.
+	 * 
+	 * @return The path to the SVG file used to render the image.
+	 */
+	public String getSvgFilePath() {
+		return "WebContent/images/CNBMultiRepoSearchPluginLaunchIcon.svg";
+	}
+
+	/**
+	 * Returns a <code>String</code> to use as help context for this feature.
+	 * 
+	 * @return A <code>String</code> to use as the help text for this feature.
+	 */
+	public String getHelpContext() {
+		return null;
+	}
+
+	/**
+	 * Returns a <code>String</code> to use as tooltip text on the icon for this
+	 * feature.
+	 * 
+	 * @param locale
+	 *            The current locale for the user.
+	 * @return A <code>String</code> to use as tooltip text on the feature icon.
+	 */
+	public String getFeatureIconTooltipText(Locale locale) {
+		return "Multi-Repository Search";
+	}
+
+	/**
+	 * Returns a <code>String</code> to use as tooltip text on the popup or
+	 * flyout window icon that is used for this feature.
+	 * 
+	 * @param locale
+	 *            The current locale for the user.
+	 * @return A <code>String</code> to use as tooltip text.
+	 * @deprecated As of 2.0.3.3. Popup windows will be removed in a future release.
+	 */
+	public String getPopupWindowTooltipText(Locale locale) {
+		return "";
+	}
+
+	/**
+	 * Returns the name of a widget to implement the pane that provides the
+	 * primary interface for this feature.
+	 * 
+	 * @return A <code>String</code> name of the dijit.
+	 */
+	public String getContentClass() {
+		return "cNBMultiRepoSearchPluginDojo.MultiRepoSearchFeature";
+	}
+
+	/**
+	 * Returns a Boolean value that indicates whether this feature is a
+	 * separator. A separator is a special case where the feature is not a true
+	 * feature but represents a separator to appear between features in the
+	 * interface.
+	 * 
+	 * @return A value of <code>true</code> if this feature is a separator. By
+	 *         default, this method returns <code>false</code>.
+	 */
+	public boolean isSeparator() {
+		return false;
+	}
+
+	/**
+	 * Returns the name of the widget that implements a popup window, also known
+	 * as the flyout, for this feature.
+	 * 
+	 * @return A <code>String</code> name of the widget that implements the
+	 *         flyout for the feature.
+	 * @deprecated As of 2.0.3.3. Popup windows will be removed in a future release.
+	 */
+	public String getPopupWindowClass() {
+		return "";
+	}
+
+	/**
+	 * Returns true if the feature should be preloaded by the application layout
+	 * and false if it should be lazy-loaded.
+	 * 
+	 * @return A boolean indicating if the feature should be preloaded.
+	 */
+	public boolean isPreLoad() {
+		return false;
+	}
+	
+	/**
+	 * Returns the name of a Dojo <code>dijit</code> class that provides a configuration interface widget for this
+	 * feature. The widget must extend the <code>ecm.widget.admin.PluginConfigurationPane</code> widget. An instance of
+	 * the widget is created and displayed under each desktop's layout tab in the IBM Content Navigator administration
+	 * tool for configuration specific to this feature.
+	 * <p>
+	 * Refer to the documentation on {@link ecm.widget.admin.PluginConfigurationPane PluginConfigurationPane} for more
+	 * information on what is required for a feature configuration user interface.
+	 * </p>
+	 */
+	public String getConfigurationDijitClass() {
+		return "cNBMultiRepoSearchPluginDojo.FeatureConfigurationPane";
+	}
+}
+
+
+
+package com.cnb.search.model;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import com.ibm.json.java.JSONObject;
+
+/**
+ * Represents a repository configuration with field mappings.
+ */
+public class RepositoryConfig {
+    
+    private String repoId;
+    private String repoName;
+    private String className;
+    private boolean enabled;
+    private Map<String, String> fieldMappings;
+    
+    public RepositoryConfig() {
+        this.fieldMappings = new HashMap<String, String>();
+        this.enabled = true;
+    }
+    
+    public RepositoryConfig(String repoId, String repoName, String className) {
+        this();
+        this.repoId = repoId;
+        this.repoName = repoName;
+        this.className = className;
+    }
+    
+    /**
+     * Gets the repository property name for a given UI field ID.
+     * 
+     * @param fieldId The UI field ID (e.g., "customerName")
+     * @return The repository property name (e.g., "ClaimantName"), or null if not mapped
+     */
+    public String getMappedProperty(String fieldId) {
+        return fieldMappings.get(fieldId);
+    }
+    
+    /**
+     * Adds a field mapping.
+     * 
+     * @param fieldId The UI field ID
+     * @param propertyName The repository property name
+     */
+    public void addFieldMapping(String fieldId, String propertyName) {
+        fieldMappings.put(fieldId, propertyName);
+    }
+    
+    public JSONObject toJSON() {
+        JSONObject json = new JSONObject();
+        json.put("repoId", repoId);
+        json.put("repoName", repoName);
+        json.put("className", className);
+        json.put("enabled", enabled);
+        
+        JSONObject mappingsJson = new JSONObject();
+        for (Map.Entry<String, String> entry : fieldMappings.entrySet()) {
+            mappingsJson.put(entry.getKey(), entry.getValue());
+        }
+        json.put("fieldMappings", mappingsJson);
+        
+        return json;
+    }
+    
+    // Getters and Setters
+    public String getRepoId() {
+        return repoId;
+    }
+    
+    public void setRepoId(String repoId) {
+        this.repoId = repoId;
+    }
+    
+    public String getRepoName() {
+        return repoName;
+    }
+    
+    public void setRepoName(String repoName) {
+        this.repoName = repoName;
+    }
+    
+    public String getClassName() {
+        return className;
+    }
+    
+    public void setClassName(String className) {
+        this.className = className;
+    }
+    
+    public boolean isEnabled() {
+        return enabled;
+    }
+    
+    public void setEnabled(boolean enabled) {
+        this.enabled = enabled;
+    }
+    
+    public Map<String, String> getFieldMappings() {
+        return fieldMappings;
+    }
+    
+    public void setFieldMappings(Map<String, String> fieldMappings) {
+        this.fieldMappings = fieldMappings;
+    }
+}
+
+
+
+package com.cnb.search.model;
+
+import com.ibm.json.java.JSONObject;
+
+/**
+ * Represents a result grid column configuration.
+ */
+public class ResultColumn {
+    
+    private String columnId;
+    private String columnLabel;
+    private String propertyName;
+    private String width;
+    private boolean sortable;
+    
+    public ResultColumn() {
+        this.sortable = true;
+    }
+    
+    public ResultColumn(String columnId, String columnLabel, String propertyName, String width) {
+        this();
+        this.columnId = columnId;
+        this.columnLabel = columnLabel;
+        this.propertyName = propertyName;
+        this.width = width;
+    }
+    
+    public JSONObject toJSON() {
+        JSONObject json = new JSONObject();
+        json.put("columnId", columnId);
+        json.put("columnLabel", columnLabel);
+        json.put("propertyName", propertyName);
+        json.put("width", width);
+        json.put("sortable", sortable);
+        return json;
+    }
+    
+    // Getters and Setters
+    public String getColumnId() {
+        return columnId;
+    }
+    
+    public void setColumnId(String columnId) {
+        this.columnId = columnId;
+    }
+    
+    public String getColumnLabel() {
+        return columnLabel;
+    }
+    
+    public void setColumnLabel(String columnLabel) {
+        this.columnLabel = columnLabel;
+    }
+    
+    public String getPropertyName() {
+        return propertyName;
+    }
+    
+    public void setPropertyName(String propertyName) {
+        this.propertyName = propertyName;
+    }
+    
+    public String getWidth() {
+        return width;
+    }
+    
+    public void setWidth(String width) {
+        this.width = width;
+    }
+    
+    public boolean isSortable() {
+        return sortable;
+    }
+    
+    public void setSortable(boolean sortable) {
+        this.sortable = sortable;
+    }
+}
+
+
+
+package com.cnb.search.model;
+
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import com.ibm.json.java.JSONArray;
+import com.ibm.json.java.JSONObject;
+
+/**
+ * Represents the complete search configuration loaded from search-config.json.
+ * This includes search fields, repository mappings, result columns, and search settings.
+ */
+public class SearchConfiguration {
+    
+    private List<SearchField> searchFields;
+    private List<RepositoryConfig> repositories;
+    private List<ResultColumn> resultColumns;
+    private SearchSettings searchSettings;
+    
+    private static SearchConfiguration instance;
+    private static final String CONFIG_FILE = "/com/cnb/search/model/search_config.json";
+    
+    private SearchConfiguration() {
+        this.searchFields = new ArrayList<SearchField>();
+        this.repositories = new ArrayList<RepositoryConfig>();
+        this.resultColumns = new ArrayList<ResultColumn>();
+        this.searchSettings = new SearchSettings();
+    }
+    
+    /**
+     * Gets the singleton instance of SearchConfiguration.
+     * Loads configuration from JSON file on first access.
+     */
+    public static synchronized SearchConfiguration getInstance() {
+        if (instance == null) {
+            instance = new SearchConfiguration();
+            instance.loadConfiguration();
+        }
+        return instance;
+    }
+    
+    /**
+     * Reloads configuration from the JSON file.
+     */
+    public static synchronized void reload() {
+        instance = null;
+        getInstance();
+    }
+    
+    /**
+     * Loads configuration from the embedded JSON file.
+     */
+    private void loadConfiguration() {
+        try {
+        	InputStream is = getClass().getResourceAsStream(CONFIG_FILE);
+            if (is == null) {
+                throw new RuntimeException("Configuration file not found: " + CONFIG_FILE);
+            }
+            
+            InputStreamReader reader = new InputStreamReader(is, "UTF-8");
+            JSONObject config = JSONObject.parse(reader);
+            
+            // Parse search fields
+            JSONArray fieldsArray = (JSONArray) config.get("searchFields");
+            if (fieldsArray != null) {
+                for (Object fieldObj : fieldsArray) {
+                    JSONObject field = (JSONObject) fieldObj;
+                    SearchField searchField = new SearchField();
+                    searchField.setFieldId((String) field.get("fieldId"));
+                    searchField.setFieldLabel((String) field.get("fieldLabel"));
+                    searchField.setFieldType((String) field.get("fieldType"));
+                    searchField.setOperator((String) field.get("operator"));
+                    searchField.setPlaceholder((String) field.get("placeholder"));
+                    searchField.setRequired(Boolean.TRUE.equals(field.get("required")));
+                    searchFields.add(searchField);
+                }
+            }
+            
+            // Parse repositories
+            JSONArray reposArray = (JSONArray) config.get("repositories");
+            if (reposArray != null) {
+                for (Object repoObj : reposArray) {
+                    JSONObject repo = (JSONObject) repoObj;
+                    RepositoryConfig repoConfig = new RepositoryConfig();
+                    repoConfig.setRepoId((String) repo.get("repoId"));
+                    repoConfig.setRepoName((String) repo.get("repoName"));
+                    repoConfig.setClassName((String) repo.get("className"));
+                    repoConfig.setEnabled(Boolean.TRUE.equals(repo.get("enabled")));
+                    
+                    // Parse field mappings
+                    JSONObject mappings = (JSONObject) repo.get("fieldMappings");
+                    if (mappings != null) {
+                        Map<String, String> fieldMappings = new HashMap<String, String>();
+                        for (Object key : mappings.keySet()) {
+                            fieldMappings.put((String) key, (String) mappings.get(key));
+                        }
+                        repoConfig.setFieldMappings(fieldMappings);
+                    }
+                    
+                    repositories.add(repoConfig);
+                }
+            }
+            
+            // Parse result columns
+            JSONArray columnsArray = (JSONArray) config.get("resultColumns");
+            if (columnsArray != null) {
+                for (Object colObj : columnsArray) {
+                    JSONObject col = (JSONObject) colObj;
+                    ResultColumn column = new ResultColumn();
+                    column.setColumnId((String) col.get("columnId"));
+                    column.setColumnLabel((String) col.get("columnLabel"));
+                    column.setPropertyName((String) col.get("propertyName"));
+                    column.setWidth((String) col.get("width"));
+                    column.setSortable(Boolean.TRUE.equals(col.get("sortable")));
+                    resultColumns.add(column);
+                }
+            }
+            
+            // Parse search settings
+            JSONObject settings = (JSONObject) config.get("searchSettings");
+            if (settings != null) {
+                if (settings.get("maxResultsPerRepo") != null) {
+                    searchSettings.setMaxResultsPerRepo(((Number) settings.get("maxResultsPerRepo")).intValue());
+                }
+                if (settings.get("pageSize") != null) {
+                    searchSettings.setPageSize(((Number) settings.get("pageSize")).intValue());
+                }
+                searchSettings.setEnableParallelSearch(Boolean.TRUE.equals(settings.get("enableParallelSearch")));
+                if (settings.get("searchTimeout") != null) {
+                    searchSettings.setSearchTimeout(((Number) settings.get("searchTimeout")).intValue());
+                }
+                searchSettings.setShowPartialResults(Boolean.TRUE.equals(settings.get("showPartialResults")));
+            }
+            
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to load search configuration", e);
+        }
+    }
+    
+    /**
+     * Gets only enabled repositories.
+     */
+    public List<RepositoryConfig> getEnabledRepositories() {
+        List<RepositoryConfig> enabled = new ArrayList<RepositoryConfig>();
+        for (RepositoryConfig repo : repositories) {
+            if (repo.isEnabled()) {
+                enabled.add(repo);
+            }
+        }
+        return enabled;
+    }
+    
+    /**
+     * Gets a repository by its ID.
+     */
+    public RepositoryConfig getRepositoryById(String repoId) {
+        for (RepositoryConfig repo : repositories) {
+            if (repo.getRepoId().equals(repoId)) {
+                return repo;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Gets a search field by its ID.
+     */
+    public SearchField getSearchFieldById(String fieldId) {
+        for (SearchField field : searchFields) {
+            if (field.getFieldId().equals(fieldId)) {
+                return field;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Converts configuration to JSON for frontend.
+     */
+    public JSONObject toJSON() {
+        JSONObject json = new JSONObject();
+        
+        // Search fields
+        JSONArray fieldsArray = new JSONArray();
+        for (SearchField field : searchFields) {
+            fieldsArray.add(field.toJSON());
+        }
+        json.put("searchFields", fieldsArray);
+        
+        // Repositories (only enabled)
+        JSONArray reposArray = new JSONArray();
+        for (RepositoryConfig repo : getEnabledRepositories()) {
+            reposArray.add(repo.toJSON());
+        }
+        json.put("repositories", reposArray);
+        
+        // Result columns
+        JSONArray columnsArray = new JSONArray();
+        for (ResultColumn col : resultColumns) {
+            columnsArray.add(col.toJSON());
+        }
+        json.put("resultColumns", columnsArray);
+        
+        // Search settings
+        json.put("searchSettings", searchSettings.toJSON());
+        
+        return json;
+    }
+    
+    // Getters and Setters
+    public List<SearchField> getSearchFields() {
+        return searchFields;
+    }
+    
+    public List<RepositoryConfig> getRepositories() {
+        return repositories;
+    }
+    
+    public List<ResultColumn> getResultColumns() {
+        return resultColumns;
+    }
+    
+    public SearchSettings getSearchSettings() {
+        return searchSettings;
+    }
+}
+
+
+
+package com.cnb.search.model;
+
+import com.ibm.json.java.JSONObject;
+
+/**
+ * Represents a search field configuration.
+ */
+public class SearchField {
+    
+    private String fieldId;
+    private String fieldLabel;
+    private String fieldType;  // string, date, integer, boolean
+    private String operator;   // EQUALS, LIKE, STARTSWITH, RANGE
+    private String placeholder;
+    private boolean required;
+    
+    public SearchField() {
+    }
+    
+    public SearchField(String fieldId, String fieldLabel, String fieldType, String operator) {
+        this.fieldId = fieldId;
+        this.fieldLabel = fieldLabel;
+        this.fieldType = fieldType;
+        this.operator = operator;
+    }
+    
+    public JSONObject toJSON() {
+        JSONObject json = new JSONObject();
+        json.put("fieldId", fieldId);
+        json.put("fieldLabel", fieldLabel);
+        json.put("fieldType", fieldType);
+        json.put("operator", operator);
+        json.put("placeholder", placeholder);
+        json.put("required", required);
+        return json;
+    }
+    
+    // Getters and Setters
+    public String getFieldId() {
+        return fieldId;
+    }
+    
+    public void setFieldId(String fieldId) {
+        this.fieldId = fieldId;
+    }
+    
+    public String getFieldLabel() {
+        return fieldLabel;
+    }
+    
+    public void setFieldLabel(String fieldLabel) {
+        this.fieldLabel = fieldLabel;
+    }
+    
+    public String getFieldType() {
+        return fieldType;
+    }
+    
+    public void setFieldType(String fieldType) {
+        this.fieldType = fieldType;
+    }
+    
+    public String getOperator() {
+        return operator;
+    }
+    
+    public void setOperator(String operator) {
+        this.operator = operator;
+    }
+    
+    public String getPlaceholder() {
+        return placeholder;
+    }
+    
+    public void setPlaceholder(String placeholder) {
+        this.placeholder = placeholder;
+    }
+    
+    public boolean isRequired() {
+        return required;
+    }
+    
+    public void setRequired(boolean required) {
+        this.required = required;
+    }
+}
+
+
+
+package com.cnb.search.model;
+
+import com.ibm.json.java.JSONObject;
+
+/**
+ * Represents search behavior settings.
+ */
+public class SearchSettings {
+    
+    private int maxResultsPerRepo;
+    private int pageSize;
+    private boolean enableParallelSearch;
+    private int searchTimeout;
+    private boolean showPartialResults;
+    
+    public SearchSettings() {
+        // Default values
+        this.maxResultsPerRepo = 500;
+        this.pageSize = 50;
+        this.enableParallelSearch = true;
+        this.searchTimeout = 30000;
+        this.showPartialResults = true;
+    }
+    
+    public JSONObject toJSON() {
+        JSONObject json = new JSONObject();
+        json.put("maxResultsPerRepo", maxResultsPerRepo);
+        json.put("pageSize", pageSize);
+        json.put("enableParallelSearch", enableParallelSearch);
+        json.put("searchTimeout", searchTimeout);
+        json.put("showPartialResults", showPartialResults);
+        return json;
+    }
+    
+    // Getters and Setters
+    public int getMaxResultsPerRepo() {
+        return maxResultsPerRepo;
+    }
+    
+    public void setMaxResultsPerRepo(int maxResultsPerRepo) {
+        this.maxResultsPerRepo = maxResultsPerRepo;
+    }
+    
+    public int getPageSize() {
+        return pageSize;
+    }
+    
+    public void setPageSize(int pageSize) {
+        this.pageSize = pageSize;
+    }
+    
+    public boolean isEnableParallelSearch() {
+        return enableParallelSearch;
+    }
+    
+    public void setEnableParallelSearch(boolean enableParallelSearch) {
+        this.enableParallelSearch = enableParallelSearch;
+    }
+    
+    public int getSearchTimeout() {
+        return searchTimeout;
+    }
+    
+    public void setSearchTimeout(int searchTimeout) {
+        this.searchTimeout = searchTimeout;
+    }
+    
+    public boolean isShowPartialResults() {
+        return showPartialResults;
+    }
+    
+    public void setShowPartialResults(boolean showPartialResults) {
+        this.showPartialResults = showPartialResults;
+    }
+}
+
+
+
+{
+  "searchFields": [
+    {
+      "fieldId": "customerName",
+      "fieldLabel": "Customer Name",
+      "fieldType": "string",
+      "operator": "LIKE",
+      "placeholder": "Enter customer name",
+      "required": false
+    },
+    {
+      "fieldId": "dob",
+      "fieldLabel": "Date of Birth",
+      "fieldType": "date",
+      "operator": "EQUALS",
+      "placeholder": "Select date",
+      "required": false
+    }
+  ],
+  "repositories": [
+    {
+      "repoId": "Banking",
+      "repoName": "Banking Repository",
+      "className": "CustomerProfile",
+      "enabled": true,
+      "fieldMappings": {
+        "customerName": "FullName",
+        "dob": "DateOfBirth"
+      }
+    },
+    {
+      "repoId": "Education",
+      "repoName": "Education Repository",
+      "className": "StudentProfile",
+      "enabled": true,
+      "fieldMappings": {
+        "customerName": "FullName",
+        "dob": "DateOfBirth"
+      }
+    },
+    {
+      "repoId": "GovRecords",
+      "repoName": "Government Records Repository",
+      "className": "CitizenIDApplication",
+      "enabled": true,
+      "fieldMappings": {
+        "dob": "DateOfBirth"
+      }
+    }
+  ],
+  "resultColumns": [
+    {
+      "columnId": "DocumentTitle",
+      "columnLabel": "Document Title",
+      "propertyName": "DocumentTitle",
+      "type":"String",
+      "width": "250px",
+      "sortable": true
+    },
+    {
+      "columnId": "repositoryName",
+      "columnLabel": "Repository",
+      "propertyName": "_repositoryName",
+      "type":"String",
+      "width": "150px",
+      "sortable": true
+    },
+    {
+      "columnId": "Creator",
+      "columnLabel": "Created By",
+      "propertyName": "Creator",
+      "type":"String",
+      "width": "120px",
+      "sortable": true
+    },
+    {
+      "columnId": "DateCreated",
+      "columnLabel": "Date Created",
+      "propertyName": "DateCreated",
+      "type":"Date",
+      "width": "150px",
+      "sortable": true
+    }
+  ],
+  "searchSettings": {
+    "maxResultsPerRepo": 500,
+    "pageSize": 50,
+    "enableParallelSearch": true,
+    "searchTimeout": 30000,
+    "showPartialResults": true
+  }
+}
+
+
+
+package com.cnb.search.service;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+import javax.security.auth.Subject;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import com.cnb.search.model.RepositoryConfig;
+import com.cnb.search.model.ResultColumn;
+import com.cnb.search.model.SearchConfiguration;
+import com.cnb.search.model.SearchField;
+import com.cnb.search.model.SearchSettings;
+import com.filenet.api.collection.IndependentObjectSet;
+import com.filenet.api.collection.PageIterator;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.Properties;
+import com.filenet.api.property.Property;
+import com.filenet.api.property.FilterElement;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import com.filenet.api.util.UserContext;
+import com.ibm.ecm.extension.PluginResponseUtil;
+import com.ibm.ecm.extension.PluginService;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.ecm.json.JSONResponse;
+import com.ibm.ecm.json.JSONResultSetColumn;
+import com.ibm.ecm.json.JSONResultSetResponse;
+import com.ibm.ecm.json.JSONResultSetRow;
+import com.ibm.json.java.JSONArray;
+import com.ibm.json.java.JSONObject;
+
+/**
+ * Service that handles multi-repository search requests.
+ * Executes searches across multiple P8 object stores in parallel
+ * and returns aggregated results.
+ */
+public class MultiRepoSearchService extends PluginService {
+
+    public static final String SERVICE_ID = "multiRepoSearchService";
+    
+    // Request parameters
+    public static final String PARAM_ACTION = "action_Type";
+    public static final String PARAM_SEARCH_CRITERIA = "searchCriteria";
+    public static final String PARAM_PAGE_NUMBER = "pageNumber";
+    public static final String PARAM_PAGE_SIZE = "pageSize";
+    
+    // Actions
+    public static final String ACTION_GET_CONFIG = "getConfiguration";
+    public static final String ACTION_SEARCH = "search";
+    public static final String ACTION_LIST_REPOSITORIES = "listRepositories";
+    
+    @Override
+    public String getId() {
+        return SERVICE_ID;
+    }
+
+    @Override
+    public void execute(PluginServiceCallbacks callbacks, HttpServletRequest request, 
+                        HttpServletResponse response) throws Exception {
+        String methodName = "execute";
+        callbacks.getLogger().logEntry(this, methodName, request);
+        
+        try {
+            String action = request.getParameter(PARAM_ACTION);
+            System.out.println("[MultiRepoSearchService.execute] Action received: " + action);
+            
+            if (ACTION_GET_CONFIG.equals(action)) {
+                System.out.println("[MultiRepoSearchService.execute] Getting configuration...");
+                // Return configuration for UI
+                JSONResponse jsonResponse = getConfiguration();
+                PluginResponseUtil.writeJSONResponse(request, response, jsonResponse, callbacks, SERVICE_ID);
+            } else if (ACTION_LIST_REPOSITORIES.equals(action)) {
+                System.out.println("[MultiRepoSearchService.execute] ACTION_LIST_REPOSITORIES - Listing available repositories...");
+                // List available repositories
+                JSONResponse jsonResponse = listAvailableRepositories(callbacks, request);
+                PluginResponseUtil.writeJSONResponse(request, response, jsonResponse, callbacks, SERVICE_ID);
+            } else if (ACTION_SEARCH.equals(action)) {
+                System.out.println("[MultiRepoSearchService.execute] ACTION_SEARCH - Starting search...");
+                // Execute search - returns JSONResultSetResponse
+                String searchCriteriaJson = request.getParameter(PARAM_SEARCH_CRITERIA);
+                int pageNumber = getIntParameter(request, PARAM_PAGE_NUMBER, 1);
+                int pageSize = getIntParameter(request, PARAM_PAGE_SIZE, 50);
+                
+                System.out.println("[MultiRepoSearchService.execute] Search parameters - Criteria: " + searchCriteriaJson + 
+                                  ", Page: " + pageNumber + ", PageSize: " + pageSize);
+                
+                JSONResultSetResponse jsonResultSet = executeSearch(callbacks, request, searchCriteriaJson, pageNumber, pageSize);
+                
+                System.out.println("[MultiRepoSearchService.execute] Search completed. Results count: " + jsonResultSet.getRowCount());
+                
+                // Write JSONResultSetResponse (like sample plugin)
+                PluginResponseUtil.writeJSONResponse(request, response, jsonResultSet, callbacks, SERVICE_ID);
+            } else {
+                System.out.println("[MultiRepoSearchService.execute] Unknown action: " + action);
+                JSONResponse jsonResponse = new JSONResponse();
+                jsonResponse.put("error", "Unknown action: " + action);
+                PluginResponseUtil.writeJSONResponse(request, response, jsonResponse, callbacks, SERVICE_ID);
+            }
+            
+        } catch (Exception e) {
+            callbacks.getLogger().logError(this, methodName, request, e);
+            JSONResponse jsonResponse = new JSONResponse();
+            jsonResponse.put("error", e.getMessage());
+            jsonResponse.put("success", false);
+            PluginResponseUtil.writeJSONResponse(request, response, jsonResponse, callbacks, SERVICE_ID);
+        } finally {
+            callbacks.getLogger().logExit(this, methodName, request);
+        }
+    }
+    
+    /**
+     * Returns the search configuration for the UI.
+     */
+    private JSONResponse getConfiguration() {
+        SearchConfiguration config = SearchConfiguration.getInstance();
+        JSONResponse response = new JSONResponse();
+        response.put("success", true);
+        response.put("configuration", config.toJSON());
+        return response;
+    }
+    
+    /**
+     * Lists available repositories by attempting to get connections.
+     * This helps identify the correct repository IDs to use in search-config.json.
+     */
+    private JSONResponse listAvailableRepositories(PluginServiceCallbacks callbacks, HttpServletRequest request) {
+        System.out.println("[listAvailableRepositories] START - Attempting to discover available repositories");
+        JSONResponse response = new JSONResponse();
+        JSONArray repositories = new JSONArray();
+        
+        // Get repositories from configuration
+        SearchConfiguration config = SearchConfiguration.getInstance();
+        List<RepositoryConfig> configRepos = config.getRepositories();
+        
+        System.out.println("[listAvailableRepositories] Testing " + configRepos.size() + " repositories from config...");
+        
+        for (RepositoryConfig configRepo : configRepos) {
+            JSONObject repoInfo = new JSONObject();
+            repoInfo.put("configRepoId", configRepo.getRepoId());
+            repoInfo.put("configRepoName", configRepo.getRepoName());
+            repoInfo.put("configClassName", configRepo.getClassName());
+            
+            System.out.println("[listAvailableRepositories] Testing repository ID: '" + configRepo.getRepoId() + "'");
+            
+            try {
+                Subject subject = callbacks.getP8Subject(configRepo.getRepoId());
+                ObjectStore objectStore = callbacks.getP8ObjectStore(configRepo.getRepoId());
+                
+                    if (subject != null && objectStore != null) {
+                        repoInfo.put("available", true);
+                        try {
+                            repoInfo.put("objectStoreName", objectStore.get_Name());
+                        } catch (Exception e) {
+                            repoInfo.put("objectStoreName", "N/A");
+                        }
+                        repoInfo.put("objectStoreId", objectStore.get_Id().toString());
+                        String osName = "N/A";
+                        try {
+                            osName = objectStore.get_Name();
+                        } catch (Exception e) {
+                            // Ignore
+                        }
+                        System.out.println("[listAvailableRepositories] âœ“ FOUND: " + configRepo.getRepoId() + 
+                                      " -> ObjectStore: " + osName);
+                    } else {
+                    repoInfo.put("available", false);
+                    repoInfo.put("error", "Subject or ObjectStore is NULL");
+                    System.out.println("[listAvailableRepositories] âœ— NOT FOUND: " + configRepo.getRepoId());
+                }
+            } catch (Exception e) {
+                repoInfo.put("available", false);
+                repoInfo.put("error", e.getMessage());
+                System.out.println("[listAvailableRepositories] âœ— ERROR for " + configRepo.getRepoId() + ": " + e.getMessage());
+            }
+            
+            repositories.add(repoInfo);
+        }
+        
+        // Also try to get repository info from request/desktop if available
+        try {
+            String desktopId = request.getParameter("desktopId");
+            if (desktopId == null) {
+                desktopId = (String) request.getAttribute("desktopId");
+            }
+            System.out.println("[listAvailableRepositories] Desktop ID: " + desktopId);
+            
+            // Try common repository ID patterns
+            String[] commonPatterns = {
+                "BankingOS", "BankingRepository", "Banking", "banking",
+                "EducationOS", "EducationRepository", "Education", "education",
+                "GovRecordsOS", "GovRecordsRepository", "GovRecords", "govrecords",
+                "P8Repository", "FileNetRepository", "ContentEngine"
+            };
+            
+            System.out.println("[listAvailableRepositories] Testing common repository ID patterns...");
+            JSONArray discoveredRepos = new JSONArray();
+            
+            for (String pattern : commonPatterns) {
+                try {
+                    Subject subject = callbacks.getP8Subject(pattern);
+                    ObjectStore objectStore = callbacks.getP8ObjectStore(pattern);
+                    
+                    if (subject != null && objectStore != null) {
+                        JSONObject discovered = new JSONObject();
+                        discovered.put("repoId", pattern);
+                        try {
+                            discovered.put("objectStoreName", objectStore.get_Name());
+                        } catch (Exception e) {
+                            discovered.put("objectStoreName", "N/A");
+                        }
+                        discovered.put("objectStoreId", objectStore.get_Id().toString());
+                        discoveredRepos.add(discovered);
+                        String osName = "N/A";
+                        try {
+                            osName = objectStore.get_Name();
+                        } catch (Exception e) {
+                            // Ignore
+                        }
+                        System.out.println("[listAvailableRepositories] âœ“ DISCOVERED: " + pattern + 
+                                          " -> ObjectStore: " + osName);
+                    }
+                } catch (Exception e) {
+                    // Ignore - this pattern doesn't exist
+                }
+            }
+            
+            if (discoveredRepos.size() > 0) {
+                response.put("discoveredRepositories", discoveredRepos);
+                System.out.println("[listAvailableRepositories] Discovered " + discoveredRepos.size() + " additional repositories");
+            }
+        } catch (Exception e) {
+            System.out.println("[listAvailableRepositories] Error in discovery: " + e.getMessage());
+        }
+        
+        response.put("success", true);
+        response.put("repositories", repositories);
+        response.put("message", "Check 'repositories' array for availability. Use 'available: true' repository IDs in search-config.json");
+        
+        System.out.println("[listAvailableRepositories] END - Found " + repositories.size() + " repositories");
+        return response;
+    }
+    
+    /**
+     * Executes search across all enabled repositories.
+     */
+    private JSONResultSetResponse executeSearch(PluginServiceCallbacks callbacks, HttpServletRequest request,
+                                     String searchCriteriaJson, int pageNumber, int pageSize) throws Exception {
+        System.out.println("=========================================");
+        System.out.println("[MultiRepoSearchService] executeSearch - START");
+        System.out.println("=========================================");
+        System.out.println("[executeSearch] searchCriteriaJson: " + searchCriteriaJson);
+        System.out.println("[executeSearch] pageNumber: " + pageNumber);
+        System.out.println("[executeSearch] pageSize: " + pageSize);
+        
+        String methodName = "executeSearch";
+        callbacks.getLogger().logDebug(this, methodName, request, "Search criteria: " + searchCriteriaJson);
+        
+        System.out.println("[executeSearch] Loading SearchConfiguration...");
+        SearchConfiguration config = SearchConfiguration.getInstance();
+        SearchSettings settings = config.getSearchSettings();
+        List<RepositoryConfig> repos = config.getEnabledRepositories();
+        System.out.println("[executeSearch] Loaded configuration - Enabled repositories count: " + repos.size());
+        System.out.println("[executeSearch] Search settings - Parallel: " + settings.isEnableParallelSearch() + 
+                          ", MaxResultsPerRepo: " + settings.getMaxResultsPerRepo());
+        
+        // Parse search criteria
+        System.out.println("[executeSearch] Parsing search criteria JSON...");
+        JSONObject criteria = JSONObject.parse(searchCriteriaJson);
+        Map<String, Object> searchCriteria = new HashMap<String, Object>();
+        for (Object key : criteria.keySet()) {
+            Object value = criteria.get(key);
+            if (value != null && !value.toString().isEmpty()) {
+                searchCriteria.put((String) key, value);
+                System.out.println("[executeSearch] Search criteria field: " + key + " = " + value);
+            } else {
+                System.out.println("[executeSearch] Skipping empty field: " + key);
+            }
+        }
+        System.out.println("[executeSearch] Total search criteria fields: " + searchCriteria.size());
+        
+        // Create JSONResultSetResponse (like sample plugin)
+        JSONResultSetResponse jsonResultSet = new JSONResultSetResponse();
+        jsonResultSet.setPageSize(pageSize);
+        
+        // Build result structure with columns
+        buildResultStructure(jsonResultSet, config, callbacks, request.getLocale());
+        
+        List<JSONResultSetRow> allRows = new ArrayList<JSONResultSetRow>();
+        JSONArray errors = new JSONArray();
+        int totalCount = 0;
+        
+        if (settings.isEnableParallelSearch() && repos.size() > 1) {
+            System.out.println("[executeSearch] Using PARALLEL execution mode");
+            // Parallel execution - Get subjects and object stores in main thread first
+            Map<String, Subject> subjects = new HashMap<String, Subject>();
+            Map<String, ObjectStore> objectStores = new HashMap<String, ObjectStore>();
+            
+            // Pre-obtain all subjects and object stores in the main thread
+            System.out.println("[executeSearch] Pre-obtaining connections for " + repos.size() + " repositories...");
+            System.out.println("[executeSearch] NOTE: Repository IDs must match exactly the IDs configured in ICN Desktop");
+            
+            for (RepositoryConfig repo : repos) {
+                System.out.println("[executeSearch] ========================================");
+                System.out.println("[executeSearch] Attempting connection for repository:");
+                System.out.println("[executeSearch]   - Config RepoId: '" + repo.getRepoId() + "'");
+                System.out.println("[executeSearch]   - Config RepoName: '" + repo.getRepoName() + "'");
+                System.out.println("[executeSearch]   - Config ClassName: '" + repo.getClassName() + "'");
+                
+                try {
+                    // Check session and request context (like sample plugin does)
+                    System.out.println("[executeSearch] Request context check:");
+                    System.out.println("[executeSearch]   - Request URI: " + request.getRequestURI());
+                    System.out.println("[executeSearch]   - Session ID: " + (request.getSession(false) != null ? request.getSession(false).getId() : "NO SESSION"));
+                    System.out.println("[executeSearch]   - User Principal: " + (request.getUserPrincipal() != null ? request.getUserPrincipal().getName() : "NULL"));
+                    
+                    // Following sample plugin pattern: get synch object first (for thread safety)
+                    System.out.println("[executeSearch] Getting synch object (like sample plugin)...");
+                    Object synchObject = null;
+                    try {
+                        synchObject = callbacks.getSynchObject(repo.getRepoId(), "p8");
+                        System.out.println("[executeSearch] SynchObject result: " + (synchObject != null ? "NOT NULL" : "NULL"));
+                    } catch (Exception synchEx) {
+                        System.out.println("[executeSearch] EXCEPTION in getSynchObject: " + synchEx.getClass().getName());
+                        System.out.println("[executeSearch]   Message: " + synchEx.getMessage());
+                        synchEx.printStackTrace();
+                    }
+                    
+                    // Try to get subject - this should work if repository is in desktop
+                    System.out.println("[executeSearch] Calling callbacks.getP8Subject('" + repo.getRepoId() + "')...");
+                    System.out.println("[executeSearch]   - callbacks object: " + (callbacks != null ? "NOT NULL" : "NULL"));
+                    
+                    Subject subject = null;
+                    try {
+                        subject = callbacks.getP8Subject(repo.getRepoId());
+                    } catch (Exception subjEx) {
+                        System.out.println("[executeSearch] EXCEPTION in getP8Subject: " + subjEx.getClass().getName());
+                        System.out.println("[executeSearch]   Message: " + subjEx.getMessage());
+                        System.out.println("[executeSearch]   Full stack trace:");
+                        subjEx.printStackTrace();
+                    }
+                    
+                    System.out.println("[executeSearch] Subject result: " + (subject != null ? "NOT NULL (SUCCESS)" : "NULL (FAILED)"));
+                    
+                    if (subject == null) {
+                        System.out.println("[executeSearch] ERROR: Subject is NULL - Repository ID '" + repo.getRepoId() + "' may not exist in ICN");
+                        System.out.println("[executeSearch]   Possible causes:");
+                        System.out.println("[executeSearch]   1. Repository ID doesn't match ICN Desktop configuration");
+                        System.out.println("[executeSearch]   2. Repository not assigned to current desktop");
+                        System.out.println("[executeSearch]   3. Repository not connected/available in session");
+                        System.out.println("[executeSearch]   4. Repository type mismatch (not P8)");
+                        System.out.println("[executeSearch] ACTION REQUIRED: Verify the repoId in search-config.json matches the repository ID in ICN Desktop configuration");
+                        System.out.println("[executeSearch]   NOTE: Repository IDs are case-sensitive and must match exactly");
+                    }
+                    
+                    // Try to get object store (only if subject is available)
+                    if (subject != null) {
+                        System.out.println("[executeSearch] Subject available, now getting ObjectStore...");
+                        System.out.println("[executeSearch] Calling callbacks.getP8ObjectStore('" + repo.getRepoId() + "')...");
+                        ObjectStore objectStore = null;
+                        try {
+                            objectStore = callbacks.getP8ObjectStore(repo.getRepoId());
+                        } catch (Exception objEx) {
+                            System.out.println("[executeSearch] EXCEPTION in getP8ObjectStore: " + objEx.getClass().getName());
+                            System.out.println("[executeSearch]   Message: " + objEx.getMessage());
+                            System.out.println("[executeSearch]   Full stack trace:");
+                            objEx.printStackTrace();
+                        }
+                        
+                        System.out.println("[executeSearch] ObjectStore result: " + (objectStore != null ? "NOT NULL (SUCCESS)" : "NULL (FAILED)"));
+                        
+                        if (objectStore == null) {
+                            System.out.println("[executeSearch] ERROR: ObjectStore is NULL even though Subject was available");
+                            System.out.println("[executeSearch]   This is unusual - Subject exists but ObjectStore doesn't");
+                        }
+                        
+                        if (subject != null && objectStore != null) {
+                            subjects.put(repo.getRepoId(), subject);
+                            objectStores.put(repo.getRepoId(), objectStore);
+                            System.out.println("[executeSearch] SUCCESS: Connection stored for " + repo.getRepoId());
+                            try {
+                                System.out.println("[executeSearch] ObjectStore Name: " + objectStore.get_Name());
+                            } catch (Exception nameEx) {
+                                System.out.println("[executeSearch] ObjectStore Name: (not available - " + nameEx.getMessage() + ")");
+                            }
+                            System.out.println("[executeSearch] ObjectStore Id: " + objectStore.get_Id());
+                        } else {
+                            System.out.println("[executeSearch] WARNING: Failed to get connection for " + repo.getRepoId());
+                            System.out.println("[executeSearch]   Subject: " + (subject != null ? "OK" : "NULL"));
+                            System.out.println("[executeSearch]   ObjectStore: " + (objectStore != null ? "OK" : "NULL"));
+                        }
+                    } else {
+                        System.out.println("[executeSearch] Skipping ObjectStore retrieval - Subject is NULL");
+                    }
+                } catch (Exception e) {
+                    System.out.println("[executeSearch] EXCEPTION getting connection for " + repo.getRepoId() + ":");
+                    System.out.println("[executeSearch]   Exception Type: " + e.getClass().getName());
+                    System.out.println("[executeSearch]   Exception Message: " + e.getMessage());
+                    System.out.println("[executeSearch]   Full stack trace:");
+                    e.printStackTrace();
+                    callbacks.getLogger().logError(this, methodName, request, e);
+                    JSONObject error = new JSONObject();
+                    error.put("repository", repo.getRepoName());
+                    error.put("message", "Failed to get connection: " + e.getMessage());
+                    errors.add(error);
+                }
+                System.out.println("[executeSearch] ========================================");
+            }
+            System.out.println("[executeSearch] Successfully obtained " + subjects.size() + " connections out of " + repos.size() + " repositories");
+            
+            // Now execute searches in parallel with pre-obtained connections
+            System.out.println("[executeSearch] Submitting parallel search tasks...");
+            ExecutorService executor = Executors.newFixedThreadPool(repos.size());
+            List<Future<RepositorySearchResult>> futures = new ArrayList<Future<RepositorySearchResult>>();
+            
+            for (RepositoryConfig repo : repos) {
+                Subject subject = subjects.get(repo.getRepoId());
+                ObjectStore objectStore = objectStores.get(repo.getRepoId());
+                
+                if (subject != null && objectStore != null) {
+                    System.out.println("[executeSearch] Submitting search task for: " + repo.getRepoId());
+                    // NOTE: We don't pass callbacks or request to worker threads
+                    // to avoid SESN0008E session access errors
+                    futures.add(executor.submit(new RepositorySearchTask(
+                        repo, config, searchCriteria, pageNumber, pageSize,
+                        subject, objectStore
+                    )));
+                } else {
+                    System.out.println("[executeSearch] Skipping " + repo.getRepoId() + " - no connection available");
+                }
+            }
+            
+            System.out.println("[executeSearch] Submitted " + futures.size() + " search tasks. Waiting for completion...");
+            executor.shutdown();
+            boolean terminated = executor.awaitTermination(settings.getSearchTimeout(), TimeUnit.MILLISECONDS);
+            System.out.println("[executeSearch] Executor terminated: " + terminated);
+            
+            System.out.println("[executeSearch] Processing " + futures.size() + " search results...");
+            for (Future<RepositorySearchResult> future : futures) {
+                try {
+                    RepositorySearchResult result = future.get();
+                    System.out.println("[executeSearch] Result from " + result.getRepoName() + 
+                                      " - Success: " + result.isSuccess() + 
+                                      ", Count: " + result.getTotalCount() + 
+                                      ", Rows: " + result.getResults().size());
+                    
+                    if (result.isSuccess()) {
+                        for (JSONResultSetRow row : result.getResults()) {
+                            allRows.add(row);
+                        }
+                        totalCount += result.getTotalCount();
+                        System.out.println("[executeSearch] Added " + result.getResults().size() + 
+                                          " rows from " + result.getRepoName());
+                    } else {
+                        System.out.println("[executeSearch] Search failed for " + result.getRepoName() + 
+                                          ": " + result.getErrorMessage());
+                        JSONObject error = new JSONObject();
+                        error.put("repository", result.getRepoName());
+                        error.put("message", result.getErrorMessage());
+                        errors.add(error);
+                    }
+                } catch (Exception e) {
+                    System.out.println("[executeSearch] ERROR getting future result: " + e.getMessage());
+                    e.printStackTrace();
+                    callbacks.getLogger().logError(this, methodName, request, e);
+                }
+            }
+        } else {
+            System.out.println("[executeSearch] Using SEQUENTIAL execution mode");
+            System.out.println("[executeSearch] NOTE: Repository IDs must match exactly the IDs configured in ICN Desktop");
+            // Sequential execution
+            for (RepositoryConfig repo : repos) {
+                System.out.println("[executeSearch] ========================================");
+                System.out.println("[executeSearch] Searching repository: " + repo.getRepoId() + 
+                                  " (" + repo.getRepoName() + ")");
+                System.out.println("[executeSearch] Config RepoId: '" + repo.getRepoId() + "'");
+                System.out.println("[executeSearch] Config ClassName: '" + repo.getClassName() + "'");
+                try {
+                    RepositorySearchResult result = searchRepository(
+                        callbacks, request, repo, config, searchCriteria, pageNumber, pageSize
+                    );
+                    System.out.println("[executeSearch] Result from " + repo.getRepoId() + 
+                                      " - Success: " + result.isSuccess() + 
+                                      ", Count: " + result.getTotalCount() + 
+                                      ", Rows: " + result.getResults().size());
+                    
+                    if (result.isSuccess()) {
+                        for (JSONResultSetRow row : result.getResults()) {
+                            allRows.add(row);
+                        }
+                        totalCount += result.getTotalCount();
+                        System.out.println("[executeSearch] Added " + result.getResults().size() + 
+                                          " rows from " + repo.getRepoId());
+                    } else {
+                        System.out.println("[executeSearch] Search failed for " + repo.getRepoId() + 
+                                          ": " + result.getErrorMessage());
+                        JSONObject error = new JSONObject();
+                        error.put("repository", result.getRepoName());
+                        error.put("message", result.getErrorMessage());
+                        errors.add(error);
+                    }
+                } catch (Exception e) {
+                    System.out.println("[executeSearch] ERROR searching " + repo.getRepoId() + ": " + e.getMessage());
+                    e.printStackTrace();
+                    callbacks.getLogger().logError(this, methodName, request, e);
+                    JSONObject error = new JSONObject();
+                    error.put("repository", repo.getRepoName());
+                    error.put("message", e.getMessage());
+                    errors.add(error);
+                }
+            }
+        }
+        
+        System.out.println("[executeSearch] Final results - TotalCount: " + totalCount + 
+                          ", AllRows size: " + allRows.size() + 
+                          ", Errors: " + errors.size());
+        
+        // Add all rows to result set
+        for (JSONResultSetRow row : allRows) {
+            jsonResultSet.addRow(row);
+        }
+        
+        // Add error messages if any
+        if (errors.size() > 0) {
+            System.out.println("[executeSearch] Errors occurred: " + errors.toString());
+            for (int i = 0; i < errors.size(); i++) {
+                JSONObject error = (JSONObject) errors.get(i);
+                com.ibm.ecm.json.JSONMessage jsonMessage = new com.ibm.ecm.json.JSONMessage(
+                    0, 
+                    (String) error.get("message"), 
+                    "Search error for repository: " + error.get("repository"),
+                    "Please check the repository configuration.",
+                    "Check the IBM Content Navigator logs for more details.",
+                    ""
+                );
+                jsonResultSet.addErrorMessage(jsonMessage);
+            }
+        }
+        
+        System.out.println("[executeSearch] Returning response with " + allRows.size() + " results");
+        System.out.println("=========================================");
+        System.out.println("[MultiRepoSearchService] executeSearch - END");
+        System.out.println("=========================================");
+        
+        return jsonResultSet;
+    }
+    
+    /**
+     * Searches a single repository.
+     */
+    private RepositorySearchResult searchRepository(PluginServiceCallbacks callbacks, 
+            HttpServletRequest request, RepositoryConfig repo, SearchConfiguration config,
+            Map<String, Object> searchCriteria, int pageNumber, int pageSize) {
+        
+        String methodName = "searchRepository";
+        System.out.println("[searchRepository] START - Repository: " + repo.getRepoId());
+        System.out.println("[searchRepository] Attempting to get connection for repoId: '" + repo.getRepoId() + "'");
+        RepositorySearchResult result = new RepositorySearchResult(repo.getRepoName());
+        
+        Subject subject = null;
+        try {
+            // Get P8 connection
+            System.out.println("[searchRepository] Calling callbacks.getP8Subject('" + repo.getRepoId() + "')...");
+            subject = callbacks.getP8Subject(repo.getRepoId());
+            System.out.println("[searchRepository] Subject result: " + (subject != null ? "NOT NULL" : "NULL"));
+            
+            if (subject == null) {
+                System.out.println("[searchRepository] ERROR: Subject is NULL for repository: " + repo.getRepoId());
+                System.out.println("[searchRepository] This means the repository ID does not exist in ICN Desktop configuration");
+                result.setSuccess(false);
+                result.setErrorMessage("Repository ID '" + repo.getRepoId() + "' not found in ICN. Please verify the repoId in search-config.json matches the repository ID in ICN Desktop.");
+                return result;
+            }
+            
+            UserContext.get().pushSubject(subject);
+            System.out.println("[searchRepository] Subject pushed to UserContext");
+            
+            System.out.println("[searchRepository] Calling callbacks.getP8ObjectStore('" + repo.getRepoId() + "')...");
+            ObjectStore objectStore = callbacks.getP8ObjectStore(repo.getRepoId());
+            System.out.println("[searchRepository] ObjectStore result: " + (objectStore != null ? "NOT NULL" : "NULL"));
+            
+            if (objectStore == null) {
+                System.out.println("[searchRepository] ERROR: ObjectStore is NULL for repository: " + repo.getRepoId());
+                result.setSuccess(false);
+                result.setErrorMessage("ObjectStore not found for repository: " + repo.getRepoId());
+                return result;
+            }
+            
+            try {
+                System.out.println("[searchRepository] ObjectStore Name: " + objectStore.get_Name());
+            } catch (Exception nameEx) {
+                System.out.println("[searchRepository] ObjectStore Name: (not available - " + nameEx.getMessage() + ")");
+            }
+            System.out.println("[searchRepository] ObjectStore Id: " + objectStore.get_Id());
+            
+            return searchRepositoryWithConnection(repo, config, 
+                    searchCriteria, pageNumber, pageSize, subject, objectStore);
+            
+        } catch (Exception e) {
+            System.out.println("[searchRepository] EXCEPTION: " + e.getClass().getName() + " - " + e.getMessage());
+            e.printStackTrace();
+            callbacks.getLogger().logError(this, methodName, request, e);
+            result.setSuccess(false);
+            result.setErrorMessage(e.getMessage());
+            return result;
+        } finally {
+            if (subject != null) {
+                System.out.println("[searchRepository] Popping subject from UserContext");
+                UserContext.get().popSubject();
+            }
+            System.out.println("[searchRepository] END - Repository: " + repo.getRepoId());
+        }
+    }
+    
+    /**
+     * Searches a single repository using pre-obtained subject and object store.
+     * This version is used for parallel execution where connections are obtained in the main thread.
+     * 
+     * IMPORTANT: This method does NOT use callbacks or request - it's safe for worker threads.
+     * All session-bound resources (Subject, ObjectStore) must be pre-obtained in the main thread.
+     */
+    private RepositorySearchResult searchRepositoryWithConnection(RepositoryConfig repo, SearchConfiguration config,
+            Map<String, Object> searchCriteria, int pageNumber, int pageSize,
+            Subject subject, ObjectStore objectStore) {
+        
+        System.out.println("[searchRepositoryWithConnection] START - Repository: " + repo.getRepoId() + 
+                          " (" + repo.getRepoName() + "), Class: " + repo.getClassName());
+        RepositorySearchResult result = new RepositorySearchResult(repo.getRepoName());
+        
+        try {
+            if (objectStore == null) {
+                System.out.println("[searchRepositoryWithConnection] ERROR: ObjectStore is NULL for " + repo.getRepoId());
+                result.setSuccess(false);
+                result.setErrorMessage("Repository not found: " + repo.getRepoId());
+                return result;
+            }
+            
+            if (subject == null) {
+                System.out.println("[searchRepositoryWithConnection] ERROR: Subject is NULL for " + repo.getRepoId());
+                result.setSuccess(false);
+                result.setErrorMessage("Subject not available for: " + repo.getRepoId());
+                return result;
+            }
+            
+            try {
+                System.out.println("[searchRepositoryWithConnection] ObjectStore name: " + objectStore.get_Name());
+            } catch (Exception nameEx) {
+                System.out.println("[searchRepositoryWithConnection] ObjectStore name: (not available - " + nameEx.getMessage() + ")");
+            }
+            System.out.println("[searchRepositoryWithConnection] Pushing subject to UserContext...");
+            // Push subject for this thread
+            UserContext.get().pushSubject(subject);
+            System.out.println("[searchRepositoryWithConnection] Subject pushed successfully");
+            
+            // Build query
+            System.out.println("[searchRepositoryWithConnection] Building search query...");
+            String query = buildSearchQuery(repo, config, searchCriteria);
+            System.out.println("[searchRepositoryWithConnection] Generated SQL Query: " + query);
+            
+            // Execute search - NO callbacks usage here!
+            System.out.println("[searchRepositoryWithConnection] Creating SearchSQL and SearchScope...");
+            SearchSQL searchSQL = new SearchSQL(query);
+            SearchScope searchScope = new SearchScope(objectStore);
+            
+            // Create PropertyFilter to load required properties
+            // NOTE: We create our own filter instead of using callbacks.getP8DocumentResultsPropertyFilter()
+            // because callbacks cannot be used in worker threads
+            PropertyFilter propFilter = new PropertyFilter();
+            propFilter.addIncludeProperty(new FilterElement(null, null, null, "Id", null));
+            propFilter.addIncludeProperty(new FilterElement(null, null, null, "Name", null));
+            propFilter.addIncludeProperty(new FilterElement(null, null, null, "DocumentTitle", null));
+            propFilter.addIncludeProperty(new FilterElement(null, null, null, "DateCreated", null));
+            propFilter.addIncludeProperty(new FilterElement(null, null, null, "Creator", null));
+            propFilter.addIncludeProperty(new FilterElement(null, null, null, "MimeType", null));
+            propFilter.addIncludeProperty(new FilterElement(null, null, null, "ContentSize", null));
+            // Add custom properties from result columns configuration
+            for (ResultColumn col : config.getResultColumns()) {
+                String propName = col.getPropertyName();
+                if (propName != null && !propName.startsWith("_")) {
+                    propFilter.addIncludeProperty(new FilterElement(null, null, null, propName, null));
+                }
+            }
+            
+            int maxResults = config.getSearchSettings().getMaxResultsPerRepo();
+            System.out.println("[searchRepositoryWithConnection] Executing search with maxResults: " + maxResults);
+            IndependentObjectSet resultSet = searchScope.fetchObjects(searchSQL, maxResults, propFilter, true);
+            System.out.println("[searchRepositoryWithConnection] Search executed. Getting page iterator...");
+            
+            // Collect documents first
+            List<Document> documents = new ArrayList<Document>();
+            PageIterator pageIterator = resultSet.pageIterator();
+            System.out.println("[searchRepositoryWithConnection] PageIterator obtained. Collecting documents...");
+            int totalCount = 0;
+            while (pageIterator.nextPage()) {
+                for (Object obj : pageIterator.getCurrentPage()) {
+                    Document doc = (Document) obj;
+                    documents.add(doc);
+                    totalCount++;
+                }
+            }
+            System.out.println("[searchRepositoryWithConnection] Collected " + totalCount + " documents total");
+            
+            // NOTE: We don't call callbacks.getP8PrivilegeMasks() here because it 
+            // accesses HttpSession which causes SESN0008E in worker threads.
+            // Privileges will use default values.
+            
+            // Now process documents for pagination
+            List<JSONResultSetRow> rows = new ArrayList<JSONResultSetRow>();
+            int skip = (pageNumber - 1) * pageSize;
+            int endIndex = Math.min(skip + pageSize, documents.size());
+            System.out.println("[searchRepositoryWithConnection] Pagination - skip: " + skip + ", pageSize: " + pageSize + 
+                              ", endIndex: " + endIndex + ", totalDocs: " + documents.size());
+            
+            for (int i = skip; i < endIndex; i++) {
+                Document doc = documents.get(i);
+                try {
+                    System.out.println("[searchRepositoryWithConnection] Processing document " + (i + 1) + " of " + documents.size() + 
+                                      " (ID: " + doc.get_Id() + ")");
+                    JSONResultSetRow row = documentToJSONResultSetRow(doc, repo, config);
+                    rows.add(row);
+                    System.out.println("[searchRepositoryWithConnection] Successfully added document to results");
+                } catch (Exception docEx) {
+                    System.out.println("[searchRepositoryWithConnection] ERROR processing document: " + docEx.getMessage());
+                    docEx.printStackTrace();
+                    // Continue with next document
+                }
+            }
+            
+            System.out.println("[searchRepositoryWithConnection] Search complete - Total documents: " + totalCount + 
+                              ", Documents in page: " + rows.size());
+            
+            result.setSuccess(true);
+            result.setResults(rows);
+            result.setTotalCount(totalCount);
+            System.out.println("[searchRepositoryWithConnection] SUCCESS - Returning " + rows.size() + " results");
+            
+        } catch (Exception e) {
+            System.out.println("[searchRepositoryWithConnection] ERROR: " + e.getMessage());
+            e.printStackTrace();
+            result.setSuccess(false);
+            result.setErrorMessage(e.getMessage());
+        } finally {
+            // Pop subject for this thread
+            System.out.println("[searchRepositoryWithConnection] Popping subject from UserContext");
+            UserContext.get().popSubject();
+            System.out.println("[searchRepositoryWithConnection] END - Repository: " + repo.getRepoId());
+        }
+        
+        return result;
+    }
+    
+    /**
+     * Builds a P8 SQL query for a repository based on search criteria.
+     */
+    private String buildSearchQuery(RepositoryConfig repo, SearchConfiguration config, 
+                                    Map<String, Object> searchCriteria) {
+        System.out.println("[buildSearchQuery] START - Repository: " + repo.getRepoId() + 
+                          ", Class: " + repo.getClassName());
+        System.out.println("[buildSearchQuery] Search criteria size: " + searchCriteria.size());
+        
+        StringBuilder sql = new StringBuilder();
+        sql.append("SELECT This, DocumentTitle, DateCreated, Creator, MimeType, Id ");
+        sql.append("FROM ").append(repo.getClassName());
+        System.out.println("[buildSearchQuery] Base SQL: " + sql.toString());
+        
+        List<String> conditions = new ArrayList<String>();
+        
+        for (Map.Entry<String, Object> entry : searchCriteria.entrySet()) {
+            String fieldId = entry.getKey();
+            Object value = entry.getValue();
+            
+            System.out.println("[buildSearchQuery] Processing field: " + fieldId + " = " + value);
+            
+            if (value == null || value.toString().isEmpty()) {
+                System.out.println("[buildSearchQuery] Skipping empty field: " + fieldId);
+                continue;
+            }
+            
+            String propertyName = repo.getMappedProperty(fieldId);
+            if (propertyName == null) {
+                System.out.println("[buildSearchQuery] Field " + fieldId + " not mapped for repository " + repo.getRepoId());
+                continue; // Field not mapped for this repository
+            }
+            System.out.println("[buildSearchQuery] Field " + fieldId + " maps to property: " + propertyName);
+            
+            SearchField field = config.getSearchFieldById(fieldId);
+            if (field == null) {
+                System.out.println("[buildSearchQuery] Field " + fieldId + " not found in configuration");
+                continue;
+            }
+            System.out.println("[buildSearchQuery] Field type: " + field.getFieldType() + ", Operator: " + field.getOperator());
+            
+            String condition = buildCondition(propertyName, value, field);
+            if (condition != null) {
+                conditions.add(condition);
+                System.out.println("[buildSearchQuery] Added condition: " + condition);
+            } else {
+                System.out.println("[buildSearchQuery] No condition generated for " + fieldId);
+            }
+        }
+        
+        if (!conditions.isEmpty()) {
+            sql.append(" WHERE ");
+            StringBuffer whereClause = new StringBuffer();
+            for (int i = 0; i < conditions.size(); i++) {
+                if (i > 0) whereClause.append(" AND ");
+                whereClause.append(conditions.get(i));
+            }
+            sql.append(whereClause.toString());
+            System.out.println("[buildSearchQuery] WHERE clause: " + whereClause.toString());
+        } else {
+            System.out.println("[buildSearchQuery] No WHERE conditions - will return all documents");
+        }
+        
+        sql.append(" ORDER BY DateCreated DESC");
+        
+        String finalQuery = sql.toString();
+        System.out.println("[buildSearchQuery] Final SQL Query: " + finalQuery);
+        System.out.println("[buildSearchQuery] END");
+        
+        return finalQuery;
+    }
+    
+    /**
+     * Builds a single WHERE condition based on field type and operator.
+     */
+    private String buildCondition(String propertyName, Object value, SearchField field) {
+        System.out.println("[buildCondition] Property: " + propertyName + ", Value: " + value + 
+                          ", Type: " + field.getFieldType() + ", Operator: " + field.getOperator());
+        
+        String operator = field.getOperator();
+        String valueStr = value.toString().replace("'", "''"); // Escape single quotes
+        
+        /*switch (field.getFieldType().toLowerCase()) {
+            case "string":
+                switch (operator.toUpperCase()) {
+                    case "LIKE":
+                        return propertyName + " LIKE '%" + valueStr + "%'";
+                    case "STARTSWITH":
+                        return propertyName + " LIKE '" + valueStr + "%'";
+                    case "EQUALS":
+                    default:
+                        return propertyName + " = '" + valueStr + "'";
+                }
+                
+            case "date":
+                // Assuming ISO format date string
+                return propertyName + " = " + valueStr;
+                
+            case "integer":
+            case "number":
+                return propertyName + " = " + valueStr;
+                
+            case "boolean":
+                boolean boolVal = Boolean.parseBoolean(valueStr);
+                return propertyName + " = " + boolVal;
+                
+            default:
+                return propertyName + " = '" + valueStr + "'";
+        }*/
+        
+        String fieldType = field.getFieldType().toLowerCase();
+
+        if ("string".equals(fieldType)) {
+
+            String op = operator.toUpperCase();
+
+            if ("LIKE".equals(op)) {
+                String condition = propertyName + " LIKE '%" + valueStr + "%'";
+                System.out.println("[buildCondition] Generated LIKE condition: " + condition);
+                return condition;
+            } 
+            else if ("STARTSWITH".equals(op)) {
+                String condition = propertyName + " LIKE '" + valueStr + "%'";
+                System.out.println("[buildCondition] Generated STARTSWITH condition: " + condition);
+                return condition;
+            } 
+            else { // EQUALS or default
+                String condition = propertyName + " = '" + valueStr + "'";
+                System.out.println("[buildCondition] Generated EQUALS condition: " + condition);
+                return condition;
+            }
+
+        }
+        else if ("date".equals(fieldType)) {
+            // Assuming ISO format date string (YYYY-MM-DD)
+            // For P8, dates need to be in specific format
+            String condition = propertyName + " = DATE '" + valueStr + "'";
+            System.out.println("[buildCondition] Generated date condition: " + condition);
+            return condition;
+        }
+        else if ("integer".equals(fieldType) || "number".equals(fieldType)) {
+            String condition = propertyName + " = " + valueStr;
+            System.out.println("[buildCondition] Generated number condition: " + condition);
+            return condition;
+        }
+        else if ("boolean".equals(fieldType)) {
+            boolean boolVal = Boolean.parseBoolean(valueStr);
+            String condition = propertyName + " = " + boolVal;
+            System.out.println("[buildCondition] Generated boolean condition: " + condition);
+            return condition;
+        }
+        else {
+            String condition = propertyName + " = '" + valueStr + "'";
+            System.out.println("[buildCondition] Generated default condition: " + condition);
+            return condition;
+        }
+
+    }
+    
+    /**
+     * Converts a P8 Document to JSONResultSetRow for the result grid.
+     * 
+     * NOTE: This method does NOT use callbacks or request parameters
+     * to ensure it's safe to call from worker threads.
+     */
+    private JSONResultSetRow documentToJSONResultSetRow(Document doc, RepositoryConfig repo, 
+                                      SearchConfiguration config) {
+        // Get basic info first - these should always work
+        String docId = "";
+        String className = "";
+        String osId = "";
+        
+        try {
+            docId = doc.get_Id().toString();
+        } catch (Exception e) {
+            docId = "unknown";
+        }
+        try {
+            className = doc.getClassName();
+        } catch (Exception e) {
+            className = "Document";
+        }
+        try {
+            osId = doc.getObjectStore().get_Id().toString();
+        } catch (Exception e) {
+            osId = "unknown";
+        }
+        
+        // Build item ID (like sample plugin: className,objectStoreId,objectId)
+        String itemId = className + "," + osId + "," + docId;
+        
+        // Get document name safely
+        String docName = "";
+        try {
+            docName = doc.get_Name();
+            if (docName == null) docName = "";
+        } catch (Exception e) {
+            // Name not available, try to get from properties later
+        }
+        
+        // Get mime type safely
+        String mimeType = "";
+        try {
+            mimeType = doc.get_MimeType();
+            if (mimeType == null) mimeType = "";
+        } catch (Exception e) {
+            // MimeType not available
+        }
+        
+        // Get privileges (default to view/export/email/print/edit)
+        long privileges = JSONResultSetRow.PRIV_VIEWDOC | JSONResultSetRow.PRIV_EXPORT | 
+                        JSONResultSetRow.PRIV_EMAILDOC | JSONResultSetRow.PRIV_PRINTDOC | 
+                        JSONResultSetRow.PRIV_EDITPROPERTIES;
+        
+        // Create JSONResultSetRow
+        JSONResultSetRow row = new JSONResultSetRow(itemId, docName, mimeType, privileges);
+        
+        // Add standard attributes
+        row.addAttribute("ID", docId, JSONResultSetRow.TYPE_STRING, null, docId);
+        row.addAttribute("className", className, JSONResultSetRow.TYPE_STRING, null, className);
+        
+        // Get properties collection for configured columns
+        Properties allProperties = null;
+        try {
+            allProperties = doc.getProperties();
+            System.out.println("[documentToJSONResultSetRow] Properties collection obtained, size: " + allProperties.size());
+        } catch (Exception e) {
+            System.out.println("[documentToJSONResultSetRow] Could not get properties collection: " + e.getMessage());
+        }
+        
+        // Add configured result columns - extract ACTUAL property values
+        for (ResultColumn col : config.getResultColumns()) {
+            String propName = col.getPropertyName();
+            String value = "";
+            String displayValue = "";
+            String attrType = JSONResultSetRow.TYPE_STRING;
+            
+            try {
+                if ("_repositoryName".equals(propName)) {
+                    // Special column for repository name
+                    value = repo.getRepoName();
+                    displayValue = repo.getRepoName();
+                } else if (allProperties != null) {
+                    // Try to get the property by name
+                    Property prop = allProperties.find(propName);
+                    if (prop != null) {
+                        Object propValue = prop.getObjectValue();
+                        if (propValue != null) {
+                            // Handle different property types
+                            if (propValue instanceof java.util.Date) {
+                                java.util.Date dateVal = (java.util.Date) propValue;
+                                value = String.valueOf(dateVal.getTime());
+                                java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+                                displayValue = sdf.format(dateVal);
+                                attrType = JSONResultSetRow.TYPE_TIMESTAMP;
+                            } else if (propValue instanceof Integer || propValue instanceof Long) {
+                                value = propValue.toString();
+                                displayValue = value;
+                                attrType = JSONResultSetRow.TYPE_INTEGER;
+                            } else if (propValue instanceof Double || propValue instanceof Float) {
+                                value = propValue.toString();
+                                displayValue = value;
+                                attrType = JSONResultSetRow.TYPE_DOUBLE;
+                            } else if (propValue instanceof Boolean) {
+                                value = propValue.toString();
+                                displayValue = value;
+                                attrType = JSONResultSetRow.TYPE_BOOLEAN;
+                            } else {
+                                value = propValue.toString();
+                                displayValue = value;
+                            }
+                        }
+                    } else {
+                        System.out.println("[documentToJSONResultSetRow] Property not in collection: " + propName);
+                    }
+                }
+            } catch (Exception propEx) {
+                System.out.println("[documentToJSONResultSetRow] Error getting property " + propName + ": " + propEx.getMessage());
+            }
+            
+            // Add attribute to row (even if empty)
+            row.addAttribute(col.getColumnId(), value, attrType, null, displayValue);
+        }
+        
+        System.out.println("[documentToJSONResultSetRow] Successfully created row for doc: " + docId);
+        return row;
+    }
+    
+    /**
+     * Builds the result structure with columns (like sample plugin buildP8ResultStructure).
+     */
+    private void buildResultStructure(JSONResultSetResponse jsonResultSet, SearchConfiguration config,
+                                     PluginServiceCallbacks callbacks, Locale locale) {
+        // Add standard columns
+        String[] states = new String[1];
+        states[0] = JSONResultSetColumn.STATE_LOCKED;
+        jsonResultSet.addColumn(new JSONResultSetColumn("&nbsp;", "multiStateIcon", false, states));
+        jsonResultSet.addColumn(new JSONResultSetColumn("&nbsp;", "17px", "mimeTypeIcon", null, false));
+        
+        // Add configured result columns
+        for (com.cnb.search.model.ResultColumn col : config.getResultColumns()) {
+            String width = col.getWidth() != null ? col.getWidth() : "150px";
+            jsonResultSet.addColumn(new JSONResultSetColumn(col.getColumnLabel(), width, col.getColumnId(), null, col.isSortable()));
+        }
+    }
+    
+    
+    /**
+     * Helper to get integer parameter with default value.
+     */
+    private int getIntParameter(HttpServletRequest request, String name, int defaultValue) {
+        String value = request.getParameter(name);
+        if (value != null && !value.isEmpty()) {
+            try {
+                return Integer.parseInt(value);
+            } catch (NumberFormatException e) {
+                return defaultValue;
+            }
+        }
+        return defaultValue;
+    }
+    
+    /**
+     * Callable task for parallel repository search.
+     * Uses pre-obtained subject and object store to avoid session access issues.
+     * 
+     * IMPORTANT: This class does NOT hold callbacks or request references
+     * to prevent SESN0008E errors when accessing HttpSession from worker threads.
+     */
+    private class RepositorySearchTask implements Callable<RepositorySearchResult> {
+        private final RepositoryConfig repo;
+        private final SearchConfiguration config;
+        private final Map<String, Object> searchCriteria;
+        private final int pageNumber;
+        private final int pageSize;
+        private final Subject subject;
+        private final ObjectStore objectStore;
+        
+        public RepositorySearchTask(RepositoryConfig repo, SearchConfiguration config,
+                                   Map<String, Object> searchCriteria, int pageNumber, int pageSize,
+                                   Subject subject, ObjectStore objectStore) {
+            this.repo = repo;
+            this.config = config;
+            this.searchCriteria = searchCriteria;
+            this.pageNumber = pageNumber;
+            this.pageSize = pageSize;
+            this.subject = subject;
+            this.objectStore = objectStore;
+        }
+        
+        public RepositorySearchResult call() throws Exception {
+            // Call the thread-safe version that doesn't use callbacks or request
+            return searchRepositoryWithConnection(repo, config, 
+                    searchCriteria, pageNumber, pageSize, subject, objectStore);
+        }
+    }
+    
+    /**
+     * Container for repository search results.
+     */
+    private static class RepositorySearchResult {
+        private final String repoName;
+        private boolean success;
+        private List<JSONResultSetRow> results;
+        private int totalCount;
+        private String errorMessage;
+        
+        public RepositorySearchResult(String repoName) {
+            this.repoName = repoName;
+            this.results = new ArrayList<JSONResultSetRow>();
+        }
+        
+        public String getRepoName() { return repoName; }
+        public boolean isSuccess() { return success; }
+        public void setSuccess(boolean success) { this.success = success; }
+        public List<JSONResultSetRow> getResults() { return results; }
+        public void setResults(List<JSONResultSetRow> results) { this.results = results; }
+        public int getTotalCount() { return totalCount; }
+        public void setTotalCount(int totalCount) { this.totalCount = totalCount; }
+        public String getErrorMessage() { return errorMessage; }
+        public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+/* ============================================
+   CNB Multi-Repository Search Plugin Styles
+   ============================================ */
+
+/* Feature Icon for Launch Bar */
+.CNBMultiRepoSearchPluginLaunchIcon {
+    width: 32px;
+	height: 32px;
+	background: url('images/MultiSearchFeatureIcon.svg') no-repeat;
+	background-position: -16px -16px;
+}
+
+
+.ecmLaunchBarContainer .launchBarButton.dijitToggleButtonHover .CNBMultiRepoSearchPluginLaunchIcon,
+.launchBarButton.dijitChecked .CNBMultiRepoSearchPluginLaunchIcon, 
+.launchBarButton.dijitFocused .CNBMultiRepoSearchPluginLaunchIcon { 
+	background-position: -16px -80px;
+}
+
+/* Main Container - remove all spacing */
+.cnb-multi-repo-search-feature {
+    width: 100%;
+    height: 100%;
+    margin: 0 !important;
+    padding: 0 !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+.cnb-multi-repo-search-feature .idxBorderContainer,
+.cnb-multi-repo-search-feature .dijitBorderContainer {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* Override LaunchBarPane default styling */
+.cNBMultiRepoSearchPluginDojo_MultiRepoSearchFeature.ecmLaunchBarPane {
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+.cNBMultiRepoSearchPluginDojo_MultiRepoSearchFeature .ecmCenterPane,
+.cNBMultiRepoSearchPluginDojo_MultiRepoSearchFeature > div {
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+/* Left Panel */
+.cnb-search-panel {
+    background: #fff;
+    border-right: 1px solid #ccc;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+.cnb-search-panel .dijitContentPane {
+    padding: 0 !important;
+}
+
+/* Header */
+.cnb-search-header {
+    padding: 8px 10px;
+    border-bottom: 1px solid #ccc;
+    background: #f5f5f5;
+    margin: 0;
+}
+
+.cnb-search-title {
+    font-size: 12px;
+    font-weight: bold;
+    color: #333;
+    margin: 0;
+}
+
+.cnb-repo-info {
+    font-size: 10px;
+    color: #666;
+    margin-top: 3px;
+}
+
+/* Search Fields */
+.cnb-search-fields-container {
+    padding: 10px;
+}
+
+.cnb-search-field-row {
+    margin-bottom: 10px;
+}
+
+.cnb-search-label {
+    font-size: 11px;
+    color: #333;
+    margin-bottom: 3px;
+    display: block;
+}
+
+.cnb-search-input {
+    width: 100%;
+}
+
+/* Buttons */
+.cnb-search-actions {
+    padding: 10px;
+    border-top: 1px solid #ccc;
+}
+
+/* Loading */
+.cnb-loading-indicator {
+    padding: 15px 10px;
+    text-align: center;
+    font-size: 11px;
+    color: #666;
+}
+
+.cnb-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #ccc;
+    border-top-color: #333;
+    border-radius: 50%;
+    animation: cnb-spin 0.8s linear infinite;
+    margin: 0 auto 5px;
+}
+
+@keyframes cnb-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Right Panel */
+.cnb-results-panel {
+    background: #fff;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+.cnb-results-panel .dijitContentPane {
+    padding: 0 !important;
+}
+
+.cnb-results-header {
+    padding: 6px 10px;
+    background: #f5f5f5;
+    border-bottom: 1px solid #ccc;
+    font-size: 11px;
+    color: #333;
+}
+
+/* Messages - only show when content exists */
+.cnb-message {
+    padding: 8px 10px;
+    margin: 10px;
+    font-size: 11px;
+    border: 1px solid;
+}
+
+.cnb-error-message {
+    background: #fee;
+    border-color: #c00;
+    color: #900;
+}
+
+.cnb-warning-message {
+    background: #ffe;
+    border-color: #cc0;
+    color: #660;
+}
+
+.cnb-info-message {
+    background: #eef;
+    border-color: #00c;
+    color: #006;
+}
+
+/* Results Grid */
+.cnb-search-results {
+    width: 100%;
+    height: 100%;
+}
+
+.cnb-search-results .ecmContentList {
+    height: 100%;
+}
+
+
+
+
+
+
+
+
+
+
+
+/**
+ * CNB Multi-Repository Search Plugin
+ * 
+ * This plugin provides a unified search interface across multiple P8 object stores.
+ * It allows users to search documents across different repositories using a single
+ * query, with results aggregated and displayed in a unified grid.
+ * 
+ * Features:
+ * - Dynamic search fields configurable via JSON
+ * - Multi-repository parallel search execution
+ * - Aggregated results with repository identification
+ * - Infinite scroll pagination
+ * - Repository-specific field mapping
+ */
+
+require([
+	"dojo/_base/declare",
+	"dojo/_base/lang"
+], function(declare, lang) {
+	
+	// Plugin initialization
+	console.log("CNB Multi-Repository Search Plugin loaded");
+	
+	/**
+	 * Utility function to format dates consistently
+	 */
+	window.cnbFormatDate = function(dateValue) {
+		if (!dateValue) return "";
+		
+		try {
+			var date = new Date(dateValue);
+			if (isNaN(date.getTime())) return dateValue;
+			
+			return date.toLocaleDateString() + " " + date.toLocaleTimeString();
+		} catch (e) {
+			return dateValue;
+		}
+	};
+	
+	/**
+	 * Utility function to truncate long text
+	 */
+	window.cnbTruncateText = function(text, maxLength) {
+		if (!text) return "";
+		if (text.length <= maxLength) return text;
+		return text.substring(0, maxLength - 3) + "...";
+	};
+});
+
+
+
+
+
+
+
+
+
+define([
+	"dojo/_base/declare",
+	"dojo/_base/lang",
+	"dojo/dom-class",
+	"dijit/_TemplatedMixin",
+	"dijit/_WidgetsInTemplateMixin",
+	"ecm/widget/admin/PluginConfigurationPane",
+	"dojo/text!./templates/ConfigurationPane.html"
+],
+function(declare, lang, domClass, _TemplatedMixin, _WidgetsInTemplateMixin, 
+		PluginConfigurationPane, template) {
+
+	/**
+	 * @name cNBMultiRepoSearchPluginDojo.ConfigurationPane
+	 * @class Provides the plugin-level configuration pane for the 
+	 * CNB Multi-Repository Search Plugin.
+	 * @augments ecm.widget.admin.PluginConfigurationPane
+	 */
+	return declare("cNBMultiRepoSearchPluginDojo.ConfigurationPane", [
+		PluginConfigurationPane,
+		_TemplatedMixin,
+		_WidgetsInTemplateMixin
+	], {
+		/** @lends cNBMultiRepoSearchPluginDojo.ConfigurationPane.prototype */
+
+		templateString: template,
+		widgetsInTemplate: true,
+
+		/**
+		 * Loads the configuration values into the UI.
+		 */
+		load: function(callback) {
+			if (this.configurationString) {
+				try {
+					var config = JSON.parse(this.configurationString);
+					
+					if (config.enableDebugLogging !== undefined && this.debugLoggingCheckbox) {
+						this.debugLoggingCheckbox.set("checked", config.enableDebugLogging);
+					}
+					
+					if (config.searchTimeout && this.searchTimeoutField) {
+						this.searchTimeoutField.set("value", config.searchTimeout);
+					}
+					
+					if (config.maxResultsPerRepo && this.maxResultsField) {
+						this.maxResultsField.set("value", config.maxResultsPerRepo);
+					}
+				} catch (e) {
+					console.error("Failed to load plugin configuration:", e);
+				}
+			}
+			
+			if (callback) {
+				callback();
+			}
+		},
+
+		/**
+		 * Saves the configuration values from the UI.
+		 */
+		save: function() {
+			var config = {
+				enableDebugLogging: this.debugLoggingCheckbox ? 
+					this.debugLoggingCheckbox.get("checked") : false,
+				searchTimeout: this.searchTimeoutField ? 
+					parseInt(this.searchTimeoutField.get("value")) || 30000 : 30000,
+				maxResultsPerRepo: this.maxResultsField ? 
+					parseInt(this.maxResultsField.get("value")) || 500 : 500
+			};
+			
+			this.configurationString = JSON.stringify(config);
+		},
+
+		/**
+		 * Validates the configuration.
+		 */
+		validate: function() {
+			var isValid = true;
+			
+			if (this.searchTimeoutField) {
+				var timeout = parseInt(this.searchTimeoutField.get("value"));
+				if (isNaN(timeout) || timeout < 1000 || timeout > 300000) {
+					isValid = false;
+				}
+			}
+			
+			if (this.maxResultsField) {
+				var maxResults = parseInt(this.maxResultsField.get("value"));
+				if (isNaN(maxResults) || maxResults < 1 || maxResults > 10000) {
+					isValid = false;
+				}
+			}
+			
+			return isValid;
+		},
+
+		/**
+		 * Called when a configuration value changes.
+		 */
+		_onFieldChange: function() {
+			this.onSaveNeeded(true);
+		}
+	});
+});
+
+
+
+
+
+define([
+	"dojo/_base/declare",
+	"dojo/_base/lang",
+	"dojo/json",
+	"dijit/_TemplatedMixin",
+	"dijit/_WidgetsInTemplateMixin",
+	"ecm/widget/admin/PluginConfigurationPane",
+	"dojo/text!./templates/FeatureConfigurationPane.html"
+],
+function(declare, lang, dojoJson, _TemplatedMixin, _WidgetsInTemplateMixin, 
+		PluginConfigurationPane, template) {
+
+	/**
+	 * @name cNBMultiRepoSearchPluginDojo.FeatureConfigurationPane
+	 * @class Provides the feature-level configuration pane for the 
+	 * Multi-Repository Search feature.
+	 * @augments ecm.widget.admin.PluginConfigurationPane
+	 */
+	return declare("cNBMultiRepoSearchPluginDojo.FeatureConfigurationPane", [
+		PluginConfigurationPane,
+		_TemplatedMixin,
+		_WidgetsInTemplateMixin
+	], {
+		/** @lends cNBMultiRepoSearchPluginDojo.FeatureConfigurationPane.prototype */
+
+		templateString: template,
+		widgetsInTemplate: true,
+
+		/**
+		 * Loads the configuration values into the UI.
+		 */
+		load: function(callback) {
+			if (this.configurationString) {
+				try {
+					var config = dojoJson.parse(this.configurationString);
+					
+					if (config.showRepositoryColumn !== undefined && this.showRepoColumnCheckbox) {
+						this.showRepoColumnCheckbox.set("checked", config.showRepositoryColumn);
+					}
+					
+					if (config.defaultPageSize && this.pageSizeField) {
+						this.pageSizeField.set("value", config.defaultPageSize);
+					}
+					
+					if (config.enableInfiniteScroll !== undefined && this.infiniteScrollCheckbox) {
+						this.infiniteScrollCheckbox.set("checked", config.enableInfiniteScroll);
+					}
+				} catch (e) {
+					console.error("Failed to load feature configuration:", e);
+				}
+			}
+			
+			if (callback) {
+				callback();
+			}
+		},
+
+		/**
+		 * Saves the configuration values from the UI.
+		 */
+		save: function() {
+			var config = {
+				showRepositoryColumn: this.showRepoColumnCheckbox ? 
+					this.showRepoColumnCheckbox.get("checked") : true,
+				defaultPageSize: this.pageSizeField ? 
+					parseInt(this.pageSizeField.get("value")) || 50 : 50,
+				enableInfiniteScroll: this.infiniteScrollCheckbox ? 
+					this.infiniteScrollCheckbox.get("checked") : true
+			};
+			
+			this.configurationString = JSON.stringify(config);
+		},
+
+		/**
+		 * Validates the configuration.
+		 */
+		validate: function() {
+			var isValid = true;
+			
+			if (this.pageSizeField) {
+				var pageSize = parseInt(this.pageSizeField.get("value"));
+				if (isNaN(pageSize) || pageSize < 10 || pageSize > 500) {
+					isValid = false;
+				}
+			}
+			
+			return isValid;
+		},
+
+		/**
+		 * Called when a configuration value changes.
+		 */
+		_onFieldChange: function() {
+			this.onSaveNeeded(true);
+		}
+	});
+});
+
+
+
+
+
+
+define([
+	"dojo/_base/declare",
+	"dojo/_base/lang",
+	"dojo/_base/array",
+	"dojo/dom-class",
+	"dojo/dom-style",
+	"dojo/dom-construct",
+	"dojo/dom-attr",
+	"dojo/on",
+	"dojo/query",
+	"dojo/date/locale",
+	"dijit/registry",
+	"dijit/form/ValidationTextBox",
+	"dijit/form/DateTextBox",
+	"dijit/form/Button",
+	"idx/layout/BorderContainer",
+	"dijit/layout/ContentPane",
+	"ecm/model/Request",
+	"ecm/model/ResultSet",
+	"ecm/widget/layout/_LaunchBarPane",
+	"ecm/widget/listView/ContentList",
+	"ecm/widget/listView/gridModules/RowContextMenu",
+	"ecm/widget/listView/modules/Toolbar2",
+	"ecm/widget/listView/modules/DocInfo",
+	"ecm/widget/listView/modules/Bar",
+	"ecm/widget/listView/modules/ViewDetail",
+	"ecm/widget/listView/modules/ViewMagazine",
+	"dojo/text!./templates/MultiRepoSearchFeature.html"
+],
+function(declare, lang, array, domClass, domStyle, domConstruct, domAttr, on, query,
+		dateLocale, registry, ValidationTextBox, DateTextBox, Button, idxBorderContainer, ContentPane,
+		Request, ResultSet, _LaunchBarPane, ContentList, RowContextMenu, Toolbar,
+		DocInfo, Bar, ViewDetail, ViewMagazine, template) {
+
+	/**
+	 * @name cNBMultiRepoSearchPluginDojo.MultiRepoSearchFeature
+	 * @class Multi-repository search feature pane with dynamic search fields
+	 * and aggregated results from multiple P8 object stores.
+	 * @augments ecm.widget.layout._LaunchBarPane
+	 */
+	return declare("cNBMultiRepoSearchPluginDojo.MultiRepoSearchFeature", [
+		_LaunchBarPane
+	], {
+		/** @lends cNBMultiRepoSearchPluginDojo.MultiRepoSearchFeature.prototype */
+
+		templateString: template,
+		widgetsInTemplate: true,
+
+		// Configuration loaded from server
+		_config: null,
+		
+		// Dynamic field widgets
+		_fieldWidgets: {},
+		
+		// Pagination state
+		_currentPage: 1,
+		_pageSize: 50,
+		_hasMore: false,
+		_isLoading: false,
+
+		postCreate: function() {
+			this.logEntry("postCreate");
+			this.inherited(arguments);
+			
+			// Set up result list
+			domAttr.set(this.searchResults.domNode, "role", "region");
+			domAttr.set(this.searchResults.domNode, "aria-label", "Search Results");
+			this.searchResults.setContentListModules(this._getContentListModules());
+			this.searchResults.setGridExtensionModules(this._getGridModules());
+			
+			// Connect scroll event for infinite scrolling
+			this._setupInfiniteScroll();
+			
+			this.logExit("postCreate");
+		},
+		
+		/**
+		 * Loads the content of the pane.
+		 */
+		loadContent: function() {
+			this.logEntry("loadContent");
+			
+			if (!this.isLoaded) {
+				this._loadConfiguration();
+				this.isLoaded = true;
+				this.needReset = false;
+			}
+			
+			this.logExit("loadContent");
+		},
+
+		/**
+		 * Loads configuration from the server and builds dynamic UI.
+		 */
+		_loadConfiguration: function() {
+			var self = this;
+			console.log("test test");
+			this._showLoading(true);
+			
+			Request.invokePluginService("CNBMultiRepoSearchPlugin", "multiRepoSearchService", {
+				requestParams: {
+					action_Type: "getConfiguration"
+				},
+				requestCompleteCallback: lang.hitch(this, function(response) {
+					self._showLoading(false);
+					
+					if (response && response.success && response.configuration) {
+						self._config = response.configuration;
+						self._buildSearchForm();
+						self._setupResultColumns();
+					} else {
+						self._showError("Failed to load configuration");
+					}
+				}),
+				requestFailedCallback: lang.hitch(this, function(error) {
+					self._showLoading(false);
+					self._showError("Error loading configuration: " + error.message);
+				})
+			});
+		},
+
+		/**
+		 * Builds dynamic search form fields based on configuration.
+		 */
+		_buildSearchForm: function() {
+			var self = this;
+			var container = this.searchFieldsContainer;
+			
+			// Clear existing fields
+			domConstruct.empty(container);
+			this._fieldWidgets = {};
+			
+			if (!this._config || !this._config.searchFields) {
+				return;
+			}
+			
+			array.forEach(this._config.searchFields, function(field) {
+				var fieldRow = domConstruct.create("div", {
+					"class": "cnb-search-field-row"
+				}, container);
+				
+				// Label
+				domConstruct.create("label", {
+					"class": "cnb-search-label",
+					"for": "cnb_field_" + field.fieldId,
+					innerHTML: field.fieldLabel + (field.required ? " <span class='cnb-required'>*</span>" : "")
+				}, fieldRow);
+				
+				// Input container
+				var inputContainer = domConstruct.create("div", {
+					"class": "cnb-search-input"
+				}, fieldRow);
+				
+				// Create appropriate widget based on field type
+				var widget;
+				var fieldType = (field.fieldType || "string").toLowerCase();
+				
+				if (fieldType === "date") {
+					// Use Dojo DateTextBox
+					widget = new DateTextBox({
+						id: "cnb_field_" + field.fieldId,
+						name: field.fieldId,
+						required: field.required || false,
+						style: "width: 100%;",
+						constraints: { datePattern: "yyyy-MM-dd" },
+						promptMessage: field.placeholder || "Select a date",
+						invalidMessage: "Please enter a valid date"
+					});
+				} else if (fieldType === "integer" || fieldType === "number") {
+					// Use ValidationTextBox for numbers
+					widget = new ValidationTextBox({
+						id: "cnb_field_" + field.fieldId,
+						name: field.fieldId,
+						required: field.required || false,
+						style: "width: 100%;",
+						placeHolder: field.placeholder || "",
+						regExp: "\\d*",
+						invalidMessage: "Please enter a valid number",
+						trim: true
+					});
+				} else {
+					// Default: ValidationTextBox for strings
+					widget = new ValidationTextBox({
+						id: "cnb_field_" + field.fieldId,
+						name: field.fieldId,
+						required: field.required || false,
+						style: "width: 100%;",
+						placeHolder: field.placeholder || "",
+						trim: true
+					});
+				}
+				
+				widget.placeAt(inputContainer);
+				widget.startup();
+				
+				// Enable search on Enter key
+				on(widget.domNode, "keypress", function(evt) {
+					if (evt.keyCode === 13) {
+						self._doSearch();
+					}
+				});
+				
+				self._fieldWidgets[field.fieldId] = widget;
+			});
+			
+			// Update repository info
+			this._updateRepositoryInfo();
+		},
+
+		/**
+		 * Updates the repository info display.
+		 */
+		_updateRepositoryInfo: function() {
+			if (!this._config || !this._config.repositories) {
+				return;
+			}
+			
+			var repoNames = array.map(this._config.repositories, function(repo) {
+				return repo.repoName;
+			});
+			
+			if (this.repoInfoText) {
+				this.repoInfoText.innerHTML = "Searching: " + repoNames.join(", ");
+			}
+		},
+
+		/**
+		 * Sets up result grid columns based on configuration.
+		 */
+		_setupResultColumns: function() {
+			// Result columns are configured through the ContentList modules
+			// The actual column definitions come from the search results
+		},
+
+		/**
+		 * Returns grid extension modules for the content list.
+		 */
+		_getGridModules: function() {
+			return [RowContextMenu];
+		},
+
+		/**
+		 * Returns content list modules.
+		 */
+		_getContentListModules: function() {
+			var viewModules = [ViewDetail, ViewMagazine];
+			
+			return [
+				DocInfo,
+				{
+					moduleClass: Bar,
+					top: [
+						[
+							[
+								{ moduleClass: Toolbar },
+								{ moduleClasses: viewModules, "className": "BarViewModules" }
+							]
+						]
+					]
+				}
+			];
+		},
+
+		/**
+		 * Sets up infinite scroll for loading more results.
+		 */
+		_setupInfiniteScroll: function() {
+			var self = this;
+			var resultsPane = this.resultsPane;
+			
+			if (resultsPane && resultsPane.domNode) {
+				on(resultsPane.domNode, "scroll", function(evt) {
+					if (self._isLoading || !self._hasMore) {
+						return;
+					}
+					
+					var scrollTop = evt.target.scrollTop;
+					var scrollHeight = evt.target.scrollHeight;
+					var clientHeight = evt.target.clientHeight;
+					
+					// Load more when near bottom (within 100px)
+					if (scrollTop + clientHeight >= scrollHeight - 100) {
+						self._loadMoreResults();
+					}
+				});
+			}
+		},
+
+		/**
+		 * Performs the search.
+		 */
+		_doSearch: function() {
+			this.logEntry("_doSearch");
+			
+			// Reset pagination
+			this._currentPage = 1;
+			this._hasMore = false;
+			
+			// Collect search criteria
+			var criteria = this._getSearchCriteria();
+			
+			// Show loading
+			this._showLoading(true);
+			this.searchResults.reset();
+			
+			// Execute search
+			this._executeSearch(criteria, false);
+			
+			this.logExit("_doSearch");
+		},
+
+		/**
+		 * Loads more results (next page).
+		 */
+		_loadMoreResults: function() {
+			if (this._isLoading || !this._hasMore) {
+				return;
+			}
+			
+			this._currentPage++;
+			var criteria = this._getSearchCriteria();
+			this._executeSearch(criteria, true);
+		},
+
+		/**
+		 * Collects search criteria from form fields.
+		 */
+		_getSearchCriteria: function() {
+			var criteria = {};
+			
+			for (var fieldId in this._fieldWidgets) {
+				var widget = this._fieldWidgets[fieldId];
+				var value = widget.get("value");
+				
+				if (value !== null && value !== undefined && value !== "") {
+					// Format date values for DateTextBox
+					if (widget.declaredClass === "dijit/form/DateTextBox" && value instanceof Date) {
+						value = dateLocale.format(value, { selector: "date", datePattern: "yyyy-MM-dd" });
+					}
+					// Trim string values
+					if (typeof value === "string") {
+						value = value.trim();
+						if (value === "") continue;
+					}
+					criteria[fieldId] = value;
+				}
+			}
+			
+			return criteria;
+		},
+
+		/**
+		 * Executes search request to the server.
+		 */
+		_executeSearch: function(criteria, isAppend) {
+			var self = this;
+			this._isLoading = true;
+			this._hideMessages();
+			
+			if (!isAppend) {
+				this._showLoading(true);
+			}
+			
+			Request.invokePluginService("CNBMultiRepoSearchPlugin", "multiRepoSearchService", {
+				requestParams: {
+					action_Type: "search",
+					searchCriteria: JSON.stringify(criteria),
+					pageNumber: this._currentPage,
+					pageSize: this._pageSize
+				},
+				requestCompleteCallback: lang.hitch(this, function(response) {
+					self._isLoading = false;
+					self._showLoading(false);
+					
+					console.log("[MultiRepoSearchFeature] Search response received:", response);
+					
+					// The response is a JSONResultSetResponse - pass it directly to ResultSet
+					// like the sample plugin does
+					self._processSearchResults(response, isAppend);
+				}),
+				requestFailedCallback: lang.hitch(this, function(error) {
+					self._isLoading = false;
+					self._showLoading(false);
+					console.error("[MultiRepoSearchFeature] Search error:", error);
+					self._showError("Search error: " + (error.message || error));
+				})
+			});
+		},
+
+		/**
+		 * Processes and displays search results.
+		 * The response is a JSONResultSetResponse from the server.
+		 */
+		_processSearchResults: function(response, isAppend) {
+			console.log("[MultiRepoSearchFeature] Processing search results...");
+			
+			// Get row count from the response
+			var rowCount = 0;
+			if (response && response.rows) {
+				rowCount = response.rows.length;
+			}
+			
+			console.log("[MultiRepoSearchFeature] Row count:", rowCount);
+			
+			// Show results header and update count
+			if (this.resultsHeader) {
+				domStyle.set(this.resultsHeader, "display", "block");
+			}
+			if (this.resultCountText) {
+				this.resultCountText.innerHTML = rowCount + " document(s) found";
+			}
+			
+			if (rowCount === 0 && !isAppend) {
+				this._showNoResults();
+				return;
+			}
+			
+			// Check for error messages in response
+			if (response && response.messages && response.messages.length > 0) {
+				var errorMsgs = [];
+				array.forEach(response.messages, function(msg) {
+					if (msg.text) {
+						errorMsgs.push(msg.text);
+					}
+				});
+				if (errorMsgs.length > 0) {
+					this._showPartialResultsWarning(errorMsgs);
+				}
+			}
+			
+			// IMPORTANT: ContentList needs a repository reference for rendering icons/actions
+			// Get the first available P8 repository from desktop
+			var defaultRepo = this._getDefaultRepository();
+			if (defaultRepo) {
+				response.repository = defaultRepo;
+				console.log("[MultiRepoSearchFeature] Using repository for display:", defaultRepo.id);
+			}
+			
+			if (isAppend) {
+				// Append to existing results
+				var currentResultSet = this.searchResults.getResultSet();
+				if (currentResultSet && response.rows) {
+					array.forEach(response.rows, function(row) {
+						currentResultSet.addRow(row);
+					});
+					this.searchResults.refresh();
+				}
+			} else {
+				// Create new ResultSet directly from response (like sample plugin)
+				// The JSONResultSetResponse is compatible with ResultSet
+				var resultSet = new ResultSet(response);
+				this.searchResults.setResultSet(resultSet);
+				console.log("[MultiRepoSearchFeature] ResultSet created and set");
+			}
+		},
+		
+		/**
+		 * Gets a default repository for display purposes.
+		 * For multi-repo search, we use the first available P8 repository.
+		 */
+		_getDefaultRepository: function() {
+			// Try to get from desktop repositories
+			if (ecm && ecm.model && ecm.model.desktop) {
+				var desktop = ecm.model.desktop;
+				
+				// Try default repository first
+				if (desktop.defaultRepositoryId) {
+					var repo = desktop.getRepository(desktop.defaultRepositoryId);
+					if (repo && repo.type === "p8") {
+						return repo;
+					}
+				}
+				
+				// Otherwise get first P8 repository
+				var repositories = desktop.repositories;
+				if (repositories) {
+					for (var i = 0; i < repositories.length; i++) {
+						if (repositories[i].type === "p8") {
+							return repositories[i];
+						}
+					}
+				}
+				
+				// Return any repository if no P8 found
+				if (repositories && repositories.length > 0) {
+					return repositories[0];
+				}
+			}
+			return null;
+		},
+
+		/**
+		 * Clears the search form and results.
+		 */
+		_doClear: function() {
+			this.logEntry("_doClear");
+			
+			// Clear all field widgets
+			for (var fieldId in this._fieldWidgets) {
+				var widget = this._fieldWidgets[fieldId];
+				// For DateTextBox, set displayedValue to empty string to clear properly
+				if (widget.dropDown || (widget.declaredClass && widget.declaredClass.indexOf("DateTextBox") !== -1)) {
+					widget.set("displayedValue", "");
+				} else {
+					widget.set("value", "");
+				}
+			}
+			
+			// Clear results
+			this.searchResults.reset();
+			this._currentPage = 1;
+			this._hasMore = false;
+			
+			// Hide result count
+			if (this.resultCountText) {
+				this.resultCountText.innerHTML = "";
+			}
+			
+			// Hide results header
+			if (this.resultsHeader) {
+				domStyle.set(this.resultsHeader, "display", "none");
+			}
+			
+			// Hide any messages
+			this._hideMessages();
+			
+			this.logExit("_doClear");
+		},
+
+		/**
+		 * Shows loading indicator.
+		 */
+		_showLoading: function(show) {
+			if (this.loadingIndicator) {
+				domStyle.set(this.loadingIndicator, "display", show ? "block" : "none");
+			}
+		},
+
+		/**
+		 * Shows error message.
+		 */
+		_showError: function(message) {
+			if (this.errorMessage) {
+				this.errorMessage.innerHTML = message;
+				domStyle.set(this.errorMessage, "display", "block");
+			}
+		},
+
+		/**
+		 * Shows no results message.
+		 */
+		_showNoResults: function() {
+			if (this.noResultsMessage) {
+				domStyle.set(this.noResultsMessage, "display", "block");
+			}
+		},
+
+		/**
+		 * Shows partial results warning.
+		 */
+		_showPartialResultsWarning: function(errors) {
+			if (this.warningMessage) {
+				var errorText = "";
+				if (Array.isArray(errors)) {
+					if (typeof errors[0] === "string") {
+						errorText = errors.join("; ");
+					} else {
+						var repoErrors = array.map(errors, function(err) {
+							return (err.repository || "") + ": " + (err.message || err.text || "");
+						});
+						errorText = repoErrors.join("; ");
+					}
+				} else {
+					errorText = String(errors);
+				}
+				this.warningMessage.innerHTML = "Note: " + errorText;
+				domStyle.set(this.warningMessage, "display", "block");
+			}
+		},
+
+		/**
+		 * Hides all messages.
+		 */
+		_hideMessages: function() {
+			if (this.errorMessage) {
+				domStyle.set(this.errorMessage, "display", "none");
+			}
+			if (this.noResultsMessage) {
+				domStyle.set(this.noResultsMessage, "display", "none");
+			}
+			if (this.warningMessage) {
+				domStyle.set(this.warningMessage, "display", "none");
+			}
+		},
+
+		/**
+		 * Resets the feature pane.
+		 */
+		reset: function() {
+			this.logEntry("reset");
+			this._doClear();
+			this.needReset = false;
+			this.logExit("reset");
+		}
+	});
+});
+
+
+
+
+
+<div class="cnb-config-pane">
+	<div class="cnb-config-section">
+		<h4 class="cnb-config-section-title">CNB Multi-Repository Search Plugin Configuration</h4>
+		<p style="color: #525252; font-size: 13px; margin-bottom: 20px;">
+			Configure global settings for the multi-repository search feature. 
+			Repository-specific settings are configured in the search-config.json file.
+		</p>
+	</div>
+	
+	<div class="cnb-config-section">
+		<h5 class="cnb-config-section-title">Search Settings</h5>
+		
+		<div class="cnb-config-field">
+			<label class="cnb-config-label" for="${id}_searchTimeout">Search Timeout (ms):</label>
+			<input data-dojo-type="dijit/form/NumberTextBox" 
+				   data-dojo-attach-point="searchTimeoutField"
+				   data-dojo-attach-event="onChange:_onFieldChange"
+				   data-dojo-props="constraints:{min:1000,max:300000}, value:30000, required:true"
+				   id="${id}_searchTimeout" />
+			<div class="cnb-config-help">
+				Maximum time to wait for search results (1000 - 300000 ms)
+			</div>
+		</div>
+		
+		<div class="cnb-config-field">
+			<label class="cnb-config-label" for="${id}_maxResults">Max Results Per Repository:</label>
+			<input data-dojo-type="dijit/form/NumberTextBox" 
+				   data-dojo-attach-point="maxResultsField"
+				   data-dojo-attach-event="onChange:_onFieldChange"
+				   data-dojo-props="constraints:{min:1,max:10000}, value:500, required:true"
+				   id="${id}_maxResults" />
+			<div class="cnb-config-help">
+				Maximum number of results to retrieve from each repository (1 - 10000)
+			</div>
+		</div>
+	</div>
+	
+	<div class="cnb-config-section">
+		<h5 class="cnb-config-section-title">Logging</h5>
+		
+		<div class="cnb-config-field">
+			<input data-dojo-type="dijit/form/CheckBox" 
+				   data-dojo-attach-point="debugLoggingCheckbox"
+				   data-dojo-attach-event="onChange:_onFieldChange"
+				   id="${id}_debugLogging" />
+			<label for="${id}_debugLogging" style="margin-left: 8px;">
+				Enable Debug Logging
+			</label>
+			<div class="cnb-config-help">
+				Enable detailed logging for troubleshooting search issues
+			</div>
+		</div>
+	</div>
+	
+	<div class="cnb-config-section" style="background: #f4f4f4; padding: 16px; border-radius: 4px;">
+		<h5 style="margin: 0 0 12px 0; font-size: 14px;">Configuration File Location</h5>
+		<p style="font-size: 13px; color: #525252; margin: 0;">
+			Repository mappings and search field configurations are defined in:<br/>
+			<code style="background: #e0e0e0; padding: 2px 6px; border-radius: 3px;">
+				WebContent/config/search-config.json
+			</code>
+		</p>
+	</div>
+</div>
+
+
+
+
+
+
+<div class="cnb-config-pane">
+	<div class="cnb-config-section">
+		<h4 class="cnb-config-section-title">Multi-Repository Search Feature Settings</h4>
+		<p style="color: #525252; font-size: 13px; margin-bottom: 20px;">
+			Configure display and behavior settings for this desktop's multi-repository search feature.
+		</p>
+	</div>
+	
+	<div class="cnb-config-section">
+		<h5 class="cnb-config-section-title">Display Options</h5>
+		
+		<div class="cnb-config-field">
+			<input data-dojo-type="dijit/form/CheckBox" 
+				   data-dojo-attach-point="showRepoColumnCheckbox"
+				   data-dojo-attach-event="onChange:_onFieldChange"
+				   data-dojo-props="checked:true"
+				   id="${id}_showRepoColumn" />
+			<label for="${id}_showRepoColumn" style="margin-left: 8px;">
+				Show Repository Name Column
+			</label>
+			<div class="cnb-config-help">
+				Display the source repository name in the results grid
+			</div>
+		</div>
+	</div>
+	
+	<div class="cnb-config-section">
+		<h5 class="cnb-config-section-title">Pagination</h5>
+		
+		<div class="cnb-config-field">
+			<label class="cnb-config-label" for="${id}_pageSize">Results Per Page:</label>
+			<input data-dojo-type="dijit/form/NumberTextBox" 
+				   data-dojo-attach-point="pageSizeField"
+				   data-dojo-attach-event="onChange:_onFieldChange"
+				   data-dojo-props="constraints:{min:10,max:500}, value:50, required:true"
+				   id="${id}_pageSize" />
+			<div class="cnb-config-help">
+				Number of results to display per page (10 - 500)
+			</div>
+		</div>
+		
+		<div class="cnb-config-field">
+			<input data-dojo-type="dijit/form/CheckBox" 
+				   data-dojo-attach-point="infiniteScrollCheckbox"
+				   data-dojo-attach-event="onChange:_onFieldChange"
+				   data-dojo-props="checked:true"
+				   id="${id}_infiniteScroll" />
+			<label for="${id}_infiniteScroll" style="margin-left: 8px;">
+				Enable Infinite Scroll
+			</label>
+			<div class="cnb-config-help">
+				Automatically load more results when scrolling to the bottom
+			</div>
+		</div>
+	</div>
+</div>
+
+
+
+
+
+
+
+
+
+<div class="cnb-multi-repo-search-feature">
+	<div data-dojo-type="idx/layout/BorderContainer" data-dojo-props="gutters:false" style="width:100%;height:100%;padding:0;margin:0;">
+		
+		<!-- Left Panel -->
+		<div data-dojo-type="dijit/layout/ContentPane" 
+			 data-dojo-props="region:'leading', splitter:true" 
+			 class="cnb-search-panel"
+			 style="width:220px;padding:0;">
+			
+			<div class="cnb-search-header">
+				<div class="cnb-search-title">Search</div>
+				<div data-dojo-attach-point="repoInfoText" class="cnb-repo-info"></div>
+			</div>
+			
+			<div data-dojo-attach-point="searchFieldsContainer" class="cnb-search-fields-container"></div>
+			
+			<div class="cnb-search-actions">
+				<button data-dojo-type="dijit/form/Button" data-dojo-attach-event="onClick:_doSearch">Search</button>
+				<button data-dojo-type="dijit/form/Button" data-dojo-attach-event="onClick:_doClear">Clear</button>
+			</div>
+			
+			<div data-dojo-attach-point="loadingIndicator" class="cnb-loading-indicator" style="display:none;">
+				<div class="cnb-spinner"></div>
+				Searching...
+			</div>
+		</div>
+		
+		<!-- Right Panel -->
+		<div data-dojo-type="dijit/layout/ContentPane" 
+			 data-dojo-attach-point="resultsPane"
+			 data-dojo-props="region:'center'" 
+			 class="cnb-results-panel"
+			 style="padding:0;">
+			
+			<div data-dojo-attach-point="resultsHeader" class="cnb-results-header" style="display:none;">
+				<span data-dojo-attach-point="resultCountText"></span>
+			</div>
+			
+			<div data-dojo-attach-point="errorMessage" class="cnb-message cnb-error-message" style="display:none;"></div>
+			<div data-dojo-attach-point="warningMessage" class="cnb-message cnb-warning-message" style="display:none;"></div>
+			<div data-dojo-attach-point="noResultsMessage" class="cnb-message cnb-info-message" style="display:none;">No documents found.</div>
+			
+			<div data-dojo-attach-point="searchResults" data-dojo-type="ecm/widget/listView/ContentList" class="cnb-search-results"></div>
+		</div>
+		
+	</div>
+</div>
