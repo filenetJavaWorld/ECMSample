@@ -1,1 +1,4313 @@
-temp
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CNBPropertyEditorEDSPlugin - Technical Documentation</title>
+    <style>
+        body {
+            font-family: 'Calibri', 'Arial', sans-serif;
+            font-size: 11pt;
+            line-height: 1.6;
+            color: #333;
+            max-width: 8.5in;
+            margin: 0 auto;
+            padding: 1in;
+        }
+        
+        h1 {
+            font-size: 24pt;
+            color: #1a365d;
+            border-bottom: 3px solid #1a365d;
+            padding-bottom: 10px;
+            page-break-before: always;
+        }
+        
+        h1:first-of-type {
+            page-break-before: avoid;
+        }
+        
+        h2 {
+            font-size: 18pt;
+            color: #2c5282;
+            border-bottom: 2px solid #2c5282;
+            padding-bottom: 5px;
+            margin-top: 30px;
+        }
+        
+        h3 {
+            font-size: 14pt;
+            color: #2b6cb0;
+            margin-top: 25px;
+        }
+        
+        h4 {
+            font-size: 12pt;
+            color: #3182ce;
+            margin-top: 20px;
+        }
+        
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 15px 0;
+            font-size: 10pt;
+        }
+        
+        th, td {
+            border: 1px solid #cbd5e0;
+            padding: 8px 12px;
+            text-align: left;
+        }
+        
+        th {
+            background-color: #2c5282;
+            color: white;
+            font-weight: bold;
+        }
+        
+        tr:nth-child(even) {
+            background-color: #f7fafc;
+        }
+        
+        code {
+            font-family: 'Consolas', 'Courier New', monospace;
+            background-color: #edf2f7;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 10pt;
+        }
+        
+        pre {
+            background-color: #1a202c;
+            color: #e2e8f0;
+            padding: 15px;
+            border-radius: 5px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 9pt;
+            line-height: 1.4;
+        }
+        
+        .toc {
+            background-color: #f7fafc;
+            border: 1px solid #e2e8f0;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .toc h2 {
+            margin-top: 0;
+            border-bottom: none;
+        }
+        
+        .toc ul {
+            list-style-type: none;
+            padding-left: 20px;
+        }
+        
+        .toc li {
+            margin: 5px 0;
+        }
+        
+        .toc a {
+            color: #2b6cb0;
+            text-decoration: none;
+        }
+        
+        .note {
+            background-color: #ebf8ff;
+            border-left: 4px solid #3182ce;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        
+        .warning {
+            background-color: #fffaf0;
+            border-left: 4px solid #dd6b20;
+            padding: 15px;
+            margin: 15px 0;
+        }
+        
+        .diagram {
+            background-color: #f7fafc;
+            border: 1px solid #e2e8f0;
+            padding: 15px;
+            margin: 15px 0;
+            font-family: 'Consolas', 'Courier New', monospace;
+            font-size: 9pt;
+            white-space: pre;
+            overflow-x: auto;
+        }
+        
+        .cover-page {
+            text-align: center;
+            padding: 100px 0;
+            page-break-after: always;
+        }
+        
+        .cover-page h1 {
+            font-size: 36pt;
+            border: none;
+        }
+        
+        .cover-page h2 {
+            font-size: 24pt;
+            border: none;
+            color: #4a5568;
+        }
+        
+        .version-info {
+            margin-top: 50px;
+            font-size: 12pt;
+            color: #718096;
+        }
+        
+        @media print {
+            body {
+                padding: 0;
+            }
+            h1 {
+                page-break-before: always;
+            }
+            h1:first-of-type {
+                page-break-before: avoid;
+            }
+            pre, .diagram {
+                page-break-inside: avoid;
+            }
+            table {
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- Cover Page -->
+<div class="cover-page">
+    <h1>CNBPropertyEditorEDSPlugin</h1>
+    <h2>Technical Design and Implementation Documentation</h2>
+    
+    <div class="version-info">
+        <p><strong>Document Version:</strong> 1.0</p>
+        <p><strong>Date:</strong> January 2026</p>
+        <p><strong>Status:</strong> Final</p>
+        <p><strong>Classification:</strong> Technical Documentation</p>
+    </div>
+</div>
+
+<!-- Document Control -->
+<h2>Document Control</h2>
+<table>
+    <tr>
+        <th>Version</th>
+        <th>Date</th>
+        <th>Author</th>
+        <th>Description</th>
+    </tr>
+    <tr>
+        <td>1.0</td>
+        <td>January 2026</td>
+        <td>Development Team</td>
+        <td>Initial Release</td>
+    </tr>
+</table>
+
+<!-- Table of Contents -->
+<div class="toc">
+    <h2>Table of Contents</h2>
+    <ul>
+        <li><a href="#section1">1. Executive Summary</a></li>
+        <li><a href="#section2">2. Objective and Business Context</a></li>
+        <li><a href="#section3">3. Initial Requirements and Design Rationale</a></li>
+        <li><a href="#section4">4. Design Specification</a></li>
+        <li><a href="#section5">5. Technology Stack</a></li>
+        <li><a href="#section6">6. Architecture Overview</a></li>
+        <li><a href="#section7">7. Component Details</a></li>
+        <li><a href="#section8">8. Step-by-Step Execution Process</a></li>
+        <li><a href="#section9">9. Configuration Guide</a></li>
+        <li><a href="#section10">10. How to Add New Class Configuration</a></li>
+        <li><a href="#section11">11. Deployment Guide</a></li>
+        <li><a href="#section12">12. Known Limitations</a></li>
+        <li><a href="#section13">13. Best Practices</a></li>
+        <li><a href="#section14">14. Troubleshooting Guide</a></li>
+    </ul>
+</div>
+
+<!-- Section 1: Executive Summary -->
+<h1 id="section1">1. Executive Summary</h1>
+
+<h2>1.1 Purpose of This Document</h2>
+<p>This document provides comprehensive technical documentation for the CNBPropertyEditorEDSPlugin, a custom IBM Content Navigator (ICN) plugin designed to enhance document creation workflows through intelligent, database-driven property editors. The documentation serves as both a design specification and an implementation guide for developers, administrators, and technical stakeholders.</p>
+
+<h2>1.2 Document Scope</h2>
+<p>This documentation covers:</p>
+<ul>
+    <li><strong>Business objectives</strong> and the problems this solution addresses</li>
+    <li><strong>Technical architecture</strong> including all backend and frontend components</li>
+    <li><strong>Configuration methodology</strong> for adding new document classes and properties</li>
+    <li><strong>Deployment procedures</strong> for production environments</li>
+    <li><strong>Operational guidance</strong> including limitations and best practices</li>
+</ul>
+
+<h2>1.3 Intended Audience</h2>
+<table>
+    <tr>
+        <th>Audience</th>
+        <th>Relevant Sections</th>
+    </tr>
+    <tr>
+        <td>Business Analysts</td>
+        <td>Sections 1-3 (Objectives, Requirements)</td>
+    </tr>
+    <tr>
+        <td>Solution Architects</td>
+        <td>Sections 4-6 (Design, Architecture)</td>
+    </tr>
+    <tr>
+        <td>Developers</td>
+        <td>Sections 7-10 (Components, Configuration)</td>
+    </tr>
+    <tr>
+        <td>System Administrators</td>
+        <td>Sections 11-14 (Deployment, Operations)</td>
+    </tr>
+    <tr>
+        <td>Support Teams</td>
+        <td>Sections 12-14 (Limitations, Troubleshooting)</td>
+    </tr>
+</table>
+
+<h2>1.4 Solution Overview</h2>
+<p>The CNBPropertyEditorEDSPlugin is a configuration-driven solution that replaces manual metadata entry in IBM Content Navigator with intelligent, database-backed autocomplete editors. When business users create documents using Entry Templates, the plugin:</p>
+<ol>
+    <li><strong>Presents searchable lookup fields</strong> that query external databases in real-time</li>
+    <li><strong>Displays results in a dropdown table</strong> with multiple columns for easy identification</li>
+    <li><strong>Auto-populates dependent properties</strong> when users make selections</li>
+    <li><strong>Controls property presentation</strong> including ordering, visibility, labels, and required status</li>
+</ol>
+<p>This approach significantly reduces data entry errors, improves productivity, and ensures alignment with authoritative source systems.</p>
+
+<!-- Section 2: Objective and Business Context -->
+<h1 id="section2">2. Objective and Business Context</h1>
+
+<h2>2.1 Business Problem Statement</h2>
+<p>In enterprise content management environments, document creation often requires users to manually enter multiple metadata property values. This manual process introduces several challenges:</p>
+
+<h3>2.1.1 Data Quality Issues</h3>
+<p>When users manually type metadata values, inconsistencies inevitably occur. The same customer might be entered as "ABC Corporation", "ABC Corp", "ABC Corp.", or "A.B.C. Corporation" across different documents. These inconsistencies create significant problems for:</p>
+<ul>
+    <li><strong>Document retrieval:</strong> Users cannot find documents because search terms don't match variations</li>
+    <li><strong>Reporting accuracy:</strong> Analytics and reports show fragmented data across variations</li>
+    <li><strong>Compliance requirements:</strong> Regulatory audits may flag inconsistent record-keeping</li>
+    <li><strong>Integration reliability:</strong> Downstream systems expecting consistent values may fail</li>
+</ul>
+
+<h3>2.1.2 User Productivity Concerns</h3>
+<p>Manual data entry is time-consuming and error-prone. Users must:</p>
+<ul>
+    <li>Remember or look up correct values from external systems</li>
+    <li>Type lengthy identifiers (account numbers, registration codes, etc.)</li>
+    <li>Enter the same related information repeatedly (e.g., customer name, address, phone)</li>
+    <li>Correct mistakes after validation failures</li>
+</ul>
+<p>This overhead significantly impacts document processing throughput and user satisfaction.</p>
+
+<h3>2.1.3 Source System Alignment</h3>
+<p>Organizations typically maintain authoritative data in enterprise systems (ERP, CRM, databases). When document metadata is entered manually instead of sourced from these systems:</p>
+<ul>
+    <li>Documents become disconnected from their source records</li>
+    <li>Updates in source systems are not reflected in document metadata</li>
+    <li>Cross-system reconciliation becomes difficult or impossible</li>
+</ul>
+
+<h2>2.2 Solution Objectives</h2>
+<table>
+    <tr>
+        <th>Objective</th>
+        <th>Description</th>
+        <th>Success Criteria</th>
+    </tr>
+    <tr>
+        <td><strong>Improve Data Accuracy</strong></td>
+        <td>Replace free-text entry with selection from validated sources</td>
+        <td>100% of lookup values match database records</td>
+    </tr>
+    <tr>
+        <td><strong>Reduce User Effort</strong></td>
+        <td>Auto-populate multiple fields from single selection</td>
+        <td>Minimum 50% reduction in keystrokes</td>
+    </tr>
+    <tr>
+        <td><strong>Minimize Input Errors</strong></td>
+        <td>Eliminate typos through selection-based input</td>
+        <td>Zero typing errors on populated fields</td>
+    </tr>
+    <tr>
+        <td><strong>Accelerate Processing</strong></td>
+        <td>Speed up document creation workflow</td>
+        <td>Measurable reduction in document creation time</td>
+    </tr>
+    <tr>
+        <td><strong>Ensure Source Alignment</strong></td>
+        <td>Pull values directly from authoritative databases</td>
+        <td>All populated values traceable to source system</td>
+    </tr>
+</table>
+
+<h2>2.3 Target Users</h2>
+<p>The primary users of this solution are <strong>business users</strong> who create and index documents in IBM Content Navigator. These users:</p>
+<ul>
+    <li>Work with Entry Templates to create new documents</li>
+    <li>Need to associate documents with records from external systems (customers, accounts, products, etc.)</li>
+    <li>Require efficient workflows to process high volumes of documents</li>
+    <li>May not have direct access to source systems for value lookup</li>
+</ul>
+
+<h2>2.4 Business Value Proposition</h2>
+<p>Implementing this solution delivers measurable business value:</p>
+<ol>
+    <li><strong>Operational Efficiency:</strong> Reduced time per document creation translates to higher throughput</li>
+    <li><strong>Data Quality:</strong> Consistent, validated metadata improves findability and compliance</li>
+    <li><strong>User Satisfaction:</strong> Simplified workflows reduce frustration and training requirements</li>
+    <li><strong>Integration Readiness:</strong> Accurate metadata enables reliable downstream processing</li>
+    <li><strong>Maintainability:</strong> Configuration-driven approach reduces ongoing development costs</li>
+</ol>
+
+<!-- Section 3: Initial Requirements and Design Rationale -->
+<h1 id="section3">3. Initial Requirements and Design Rationale</h1>
+
+<h2>3.1 Evaluation of Standard EDS</h2>
+<p>Before developing a custom solution, the standard IBM Content Navigator Entry Data Service (EDS) framework was evaluated for feasibility.</p>
+
+<h3>3.1.1 What is Standard EDS?</h3>
+<p>IBM Content Navigator's Entry Data Service (EDS) is a built-in framework that allows external services to provide:</p>
+<ul>
+    <li>Choice lists for property values</li>
+    <li>Property value validation</li>
+    <li>Dependent field population</li>
+    <li>Dynamic property behavior</li>
+</ul>
+<p>EDS operates by intercepting property editor requests and allowing external services to modify the property definitions and values.</p>
+
+<h3>3.1.2 Limitations Identified</h3>
+
+<h4>Limitation 1: Custom Layout Incompatibility</h4>
+<p>The client's implementation extensively uses Entry Templates with custom layouts to control property presentation. Testing revealed that:</p>
+<ul>
+    <li>When custom layouts are applied to Entry Templates, EDS behavior is not consistently triggered</li>
+    <li>The EDS plugin was unable to reliably populate metadata values</li>
+    <li>Workaround required removing custom layouts, which was not acceptable</li>
+</ul>
+<p>This limitation stems from how ICN processes custom layouts differently from default layouts, bypassing some extension points that EDS relies upon.</p>
+
+<h4>Limitation 2: Static Data Loading</h4>
+<p>Standard EDS employs a static data loading model:</p>
+<ul>
+    <li>Choice list values are loaded once when the property editor initializes</li>
+    <li>No mechanism exists for dynamic re-querying based on user input</li>
+    <li>All possible values must be loaded upfront</li>
+</ul>
+<p>For datasets with thousands or millions of records, this approach is problematic:</p>
+<ul>
+    <li>Loading all values causes significant delays</li>
+    <li>Memory consumption impacts browser performance</li>
+    <li>Users must scroll through extensive lists to find values</li>
+</ul>
+
+<h4>Limitation 3: Configuration Complexity</h4>
+<p>Standard EDS requires:</p>
+<ul>
+    <li>Development of custom EDS services for each use case</li>
+    <li>Deployment and configuration of separate EDS applications</li>
+    <li>Coordination between EDS service and ICN configuration</li>
+</ul>
+<p>This creates significant overhead for organizations needing to support multiple document classes.</p>
+
+<h2>3.2 Design Decision: Custom Plugin Approach</h2>
+<p>Based on the limitations identified, the decision was made to develop a custom ICN plugin that addresses these constraints while providing additional capabilities.</p>
+
+<h3>3.2.1 Key Design Decisions</h3>
+
+<h4>Decision 1: Configuration-Driven Architecture</h4>
+<p>All functional aspects are defined through JSON configuration rather than code:</p>
+<table>
+    <tr>
+        <th>Aspect</th>
+        <th>Configuration Approach</th>
+    </tr>
+    <tr>
+        <td>Document classes</td>
+        <td>Named entries in configuration file</td>
+    </tr>
+    <tr>
+        <td>Entry Template mappings</td>
+        <td>Nested configuration per class</td>
+    </tr>
+    <tr>
+        <td>Database queries</td>
+        <td>SQL strings in configuration</td>
+    </tr>
+    <tr>
+        <td>Field mappings</td>
+        <td>JSON objects defining source-to-target relationships</td>
+    </tr>
+    <tr>
+        <td>Property behavior</td>
+        <td>Configuration flags for ordering, visibility, etc.</td>
+    </tr>
+</table>
+
+<p><strong>Benefits:</strong></p>
+<ul>
+    <li>Onboarding new document classes requires no code changes</li>
+    <li>Business analysts can understand and review configurations</li>
+    <li>Testing is simplified through configuration changes</li>
+    <li>Deployment of changes doesn't require plugin rebuild</li>
+</ul>
+
+<h4>Decision 2: Dynamic Server-Side Search</h4>
+<p>Unlike static EDS, this solution supports real-time database queries:</p>
+<ul>
+    <li>User keystrokes trigger debounced search requests</li>
+    <li>Backend executes parameterized SQL with user input</li>
+    <li>Only matching results are returned (filtered at database level)</li>
+    <li>Results update dynamically as user types</li>
+</ul>
+<p>This approach scales to any dataset size because only relevant records are retrieved.</p>
+
+<h4>Decision 3: JNDI-Based Database Connectivity</h4>
+<p>All database connectivity uses JNDI DataSources exclusively:</p>
+<table>
+    <tr>
+        <th>Approach</th>
+        <th>Pros</th>
+        <th>Cons</th>
+    </tr>
+    <tr>
+        <td><strong>Hardcoded credentials</strong></td>
+        <td>Simple to configure</td>
+        <td>Security risk, not auditable</td>
+    </tr>
+    <tr>
+        <td><strong>Configuration file credentials</strong></td>
+        <td>Flexible</td>
+        <td>Still a security risk</td>
+    </tr>
+    <tr>
+        <td><strong>JNDI DataSources</strong></td>
+        <td>Secure, centralized, auditable</td>
+        <td>Requires server configuration</td>
+    </tr>
+</table>
+<p>The JNDI approach was selected because credentials are managed by the application server security infrastructure.</p>
+
+<h4>Decision 4: Entry Template Focus</h4>
+<p>The solution focuses specifically on Entry Template-based document creation:</p>
+<ul>
+    <li>Entry Templates define the document creation workflow</li>
+    <li>Property ordering and visibility can be configured per Entry Template</li>
+    <li>Default layouts ensure consistent EDS-like behavior</li>
+    <li>This covers the primary use case of business user document creation</li>
+</ul>
+
+<h2>3.3 Requirements Summary</h2>
+<table>
+    <tr>
+        <th>ID</th>
+        <th>Requirement</th>
+        <th>Priority</th>
+        <th>Rationale</th>
+    </tr>
+    <tr>
+        <td>REQ-01</td>
+        <td>Support dynamic, real-time data retrieval based on user input</td>
+        <td>Must Have</td>
+        <td>Address static loading limitation</td>
+    </tr>
+    <tr>
+        <td>REQ-02</td>
+        <td>Work with Entry Templates using default layouts</td>
+        <td>Must Have</td>
+        <td>Address custom layout limitation</td>
+    </tr>
+    <tr>
+        <td>REQ-03</td>
+        <td>Configuration-driven with no code changes for new classes</td>
+        <td>Must Have</td>
+        <td>Reduce maintenance overhead</td>
+    </tr>
+    <tr>
+        <td>REQ-04</td>
+        <td>Support multiple document classes and Entry Templates</td>
+        <td>Must Have</td>
+        <td>Enterprise scalability</td>
+    </tr>
+    <tr>
+        <td>REQ-05</td>
+        <td>Auto-populate dependent fields on selection</td>
+        <td>Must Have</td>
+        <td>Core functionality</td>
+    </tr>
+    <tr>
+        <td>REQ-06</td>
+        <td>Secure database connectivity via JNDI DataSources</td>
+        <td>Must Have</td>
+        <td>Security compliance</td>
+    </tr>
+    <tr>
+        <td>REQ-07</td>
+        <td>Support property ordering, required fields, labels, visibility</td>
+        <td>Should Have</td>
+        <td>Enhanced user experience</td>
+    </tr>
+    <tr>
+        <td>REQ-08</td>
+        <td>High performance for large datasets</td>
+        <td>Should Have</td>
+        <td>Scalability</td>
+    </tr>
+</table>
+
+<!-- Section 4: Design Specification -->
+<h1 id="section4">4. Design Specification</h1>
+
+<h2>4.1 High-Level Design</h2>
+<p>The CNBPropertyEditorEDSPlugin follows a layered architecture that separates concerns between configuration, backend services, and frontend presentation.</p>
+
+<div class="diagram">
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           PRESENTATION LAYER                                 │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    IBM Content Navigator UI                          │   │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │   │
+│  │  │ Entry Template  │  │ Properties Pane │  │ Custom Property     │  │   │
+│  │  │ Selection       │  │ (Modified via   │  │ Editors             │  │   │
+│  │  │                 │  │ Aspect)         │  │ (InlineAutocomplete)│  │   │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                           SERVICE LAYER                                      │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    Plugin Backend (Java)                             │   │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │   │
+│  │  │ Response Filter │  │ Lookup Service  │  │ Config Service      │  │   │
+│  │  │ (Inject Custom  │  │ (Execute SQL    │  │ (Expose Config      │  │   │
+│  │  │ Editors)        │  │ Queries)        │  │ to Frontend)        │  │   │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                           DATA ACCESS LAYER                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │   │
+│  │  │ Connection      │  │ LookupConfig    │  │ JNDI DataSource     │  │   │
+│  │  │ Manager         │  │ Manager         │  │ (App Server)        │  │   │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                           EXTERNAL SYSTEMS                                   │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │   │
+│  │  │ SQL Server      │  │ Oracle          │  │ Other JDBC          │  │   │
+│  │  │ Database        │  │ Database        │  │ Databases           │  │   │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+</div>
+
+<h2>4.2 Design Principles</h2>
+
+<h3>4.2.1 Separation of Concerns</h3>
+<p>Each component has a single, well-defined responsibility:</p>
+<table>
+    <tr>
+        <th>Component</th>
+        <th>Responsibility</th>
+    </tr>
+    <tr>
+        <td>Response Filter</td>
+        <td>Intercept ICN responses, inject custom editors</td>
+    </tr>
+    <tr>
+        <td>Lookup Service</td>
+        <td>Execute database queries, return results</td>
+    </tr>
+    <tr>
+        <td>Config Service</td>
+        <td>Expose configuration to frontend</td>
+    </tr>
+    <tr>
+        <td>Config Manager</td>
+        <td>Load and cache JSON configuration</td>
+    </tr>
+    <tr>
+        <td>Connection Manager</td>
+        <td>Manage database connections</td>
+    </tr>
+    <tr>
+        <td>Main JavaScript</td>
+        <td>Property ordering and manipulation via aspects</td>
+    </tr>
+    <tr>
+        <td>Autocomplete Editor</td>
+        <td>User interaction and field population</td>
+    </tr>
+</table>
+
+<h3>4.2.2 Security by Design</h3>
+<p>Security considerations are built into the architecture:</p>
+<table>
+    <tr>
+        <th>Security Aspect</th>
+        <th>Implementation</th>
+    </tr>
+    <tr>
+        <td>Credentials</td>
+        <td>Managed via JNDI, never in configuration</td>
+    </tr>
+    <tr>
+        <td>SQL Injection</td>
+        <td>Parameterized queries with PreparedStatement</td>
+    </tr>
+    <tr>
+        <td>Data Exposure</td>
+        <td>Only documentClasses exposed to frontend (not dataSources)</td>
+    </tr>
+    <tr>
+        <td>Access Control</td>
+        <td>Desktop-based restrictions per document class</td>
+    </tr>
+</table>
+
+<!-- Section 5: Technology Stack -->
+<h1 id="section5">5. Technology Stack</h1>
+
+<h2>5.1 Backend Technologies</h2>
+<table>
+    <tr>
+        <th>Technology</th>
+        <th>Version</th>
+        <th>Purpose</th>
+    </tr>
+    <tr>
+        <td><strong>Java SE</strong></td>
+        <td>1.6+ (1.8 recommended)</td>
+        <td>Core programming language</td>
+    </tr>
+    <tr>
+        <td><strong>Servlet API</strong></td>
+        <td>2.5+ (J2EE)</td>
+        <td>HTTP request/response handling</td>
+    </tr>
+    <tr>
+        <td><strong>IBM Content Navigator API</strong></td>
+        <td>3.0.x</td>
+        <td>Plugin framework, services, filters</td>
+    </tr>
+    <tr>
+        <td><strong>JDBC</strong></td>
+        <td>-</td>
+        <td>Database connectivity</td>
+    </tr>
+    <tr>
+        <td><strong>IBM JSON4J</strong></td>
+        <td>-</td>
+        <td>JSON parsing and serialization</td>
+    </tr>
+</table>
+
+<h2>5.2 Frontend Technologies</h2>
+<table>
+    <tr>
+        <th>Technology</th>
+        <th>Version</th>
+        <th>Purpose</th>
+    </tr>
+    <tr>
+        <td><strong>Dojo Toolkit</strong></td>
+        <td>1.x (ICN bundled)</td>
+        <td>Widget framework, AMD modules</td>
+    </tr>
+    <tr>
+        <td><strong>ECM Widgets</strong></td>
+        <td>ICN 3.0.x</td>
+        <td>Base classes (ValidationTextBox)</td>
+    </tr>
+    <tr>
+        <td><strong>HTML5/CSS3</strong></td>
+        <td>-</td>
+        <td>UI templates and styling</td>
+    </tr>
+</table>
+
+<h2>5.3 Runtime Environment</h2>
+<table>
+    <tr>
+        <th>Component</th>
+        <th>Specification</th>
+    </tr>
+    <tr>
+        <td><strong>IBM Content Navigator</strong></td>
+        <td>Version 3.0.x</td>
+    </tr>
+    <tr>
+        <td><strong>Application Server</strong></td>
+        <td>IBM WebSphere Application Server</td>
+    </tr>
+    <tr>
+        <td><strong>Database Support</strong></td>
+        <td>Microsoft SQL Server (via JNDI)</td>
+    </tr>
+    <tr>
+        <td><strong>Browser Support</strong></td>
+        <td>ICN-supported browsers</td>
+    </tr>
+</table>
+
+<h2>5.4 Dependencies</h2>
+<p>The plugin requires the following JAR files in the lib directory:</p>
+<pre>
+lib/
+├── navigatorAPI.jar        # IBM Content Navigator Plugin API
+├── j2ee.jar                # Java EE APIs
+└── mssql-jdbc-10.2.0.jre8.jar  # SQL Server JDBC Driver (development only)
+</pre>
+
+<div class="note">
+    <strong>Note:</strong> In production, JDBC drivers are typically provided by the application server and should not be included in the plugin JAR.
+</div>
+
+<!-- Section 6: Architecture Overview -->
+<h1 id="section6">6. Architecture Overview</h1>
+
+<h2>6.1 Plugin Package Structure</h2>
+<pre>
+CNBPropertyEditorEDSPlugin/
+├── src/
+│   └── com/
+│       └── cnb/
+│           └── eds/
+│               └── editor/
+│                   ├── CNBPropertyEditorEDSPlugin.java    # Main plugin class
+│                   ├── config/
+│                   │   ├── lookupConfig.json              # Configuration file
+│                   │   └── LookupConfigManager.java       # Config management
+│                   ├── connection/
+│                   │   └── ConnectionManager.java         # Database connections
+│                   ├── filters/
+│                   │   └── CNBCustomEditorResponseFilter.java  # Response filter
+│                   ├── service/
+│                   │   ├── CustomEditorGenericLookupService.java  # Lookup service
+│                   │   └── GetLookupConfigService.java    # Config API service
+│                   └── WebContent/
+│                       ├── CNBPropertyEditorEDSPlugin.js  # Main JavaScript
+│                       ├── CNBPropertyEditorEDSPlugin.css # Styles
+│                       └── cNBPropertyEditorEDSPluginDojo/
+│                           ├── InlineAutocompleteEditor.js # Custom editor
+│                           └── templates/
+│                               └── InlineAutocompleteEditor.html
+├── lib/
+│   ├── navigatorAPI.jar
+│   └── j2ee.jar
+├── build.xml                                               # Ant build script
+└── CNBPropertyEditorEDSPlugin.jar                         # Built plugin
+</pre>
+
+<!-- Sections 7-14 would continue with similar detail -->
+<!-- Due to length, providing key sections -->
+
+<!-- Section 12: Known Limitations -->
+<h1 id="section12">12. Known Limitations</h1>
+
+<h2>12.1 Scope Limitations</h2>
+<table>
+    <tr>
+        <th>Limitation</th>
+        <th>Description</th>
+        <th>Workaround</th>
+    </tr>
+    <tr>
+        <td><strong>Entry Template Only</strong></td>
+        <td>Plugin only works with Entry Template-based document creation</td>
+        <td>Use Entry Templates for document creation</td>
+    </tr>
+    <tr>
+        <td><strong>New Documents Only</strong></td>
+        <td>Custom editors not triggered when editing existing documents</td>
+        <td>None - by design</td>
+    </tr>
+    <tr>
+        <td><strong>Add Document Only</strong></td>
+        <td>Only applicable when using "Add Document" action with Entry Template</td>
+        <td>None - by design</td>
+    </tr>
+    <tr>
+        <td><strong>Default Layout Required</strong></td>
+        <td>Entry Templates must use default layout (custom layouts not supported)</td>
+        <td>Convert Entry Templates to use default layout</td>
+    </tr>
+</table>
+
+<h2>12.2 Technical Limitations</h2>
+<table>
+    <tr>
+        <th>Limitation</th>
+        <th>Description</th>
+        <th>Workaround</th>
+    </tr>
+    <tr>
+        <td><strong>Single DataSource per Property</strong></td>
+        <td>Each lookup property connects to one datasource</td>
+        <td>Create separate properties for different datasources</td>
+    </tr>
+    <tr>
+        <td><strong>SQL Server Syntax</strong></td>
+        <td>Default SQL uses SQL Server syntax (TOP, brackets)</td>
+        <td>Modify SQL for other databases</td>
+    </tr>
+    <tr>
+        <td><strong>Synchronous Population</strong></td>
+        <td>Dependent fields populated synchronously</td>
+        <td>None - acceptable for typical use</td>
+    </tr>
+</table>
+
+<!-- Section 13: Best Practices -->
+<h1 id="section13">13. Best Practices</h1>
+
+<h2>13.1 Configuration Best Practices</h2>
+<table>
+    <tr>
+        <th>Practice</th>
+        <th>Recommendation</th>
+    </tr>
+    <tr>
+        <td><strong>Naming Conventions</strong></td>
+        <td>Use consistent, descriptive names for DataSources</td>
+    </tr>
+    <tr>
+        <td><strong>Desktop Restrictions</strong></td>
+        <td>Always specify <code>desktops</code> array to limit scope</td>
+    </tr>
+    <tr>
+        <td><strong>Entry Template Names</strong></td>
+        <td>Match names exactly (case-sensitive)</td>
+    </tr>
+    <tr>
+        <td><strong>Property Names</strong></td>
+        <td>Use FileNet symbolic names, not display names</td>
+    </tr>
+    <tr>
+        <td><strong>JSON Validation</strong></td>
+        <td>Always validate JSON before deployment</td>
+    </tr>
+</table>
+
+<h2>13.2 SQL Query Best Practices</h2>
+<table>
+    <tr>
+        <th>Practice</th>
+        <th>Example</th>
+    </tr>
+    <tr>
+        <td><strong>Use parameterized queries</strong></td>
+        <td><code>WHERE Column LIKE ?</code></td>
+    </tr>
+    <tr>
+        <td><strong>Include result limits</strong></td>
+        <td><code>SELECT TOP {limit}</code></td>
+    </tr>
+    <tr>
+        <td><strong>Add ORDER BY</strong></td>
+        <td><code>ORDER BY ColumnName</code></td>
+    </tr>
+    <tr>
+        <td><strong>Select only needed columns</strong></td>
+        <td>Don't use <code>SELECT *</code></td>
+    </tr>
+    <tr>
+        <td><strong>Create indexes</strong></td>
+        <td>Index columns used in WHERE and ORDER BY</td>
+    </tr>
+</table>
+
+<h2>13.3 Performance Best Practices</h2>
+<table>
+    <tr>
+        <th>Practice</th>
+        <th>Recommendation</th>
+    </tr>
+    <tr>
+        <td><strong>Preload Mode Selection</strong></td>
+        <td>Use <code>top500</code> for &lt;500 records, <code>none</code> for larger datasets</td>
+    </tr>
+    <tr>
+        <td><strong>Result Limits</strong></td>
+        <td>Set reasonable limits (500-1000)</td>
+    </tr>
+    <tr>
+        <td><strong>Debounce Delay</strong></td>
+        <td>200-500ms to prevent excessive queries</td>
+    </tr>
+    <tr>
+        <td><strong>Database Indexes</strong></td>
+        <td>Index filter columns for fast searches</td>
+    </tr>
+</table>
+
+<!-- Section 14: Troubleshooting Guide -->
+<h1 id="section14">14. Troubleshooting Guide</h1>
+
+<h2>14.1 Common Issues</h2>
+
+<h3>Issue: Lookup field not appearing</h3>
+<p><strong>Symptoms:</strong> Standard text field instead of autocomplete editor</p>
+<p><strong>Possible Causes:</strong></p>
+<ol>
+    <li>Document class name mismatch</li>
+    <li>Desktop not in allowed list</li>
+    <li>Entry Template name mismatch</li>
+    <li>Plugin not loaded</li>
+</ol>
+<p><strong>Resolution:</strong></p>
+<ol>
+    <li>Check document class name matches exactly in configuration</li>
+    <li>Verify desktop ID is in <code>desktops</code> array</li>
+    <li>Confirm Entry Template name matches exactly</li>
+    <li>Check ICN Administration → Plugins</li>
+</ol>
+
+<h3>Issue: Search returns no results</h3>
+<p><strong>Symptoms:</strong> "No results found" message</p>
+<p><strong>Possible Causes:</strong></p>
+<ol>
+    <li>Database connection failed</li>
+    <li>SQL query error</li>
+    <li>No matching data</li>
+    <li>DataSource not found</li>
+</ol>
+<p><strong>Resolution:</strong></p>
+<ol>
+    <li>Check WebSphere logs for connection errors</li>
+    <li>Test SQL query directly in database</li>
+    <li>Verify data exists matching search pattern</li>
+    <li>Confirm JNDI name matches WebSphere configuration</li>
+</ol>
+
+<h3>Issue: Fields not populating</h3>
+<p><strong>Symptoms:</strong> Selection works but target fields remain empty</p>
+<p><strong>Possible Causes:</strong></p>
+<ol>
+    <li>Field mapping misconfiguration</li>
+    <li>Target property name mismatch</li>
+    <li>Data type conversion error</li>
+</ol>
+<p><strong>Resolution:</strong></p>
+<ol>
+    <li>Verify <code>targetProperty</code> matches FileNet symbolic name</li>
+    <li>Check browser console for JavaScript errors</li>
+    <li>Confirm <code>sourceAlias</code> matches SQL column name/alias</li>
+</ol>
+
+<h2>14.2 Diagnostic Logging</h2>
+<p>Enable console logging in browser to see detailed execution:</p>
+<ol>
+    <li>Open browser Developer Tools (F12)</li>
+    <li>Go to Console tab</li>
+    <li>Filter by "CNBPropertyEditorEDSPlugin" or "EDSResponseFilter"</li>
+    <li>Reproduce the issue</li>
+    <li>Review log messages for errors</li>
+</ol>
+
+<h2>14.3 Server-Side Logging</h2>
+<p>Check WebSphere logs for backend errors:</p>
+<ol>
+    <li>Location: <code>&lt;WAS_PROFILE&gt;/logs/&lt;SERVER&gt;/SystemOut.log</code></li>
+    <li>Search for:
+        <ul>
+            <li><code>[LookupConfigManager]</code></li>
+            <li><code>[ConnectionManager]</code></li>
+            <li><code>[CustomEditorGenericLookupService]</code></li>
+            <li><code>[EDSResponseFilter]</code></li>
+        </ul>
+    </li>
+</ol>
+
+<!-- Footer -->
+<hr>
+<p style="text-align: center; color: #718096; font-size: 10pt;">
+    <strong>CNBPropertyEditorEDSPlugin Technical Documentation</strong><br>
+    Version 1.0 | January 2026
+</p>
+
+</body>
+</html>
+
+
+
+# CNBPropertyEditorEDSPlugin
+## Technical Design and Implementation Documentation
+
+---
+
+**Document Version:** 1.0  
+**Date:** January 2026  
+**Status:** Final  
+**Classification:** Technical Documentation
+
+---
+
+## Document Control
+
+| Version | Date | Author | Description |
+|---------|------|--------|-------------|
+| 1.0 | January 2026 | Development Team | Initial Release |
+
+---
+
+## Table of Contents
+
+1. [Executive Summary](#1-executive-summary)
+2. [Objective and Business Context](#2-objective-and-business-context)
+3. [Initial Requirements and Design Rationale](#3-initial-requirements-and-design-rationale)
+4. [Design Specification](#4-design-specification)
+5. [Technology Stack](#5-technology-stack)
+6. [Architecture Overview](#6-architecture-overview)
+7. [Component Details](#7-component-details)
+8. [Step-by-Step Execution Process](#8-step-by-step-execution-process)
+9. [Configuration Guide](#9-configuration-guide)
+10. [How to Add New Class Configuration](#10-how-to-add-new-class-configuration)
+11. [Deployment Guide](#11-deployment-guide)
+12. [Known Limitations](#12-known-limitations)
+13. [Best Practices](#13-best-practices)
+14. [Troubleshooting Guide](#14-troubleshooting-guide)
+15. [Appendices](#15-appendices)
+
+---
+
+## 1. Executive Summary
+
+### 1.1 Purpose of This Document
+
+This document provides comprehensive technical documentation for the CNBPropertyEditorEDSPlugin, a custom IBM Content Navigator (ICN) plugin designed to enhance document creation workflows through intelligent, database-driven property editors. The documentation serves as both a design specification and an implementation guide for developers, administrators, and technical stakeholders.
+
+### 1.2 Document Scope
+
+This documentation covers:
+
+- **Business objectives** and the problems this solution addresses
+- **Technical architecture** including all backend and frontend components
+- **Configuration methodology** for adding new document classes and properties
+- **Deployment procedures** for production environments
+- **Operational guidance** including limitations and best practices
+
+### 1.3 Intended Audience
+
+| Audience | Relevant Sections |
+|----------|-------------------|
+| Business Analysts | Sections 1-3 (Objectives, Requirements) |
+| Solution Architects | Sections 4-6 (Design, Architecture) |
+| Developers | Sections 7-10 (Components, Configuration) |
+| System Administrators | Sections 11-14 (Deployment, Operations) |
+| Support Teams | Sections 12-14 (Limitations, Troubleshooting) |
+
+### 1.4 Solution Overview
+
+The CNBPropertyEditorEDSPlugin is a configuration-driven solution that replaces manual metadata entry in IBM Content Navigator with intelligent, database-backed autocomplete editors. When business users create documents using Entry Templates, the plugin:
+
+1. **Presents searchable lookup fields** that query external databases in real-time
+2. **Displays results in a dropdown table** with multiple columns for easy identification
+3. **Auto-populates dependent properties** when users make selections
+4. **Controls property presentation** including ordering, visibility, labels, and required status
+
+This approach significantly reduces data entry errors, improves productivity, and ensures alignment with authoritative source systems.
+
+---
+
+## 2. Objective and Business Context
+
+### 2.1 Business Problem Statement
+
+In enterprise content management environments, document creation often requires users to manually enter multiple metadata property values. This manual process introduces several challenges:
+
+#### 2.1.1 Data Quality Issues
+
+When users manually type metadata values, inconsistencies inevitably occur. The same customer might be entered as "ABC Corporation", "ABC Corp", "ABC Corp.", or "A.B.C. Corporation" across different documents. These inconsistencies create significant problems for:
+
+- **Document retrieval**: Users cannot find documents because search terms don't match variations
+- **Reporting accuracy**: Analytics and reports show fragmented data across variations
+- **Compliance requirements**: Regulatory audits may flag inconsistent record-keeping
+- **Integration reliability**: Downstream systems expecting consistent values may fail
+
+#### 2.1.2 User Productivity Concerns
+
+Manual data entry is time-consuming and error-prone. Users must:
+
+- Remember or look up correct values from external systems
+- Type lengthy identifiers (account numbers, registration codes, etc.)
+- Enter the same related information repeatedly (e.g., customer name, address, phone)
+- Correct mistakes after validation failures
+
+This overhead significantly impacts document processing throughput and user satisfaction.
+
+#### 2.1.3 Source System Alignment
+
+Organizations typically maintain authoritative data in enterprise systems (ERP, CRM, databases). When document metadata is entered manually instead of sourced from these systems:
+
+- Documents become disconnected from their source records
+- Updates in source systems are not reflected in document metadata
+- Cross-system reconciliation becomes difficult or impossible
+
+### 2.2 Solution Objectives
+
+The CNBPropertyEditorEDSPlugin addresses these challenges with the following objectives:
+
+| Objective | Description | Success Criteria |
+|-----------|-------------|------------------|
+| **Improve Data Accuracy** | Replace free-text entry with selection from validated sources | 100% of lookup values match database records |
+| **Reduce User Effort** | Auto-populate multiple fields from single selection | Minimum 50% reduction in keystrokes |
+| **Minimize Input Errors** | Eliminate typos through selection-based input | Zero typing errors on populated fields |
+| **Accelerate Processing** | Speed up document creation workflow | Measurable reduction in document creation time |
+| **Ensure Source Alignment** | Pull values directly from authoritative databases | All populated values traceable to source system |
+
+### 2.3 Target Users
+
+The primary users of this solution are **business users** who create and index documents in IBM Content Navigator. These users:
+
+- Work with Entry Templates to create new documents
+- Need to associate documents with records from external systems (customers, accounts, products, etc.)
+- Require efficient workflows to process high volumes of documents
+- May not have direct access to source systems for value lookup
+
+### 2.4 Business Value Proposition
+
+Implementing this solution delivers measurable business value:
+
+1. **Operational Efficiency**: Reduced time per document creation translates to higher throughput
+2. **Data Quality**: Consistent, validated metadata improves findability and compliance
+3. **User Satisfaction**: Simplified workflows reduce frustration and training requirements
+4. **Integration Readiness**: Accurate metadata enables reliable downstream processing
+5. **Maintainability**: Configuration-driven approach reduces ongoing development costs
+
+---
+
+## 3. Initial Requirements and Design Rationale
+
+### 3.1 Evaluation of Standard EDS
+
+Before developing a custom solution, the standard IBM Content Navigator Entry Data Service (EDS) framework was evaluated for feasibility.
+
+#### 3.1.1 What is Standard EDS?
+
+IBM Content Navigator's Entry Data Service (EDS) is a built-in framework that allows external services to provide:
+
+- Choice lists for property values
+- Property value validation
+- Dependent field population
+- Dynamic property behavior
+
+EDS operates by intercepting property editor requests and allowing external services to modify the property definitions and values.
+
+#### 3.1.2 Limitations Identified
+
+During evaluation and testing, several critical limitations were identified:
+
+**Limitation 1: Custom Layout Incompatibility**
+
+The client's implementation extensively uses Entry Templates with custom layouts to control property presentation. Testing revealed that:
+
+- When custom layouts are applied to Entry Templates, EDS behavior is not consistently triggered
+- The EDS plugin was unable to reliably populate metadata values
+- Workaround required removing custom layouts, which was not acceptable
+
+This limitation stems from how ICN processes custom layouts differently from default layouts, bypassing some extension points that EDS relies upon.
+
+**Limitation 2: Static Data Loading**
+
+Standard EDS employs a static data loading model:
+
+- Choice list values are loaded once when the property editor initializes
+- No mechanism exists for dynamic re-querying based on user input
+- All possible values must be loaded upfront
+
+For datasets with thousands or millions of records, this approach is problematic:
+
+- Loading all values causes significant delays
+- Memory consumption impacts browser performance
+- Users must scroll through extensive lists to find values
+
+**Limitation 3: Configuration Complexity**
+
+Standard EDS requires:
+
+- Development of custom EDS services for each use case
+- Deployment and configuration of separate EDS applications
+- Coordination between EDS service and ICN configuration
+
+This creates significant overhead for organizations needing to support multiple document classes.
+
+### 3.2 Design Decision: Custom Plugin Approach
+
+Based on the limitations identified, the decision was made to develop a custom ICN plugin that addresses these constraints while providing additional capabilities.
+
+#### 3.2.1 Key Design Decisions
+
+**Decision 1: Configuration-Driven Architecture**
+
+All functional aspects are defined through JSON configuration rather than code:
+
+| Aspect | Configuration Approach |
+|--------|----------------------|
+| Document classes | Named entries in configuration file |
+| Entry Template mappings | Nested configuration per class |
+| Database queries | SQL strings in configuration |
+| Field mappings | JSON objects defining source-to-target relationships |
+| Property behavior | Configuration flags for ordering, visibility, etc. |
+
+**Benefits:**
+
+- Onboarding new document classes requires no code changes
+- Business analysts can understand and review configurations
+- Testing is simplified through configuration changes
+- Deployment of changes doesn't require plugin rebuild (configuration can be updated separately)
+
+**Decision 2: Dynamic Server-Side Search**
+
+Unlike static EDS, this solution supports real-time database queries:
+
+- User keystrokes trigger debounced search requests
+- Backend executes parameterized SQL with user input
+- Only matching results are returned (filtered at database level)
+- Results update dynamically as user types
+
+This approach scales to any dataset size because:
+
+- Only relevant records are retrieved
+- Database indexes optimize search performance
+- Network payload is minimized
+
+**Decision 3: JNDI-Based Database Connectivity**
+
+All database connectivity uses JNDI DataSources exclusively:
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Hardcoded credentials** | Simple to configure | Security risk, not auditable, environment-specific |
+| **Configuration file credentials** | Flexible | Still a security risk, requires encryption |
+| **JNDI DataSources** | Secure, centralized, auditable | Requires server configuration |
+
+The JNDI approach was selected because:
+
+- Credentials are managed by the application server security infrastructure
+- Connection pooling is handled automatically
+- Environment-specific settings don't require code changes
+- Enterprise security and compliance requirements are met
+
+**Decision 4: Entry Template Focus**
+
+The solution focuses specifically on Entry Template-based document creation:
+
+- Entry Templates define the document creation workflow
+- Property ordering and visibility can be configured per Entry Template
+- Default layouts ensure consistent EDS-like behavior
+- This covers the primary use case of business user document creation
+
+### 3.3 Requirements Summary
+
+Based on the analysis and design decisions, the following requirements were established:
+
+| ID | Requirement | Priority | Rationale |
+|----|-------------|----------|-----------|
+| REQ-01 | Support dynamic, real-time data retrieval based on user input | Must Have | Address static loading limitation |
+| REQ-02 | Work with Entry Templates using default layouts | Must Have | Address custom layout limitation |
+| REQ-03 | Configuration-driven with no code changes for new classes | Must Have | Reduce maintenance overhead |
+| REQ-04 | Support multiple document classes and Entry Templates | Must Have | Enterprise scalability |
+| REQ-05 | Auto-populate dependent fields on selection | Must Have | Core functionality |
+| REQ-06 | Secure database connectivity via JNDI DataSources | Must Have | Security compliance |
+| REQ-07 | Support property ordering, required fields, labels, visibility | Should Have | Enhanced user experience |
+| REQ-08 | High performance for large datasets | Should Have | Scalability |
+| REQ-09 | Client-side filtering option for small datasets | Nice to Have | Performance optimization |
+| REQ-10 | Configurable search patterns (contains, startsWith, etc.) | Nice to Have | Flexibility |
+
+---
+
+## 4. Design Specification
+
+### 4.1 High-Level Design
+
+The CNBPropertyEditorEDSPlugin follows a layered architecture that separates concerns between configuration, backend services, and frontend presentation.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           PRESENTATION LAYER                                 │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    IBM Content Navigator UI                          │   │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │   │
+│  │  │ Entry Template  │  │ Properties Pane │  │ Custom Property     │  │   │
+│  │  │ Selection       │  │ (Modified via   │  │ Editors             │  │   │
+│  │  │                 │  │ Aspect)         │  │ (InlineAutocomplete)│  │   │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                           INTEGRATION LAYER                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    Plugin JavaScript (Dojo AMD)                      │   │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │   │
+│  │  │ CNBPropertyEdi- │  │ InlineAutocom-  │  │ Configuration       │  │   │
+│  │  │ torEDSPlugin.js │  │ pleteEditor.js  │  │ Management          │  │   │
+│  │  │ (Aspect Inter-  │  │ (Custom Widget) │  │                     │  │   │
+│  │  │ ception)        │  │                 │  │                     │  │   │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                           SERVICE LAYER                                      │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │                    Plugin Backend (Java)                             │   │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │   │
+│  │  │ Response Filter │  │ Lookup Service  │  │ Config Service      │  │   │
+│  │  │ (Inject Custom  │  │ (Execute SQL    │  │ (Expose Config      │  │   │
+│  │  │ Editors)        │  │ Queries)        │  │ to Frontend)        │  │   │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                           DATA ACCESS LAYER                                  │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │   │
+│  │  │ Connection      │  │ LookupConfig    │  │ JNDI DataSource     │  │   │
+│  │  │ Manager         │  │ Manager         │  │ (App Server)        │  │   │
+│  │  │ (JNDI Pooling)  │  │ (JSON Parsing)  │  │                     │  │   │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                           EXTERNAL SYSTEMS                                   │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │   │
+│  │  │ SQL Server      │  │ Oracle          │  │ Other JDBC          │  │   │
+│  │  │ Database        │  │ Database        │  │ Databases           │  │   │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 4.2 Design Principles
+
+The solution adheres to the following design principles:
+
+#### 4.2.1 Separation of Concerns
+
+Each component has a single, well-defined responsibility:
+
+| Component | Responsibility |
+|-----------|---------------|
+| Response Filter | Intercept ICN responses, inject custom editors |
+| Lookup Service | Execute database queries, return results |
+| Config Service | Expose configuration to frontend |
+| Config Manager | Load and cache JSON configuration |
+| Connection Manager | Manage database connections |
+| Main JavaScript | Property ordering and manipulation via aspects |
+| Autocomplete Editor | User interaction and field population |
+
+#### 4.2.2 Configuration Over Code
+
+Behavioral changes are achieved through configuration modifications rather than code changes:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     lookupConfig.json                        │
+├─────────────────────────────────────────────────────────────┤
+│ {                                                            │
+│   "dataSources": { ... },     ← Database connections        │
+│   "documentClasses": {                                       │
+│     "ClassName": {            ← Document class config       │
+│       "desktops": [...],      ← Desktop restrictions        │
+│       "EntryTemplate": {      ← Entry Template settings     │
+│         "propertyDisplayOrder": [...],                       │
+│         "showProperties": [...],                             │
+│         "requiredProperties": [...],                         │
+│         ...                                                  │
+│       },                                                     │
+│       "properties": {         ← Property editor configs     │
+│         "PropertyName": {                                    │
+│           "queryConfig": {...},                              │
+│           "fieldMappings": {...},                            │
+│           ...                                                │
+│         }                                                    │
+│       }                                                      │
+│     }                                                        │
+│   }                                                          │
+│ }                                                            │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### 4.2.3 Security by Design
+
+Security considerations are built into the architecture:
+
+| Security Aspect | Implementation |
+|----------------|----------------|
+| Credentials | Managed via JNDI, never in configuration |
+| SQL Injection | Parameterized queries with PreparedStatement |
+| Data Exposure | Only documentClasses exposed to frontend (not dataSources) |
+| Access Control | Desktop-based restrictions per document class |
+
+#### 4.2.4 Performance Optimization
+
+Multiple strategies optimize performance:
+
+| Strategy | Implementation |
+|----------|----------------|
+| Connection Pooling | Connections cached in ConnectionManager |
+| Configuration Caching | LookupConfigManager caches parsed JSON |
+| Debounced Search | Frontend debounces keystrokes (default 300ms) |
+| Result Limiting | SQL queries include TOP/LIMIT clauses |
+| Client-Side Filtering | Optional preload mode for small datasets |
+
+### 4.3 Data Flow Design
+
+#### 4.3.1 Configuration Loading Flow
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   ICN       │     │   Plugin    │     │  LookupCon- │     │  lookupCon- │
+│   Startup   │────>│   Init      │────>│  figManager │────>│  fig.json   │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+                           │                   │
+                           │                   │ Parse JSON
+                           │                   │ Cache in memory
+                           │                   │
+                           ▼                   ▼
+                    ┌─────────────┐     ┌─────────────┐
+                    │  Frontend   │     │  Cached     │
+                    │  Request    │────>│  Config     │
+                    │  Config     │     │  (Ready)    │
+                    └─────────────┘     └─────────────┘
+```
+
+#### 4.3.2 Property Editor Injection Flow
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   User      │     │    ICN      │     │  Response   │     │  LookupCon- │
+│   Opens     │────>│   Request   │────>│   Filter    │────>│  figManager │
+│   Dialog    │     │  Properties │     │             │     │             │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+                                               │                   │
+                                               │   Check class     │
+                                               │   Check desktop   │
+                                               │   Get properties  │
+                                               │                   │
+                                               ▼                   │
+                                        ┌─────────────┐            │
+                                        │  Modify     │◄───────────┘
+                                        │  Response   │
+                                        │  - Add propertyEditor
+                                        │  - Embed lookupConfig
+                                        └─────────────┘
+                                               │
+                                               ▼
+                                        ┌─────────────┐
+                                        │  Return to  │
+                                        │  ICN/Client │
+                                        └─────────────┘
+```
+
+#### 4.3.3 Search and Selection Flow
+
+```
+┌─────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌────────┐
+│  User   │    │ Autocomplete│    │   Plugin    │    │ Connection  │    │Database│
+│  Types  │───>│   Editor    │───>│   Service   │───>│  Manager    │───>│        │
+└─────────┘    └─────────────┘    └─────────────┘    └─────────────┘    └────────┘
+                     │                   │                  │                │
+                     │ Debounce          │ Parse config     │ Get/Create     │
+                     │ Check minLength   │ Build SQL        │ Connection     │
+                     │                   │ Set params       │                │
+                     │                   │                  │                │
+                     │                   │                  │                │
+                     │◄──────────────────│◄─────────────────│◄───────────────│
+                     │   JSON Results    │   ResultSet      │   Query        │
+                     │                   │                  │   Execution    │
+                     ▼                   │                  │                │
+              ┌─────────────┐            │                  │                │
+              │  Populate   │            │                  │                │
+              │  Dropdown   │            │                  │                │
+              └─────────────┘            │                  │                │
+                     │                   │                  │                │
+                     │ User Selects      │                  │                │
+                     ▼                   │                  │                │
+              ┌─────────────┐            │                  │                │
+              │  Apply      │            │                  │                │
+              │  Field      │            │                  │                │
+              │  Mappings   │            │                  │                │
+              └─────────────┘            │                  │                │
+                     │                   │                  │                │
+                     │ Set Values        │                  │                │
+                     ▼                   │                  │                │
+              ┌─────────────┐            │                  │                │
+              │  Update     │            │                  │                │
+              │  All Target │            │                  │                │
+              │  Properties │            │                  │                │
+              └─────────────┘            │                  │                │
+```
+
+---
+
+## 5. Technology Stack
+
+### 5.1 Backend Technologies
+
+The backend is implemented using Java technologies that integrate with the IBM Content Navigator plugin framework.
+
+#### 5.1.1 Java Development
+
+| Technology | Version | Purpose |
+|------------|---------|---------|
+| **Java SE** | 1.6+ (1.8 recommended) | Core programming language |
+| **Servlet API** | 2.5+ (J2EE) | HTTP request/response handling |
+
+Java provides the foundation for:
+- Plugin service implementation
+- Response filter processing
+- Database connectivity
+- JSON parsing and generation
+
+#### 5.1.2 IBM Content Navigator API
+
+| Component | Purpose |
+|-----------|---------|
+| **Plugin** | Base class for plugin registration |
+| **PluginService** | Base class for custom services |
+| **PluginResponseFilter** | Base class for response interception |
+| **PluginServiceCallbacks** | Access to ICN runtime services |
+| **Request/Response** | HTTP communication |
+
+The ICN API provides extension points that this plugin leverages to integrate seamlessly with Content Navigator.
+
+#### 5.1.3 Database Connectivity
+
+| Technology | Purpose |
+|------------|---------|
+| **JDBC** | Standard database connectivity API |
+| **JNDI** | Lookup of server-managed DataSources |
+| **Connection Pooling** | Managed by application server |
+
+The plugin supports any JDBC-compliant database, with specific optimization for:
+- Microsoft SQL Server
+- Oracle Database
+- IBM DB2
+- MySQL/PostgreSQL
+
+#### 5.1.4 JSON Processing
+
+| Library | Purpose |
+|---------|---------|
+| **IBM JSON4J** | JSON parsing and serialization (included with ICN) |
+
+JSON4J is used for:
+- Parsing lookupConfig.json configuration
+- Serializing service responses
+- Handling AJAX request parameters
+
+### 5.2 Frontend Technologies
+
+The frontend leverages the Dojo Toolkit, which is bundled with IBM Content Navigator.
+
+#### 5.2.1 Dojo Toolkit
+
+| Component | Version | Purpose |
+|-----------|---------|---------|
+| **dojo/_base/declare** | ICN bundled | Class declaration |
+| **dojo/_base/lang** | ICN bundled | Language utilities (hitch, mixin) |
+| **dojo/aspect** | ICN bundled | AOP-style method interception |
+| **dojo/on** | ICN bundled | Event handling |
+| **dojo/dom-*** | ICN bundled | DOM manipulation |
+
+Dojo provides the foundation for:
+- AMD module loading
+- Widget class hierarchies
+- Event-driven programming
+- Aspect-oriented programming (for method interception)
+
+#### 5.2.2 ECM Widgets
+
+| Widget | Purpose |
+|--------|---------|
+| **ecm/widget/ValidationTextBox** | Base class for InlineAutocompleteEditor |
+| **ecm/widget/CommonPropertiesPane** | Target of aspect interception |
+| **ecm/model/Request** | AJAX communication with plugin services |
+
+The custom editor extends ICN's ValidationTextBox to ensure compatibility with:
+- Property validation
+- Form submission
+- Value change events
+
+#### 5.2.3 HTML5/CSS3
+
+| Technology | Purpose |
+|------------|---------|
+| **HTML5** | Widget templates |
+| **CSS3** | Styling, animations, flexbox layout |
+
+The dropdown table uses modern CSS for:
+- Sticky headers
+- Hover effects
+- Responsive sizing
+- Scrollbar styling
+
+### 5.3 Build Tools
+
+| Tool | Version | Purpose |
+|------|---------|---------|
+| **Apache Ant** | 1.9+ | Build automation |
+
+The Ant build script handles:
+- Java compilation
+- Resource copying (WebContent, config)
+- JAR packaging with manifest
+
+### 5.4 Runtime Environment
+
+#### 5.4.1 Server Requirements
+
+| Component | Specification |
+|-----------|---------------|
+| **IBM Content Navigator** | Version 3.0.x |
+| **Application Server** | IBM WebSphere Application Server |
+| **Java Runtime** | JRE 1.6+ (1.8 recommended) |
+
+#### 5.4.2 Database Requirements
+
+| Requirement | Specification |
+|-------------|---------------|
+| **JDBC Driver** | Appropriate driver for target database |
+| **JNDI DataSource** | Configured in WebSphere |
+| **Network Access** | ICN server must reach database |
+
+#### 5.4.3 Browser Requirements
+
+| Browser | Support Level |
+|---------|---------------|
+| **Chrome** | Full support (recommended) |
+| **Firefox** | Full support |
+| **Edge** | Full support |
+| **Internet Explorer 11** | Supported (per ICN requirements) |
+
+### 5.5 Dependencies
+
+The plugin requires the following JAR files in the lib directory:
+
+```
+lib/
+├── navigatorAPI.jar        # IBM Content Navigator Plugin API
+│                           # Provides: Plugin, PluginService, PluginResponseFilter
+│
+├── j2ee.jar                # Java EE APIs
+│                           # Provides: Servlet, JDBC, JNDI interfaces
+│
+└── mssql-jdbc-10.2.0.jre8.jar  # SQL Server JDBC Driver (development only)
+                                 # Production uses server-provided driver
+```
+
+**Note:** In production, JDBC drivers are typically provided by the application server and should not be included in the plugin JAR.
+
+---
+
+## 6. Architecture Overview
+
+### 6.1 Plugin Package Structure
+
+The plugin follows a standard IBM Content Navigator plugin structure:
+
+```
+CNBPropertyEditorEDSPlugin/
+├── src/
+│   └── com/
+│       └── cnb/
+│           └── eds/
+│               └── editor/
+│                   ├── CNBPropertyEditorEDSPlugin.java    # Main plugin class
+│                   ├── config/
+│                   │   ├── lookupConfig.json              # Configuration file
+│                   │   └── LookupConfigManager.java       # Config management
+│                   ├── connection/
+│                   │   └── ConnectionManager.java         # Database connections
+│                   ├── filters/
+│                   │   └── CNBCustomEditorResponseFilter.java  # Response filter
+│                   ├── service/
+│                   │   ├── CustomEditorGenericLookupService.java  # Lookup service
+│                   │   └── GetLookupConfigService.java    # Config API service
+│                   └── WebContent/
+│                       ├── CNBPropertyEditorEDSPlugin.js  # Main JavaScript
+│                       ├── CNBPropertyEditorEDSPlugin.css # Styles
+│                       └── cNBPropertyEditorEDSPluginDojo/
+│                           ├── ConfigurationPane.js       # Admin config UI
+│                           ├── InlineAutocompleteEditor.js # Custom editor
+│                           └── templates/
+│                               ├── ConfigurationPane.html
+│                               └── InlineAutocompleteEditor.html
+├── lib/
+│   ├── navigatorAPI.jar
+│   ├── j2ee.jar
+│   └── mssql-jdbc-10.2.0.jre8.jar
+├── META-INF/
+│   └── MANIFEST.MF
+├── build.xml                                               # Ant build script
+└── CNBPropertyEditorEDSPlugin.jar                         # Built plugin
+```
+
+### 6.2 Component Interaction Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              IBM Content Navigator                               │
+│  ┌─────────────────────────────────────────────────────────────────────────┐   │
+│  │                           Browser (Client)                               │   │
+│  │  ┌─────────────┐   ┌─────────────┐   ┌─────────────────────────────┐   │   │
+│  │  │ Document    │   │ Properties  │   │ CNBPropertyEditorEDSPlugin  │   │   │
+│  │  │ Creation    │──>│ Pane        │──>│ .js                         │   │   │
+│  │  │ Dialog      │   │             │   │ - Load config               │   │   │
+│  │  └─────────────┘   └─────────────┘   │ - Aspect interception       │   │   │
+│  │        │                 │           │ - Property manipulation     │   │   │
+│  │        │                 │           └─────────────────────────────┘   │   │
+│  │        │                 │                       │                      │   │
+│  │        │                 │                       ▼                      │   │
+│  │        │                 │           ┌─────────────────────────────┐   │   │
+│  │        │                 │           │ InlineAutocompleteEditor.js │   │   │
+│  │        │                 │           │ - Text input handling       │   │   │
+│  │        │                 │           │ - Dropdown management       │   │   │
+│  │        │                 │           │ - Field mapping             │   │   │
+│  │        │                 │           └─────────────────────────────┘   │   │
+│  │        │                 │                       │                      │   │
+│  └────────│─────────────────│───────────────────────│──────────────────────┘   │
+│           │                 │                       │                          │
+│           │ AJAX            │ AJAX                  │ AJAX                     │
+│           │                 │                       │                          │
+│  ┌────────▼─────────────────▼───────────────────────▼──────────────────────┐   │
+│  │                           Server (ICN/WebSphere)                         │   │
+│  │  ┌─────────────────────────────────────────────────────────────────┐   │   │
+│  │  │                    CNBPropertyEditorEDSPlugin.java               │   │   │
+│  │  │  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────┐   │   │   │
+│  │  │  │ getResponse      │  │ getServices()    │  │ Resources    │   │   │   │
+│  │  │  │ Filters()        │  │                  │  │ (JS/CSS)     │   │   │   │
+│  │  │  └────────┬─────────┘  └────────┬─────────┘  └──────────────┘   │   │   │
+│  │  │           │                     │                                │   │   │
+│  │  │           ▼                     ▼                                │   │   │
+│  │  │  ┌──────────────────┐  ┌──────────────────┐                     │   │   │
+│  │  │  │ CNBCustomEditor  │  │ CustomEditor     │                     │   │   │
+│  │  │  │ ResponseFilter   │  │ GenericLookup    │                     │   │   │
+│  │  │  │                  │  │ Service          │                     │   │   │
+│  │  │  └────────┬─────────┘  └────────┬─────────┘                     │   │   │
+│  │  │           │                     │                                │   │   │
+│  │  │           ▼                     ▼                                │   │   │
+│  │  │  ┌────────────────────────────────────────┐                     │   │   │
+│  │  │  │         LookupConfigManager            │                     │   │   │
+│  │  │  │  - Load configuration                  │                     │   │   │
+│  │  │  │  - Cache document class configs        │                     │   │   │
+│  │  │  │  - Validate desktop access             │                     │   │   │
+│  │  │  └────────────────────────────────────────┘                     │   │   │
+│  │  │                        │                                         │   │   │
+│  │  │                        ▼                                         │   │   │
+│  │  │  ┌────────────────────────────────────────┐                     │   │   │
+│  │  │  │         ConnectionManager              │                     │   │   │
+│  │  │  │  - JNDI DataSource lookup              │                     │   │   │
+│  │  │  │  - Connection pooling                  │                     │   │   │
+│  │  │  └────────────────────────────────────────┘                     │   │   │
+│  │  └─────────────────────────────────────────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────────────────────────┘   │
+│                                      │                                          │
+│                                      │ JDBC                                     │
+│                                      ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────────────┐   │
+│  │                         External Database                                │   │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────────┐  │   │
+│  │  │ Lookup Tables   │  │ Reference Data  │  │ Application Data        │  │   │
+│  │  │                 │  │                 │  │                         │  │   │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.3 Sequence Diagrams
+
+#### 6.3.1 Plugin Initialization Sequence
+
+```
+┌─────┐          ┌─────────┐          ┌───────────┐          ┌──────────┐
+│ ICN │          │ Plugin  │          │ ConfigMgr │          │ JSON File│
+└──┬──┘          └────┬────┘          └─────┬─────┘          └────┬─────┘
+   │                  │                     │                     │
+   │ Load Plugin      │                     │                     │
+   │─────────────────>│                     │                     │
+   │                  │                     │                     │
+   │                  │ getInstance()       │                     │
+   │                  │────────────────────>│                     │
+   │                  │                     │                     │
+   │                  │                     │ Load from classpath │
+   │                  │                     │────────────────────>│
+   │                  │                     │                     │
+   │                  │                     │ JSON content        │
+   │                  │                     │<────────────────────│
+   │                  │                     │                     │
+   │                  │                     │ Parse & Cache       │
+   │                  │                     │─────┐               │
+   │                  │                     │     │               │
+   │                  │                     │<────┘               │
+   │                  │                     │                     │
+   │                  │ Config ready        │                     │
+   │                  │<────────────────────│                     │
+   │                  │                     │                     │
+   │ Plugin loaded    │                     │                     │
+   │<─────────────────│                     │                     │
+   │                  │                     │                     │
+```
+
+#### 6.3.2 Document Creation Sequence
+
+```
+┌─────┐     ┌─────┐     ┌────────┐     ┌───────┐     ┌────────┐     ┌────────┐
+│User │     │ ICN │     │ Filter │     │ConfigM│     │  JS    │     │ Editor │
+└──┬──┘     └──┬──┘     └───┬────┘     └───┬───┘     └───┬────┘     └───┬────┘
+   │           │            │              │             │              │
+   │ Add Doc   │            │              │             │              │
+   │──────────>│            │              │             │              │
+   │           │            │              │             │              │
+   │           │ Get Props  │              │             │              │
+   │           │───────────>│              │             │              │
+   │           │            │              │             │              │
+   │           │            │ Has class?   │             │              │
+   │           │            │─────────────>│             │              │
+   │           │            │              │             │              │
+   │           │            │ Yes + config │             │              │
+   │           │            │<─────────────│             │              │
+   │           │            │              │             │              │
+   │           │            │ Desktop OK?  │             │              │
+   │           │            │─────────────>│             │              │
+   │           │            │              │             │              │
+   │           │            │ Yes          │             │              │
+   │           │            │<─────────────│             │              │
+   │           │            │              │             │              │
+   │           │            │ Inject editors             │              │
+   │           │            │─────────┐    │             │              │
+   │           │            │         │    │             │              │
+   │           │            │<────────┘    │             │              │
+   │           │            │              │             │              │
+   │           │ Modified   │              │             │              │
+   │           │<───────────│              │             │              │
+   │           │            │              │             │              │
+   │           │ Render     │              │             │              │
+   │           │────────────│──────────────│────────────>│              │
+   │           │            │              │             │              │
+   │           │            │              │             │ Aspect       │
+   │           │            │              │             │ intercept    │
+   │           │            │              │             │─────┐        │
+   │           │            │              │             │     │        │
+   │           │            │              │             │<────┘        │
+   │           │            │              │             │              │
+   │           │            │              │             │ Apply order/ │
+   │           │            │              │             │ visibility   │
+   │           │            │              │             │─────┐        │
+   │           │            │              │             │     │        │
+   │           │            │              │             │<────┘        │
+   │           │            │              │             │              │
+   │           │            │              │             │ Create       │
+   │           │            │              │             │ editors      │
+   │           │            │              │             │─────────────>│
+   │           │            │              │             │              │
+   │ Dialog    │            │              │             │              │
+   │<──────────│            │              │             │              │
+   │           │            │              │             │              │
+```
+
+---
+
+## 7. Component Details
+
+This section provides detailed documentation for each component in the plugin, including purpose, implementation details, and key methods.
+
+### 7.1 Backend Components
+
+#### 7.1.1 CNBPropertyEditorEDSPlugin.java
+
+**Purpose:** Main plugin class that registers the plugin with IBM Content Navigator and declares all plugin components.
+
+**Location:** `src/com/cnb/eds/editor/CNBPropertyEditorEDSPlugin.java`
+
+**Extends:** `com.ibm.ecm.extension.Plugin`
+
+**Responsibilities:**
+- Provide plugin identification (ID, name, version)
+- Register response filters
+- Register plugin services
+- Declare JavaScript and CSS resources
+- Declare Dojo module
+
+**Key Methods:**
+
+| Method | Return Type | Description |
+|--------|-------------|-------------|
+| `getId()` | String | Returns unique plugin identifier: `"CNBPropertyEditorEDSPlugin"` |
+| `getName(Locale)` | String | Returns display name: `"CNB Custom Property Editor EDS Plugin"` |
+| `getVersion()` | String | Returns version: `"1.0.0"` |
+| `getScript()` | String | Returns main JavaScript file: `"CNBPropertyEditorEDSPlugin.js"` |
+| `getDojoModule()` | String | Returns Dojo module name: `"cNBPropertyEditorEDSPluginDojo"` |
+| `getCSSFileName()` | String | Returns CSS file: `"CNBPropertyEditorEDSPlugin.css"` |
+| `getResponseFilters()` | PluginResponseFilter[] | Returns array with `CNBCustomEditorResponseFilter` |
+| `getServices()` | PluginService[] | Returns array with lookup and config services |
+
+**Registration Pattern:**
+
+```java
+public PluginResponseFilter[] getResponseFilters() {
+    if (pluginResponseFilters.length == 0) {
+        pluginResponseFilters = new PluginResponseFilter[] {
+            new com.cnb.eds.editor.filters.CNBCustomEditorResponseFilter()
+        };
+    }
+    return pluginResponseFilters;
+}
+
+public PluginService[] getServices() {
+    if (pluginServices.length == 0) {
+        pluginServices = new PluginService[] {
+            new com.cnb.eds.editor.service.CustomEditorGenericLookupService(),
+            new com.cnb.eds.editor.service.GetLookupConfigService()
+        };
+    }
+    return pluginServices;
+}
+```
+
+---
+
+#### 7.1.2 CNBCustomEditorResponseFilter.java
+
+**Purpose:** Intercepts ICN service responses to inject custom property editors for configured document classes and properties.
+
+**Location:** `src/com/cnb/eds/editor/filters/CNBCustomEditorResponseFilter.java`
+
+**Extends:** `com.ibm.ecm.extension.PluginResponseFilter`
+
+**Responsibilities:**
+- Intercept property definition responses
+- Check if document class is configured
+- Validate desktop access permissions
+- Inject custom editor references into property definitions
+- Embed lookup configuration for frontend use
+
+**Filtered Services:**
+
+| Service Path | When Triggered |
+|--------------|----------------|
+| `/p8/openContentClass` | Default property definitions |
+| `/p8/openItem` | Edit existing documents |
+| `/p8/getEntryTemplate` | Entry templates with layouts |
+| `/p8/getContentClass` | Alternative class retrieval |
+
+**Key Methods:**
+
+| Method | Description |
+|--------|-------------|
+| `getFilteredServices()` | Returns array of service paths to intercept |
+| `filter(...)` | Main filtering logic - inspects and modifies response |
+
+**Filter Logic Flow:**
+
+```java
+public void filter(String serverType, PluginServiceCallbacks callbacks, 
+                  HttpServletRequest request, JSONObject jsonResponse) {
+    
+    // 1. Extract parameters
+    String templateName = request.getParameter("template_name");
+    String desktopId = request.getParameter("desktop");
+    
+    // 2. Get configuration manager
+    LookupConfigManager configManager = LookupConfigManager.getInstance();
+    
+    // 3. Check if document class is configured
+    if (!configManager.hasDocumentClass(templateName)) {
+        return; // No modification needed
+    }
+    
+    // 4. Check desktop access
+    if (!configManager.isDesktopAllowed(templateName, desktopId)) {
+        return; // Desktop not allowed
+    }
+    
+    // 5. Get property definitions from response
+    JSONArray properties = (JSONArray) jsonResponse.get("criterias");
+    
+    // 6. Get configured properties for this class
+    Map<String, JSONObject> classProperties = 
+        configManager.getDocumentClassProperties(templateName);
+    
+    // 7. For each property, inject custom editor if configured
+    for (int i = 0; i < properties.size(); i++) {
+        JSONObject propDef = (JSONObject) properties.get(i);
+        String propertyName = (String) propDef.get("name");
+        
+        if (classProperties.containsKey(propertyName)) {
+            JSONObject propertyConfig = classProperties.get(propertyName);
+            
+            // Inject custom editor
+            propDef.put("propertyEditor", 
+                "cNBPropertyEditorEDSPluginDojo/InlineAutocompleteEditor");
+            
+            // Embed configuration for frontend
+            propDef.put("lookupConfig", propertyConfig);
+        }
+    }
+}
+```
+
+**Important Notes:**
+- The filter only modifies responses for configured document classes
+- Desktop-based access control prevents unauthorized configuration activation
+- Configuration is embedded in the property definition, making it available to the frontend editor
+
+---
+
+#### 7.1.3 CustomEditorGenericLookupService.java
+
+**Purpose:** Backend service that executes dynamic SQL queries based on user input and returns results for the autocomplete dropdown.
+
+**Location:** `src/com/cnb/eds/editor/service/CustomEditorGenericLookupService.java`
+
+**Extends:** `com.ibm.ecm.extension.PluginService`
+
+**Service ID:** `"CustomEditorGenericLookupService"`
+
+**Responsibilities:**
+- Parse lookup configuration from request
+- Build and execute parameterized SQL queries
+- Apply search patterns (contains, startsWith, etc.)
+- Return JSON results to frontend
+
+**Request Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `search` | No | User's search text |
+| `limit` | No | Maximum results (default: 50, max: 200) |
+| `lookupConfig` | Yes | JSON string with query configuration |
+| `loadAll` | No | If "true", load all results (for preload) |
+
+**Search Pattern Application:**
+
+| Pattern | SQL Transformation | Example |
+|---------|-------------------|---------|
+| `startsWith` | `searchValue + "%"` | `"ABC" → "ABC%"` |
+| `endsWith` | `"%" + searchValue` | `"ABC" → "%ABC"` |
+| `contains` | `"%" + searchValue + "%"` | `"ABC" → "%ABC%"` |
+| `exact` | `searchValue` | `"ABC" → "ABC"` |
+
+**SQL Processing:**
+
+```java
+// Replace {limit} placeholder
+String modifiedSql = sql.replace("{limit}", String.valueOf(limit));
+
+// Count parameter placeholders
+int paramCount = 0;
+for (int i = 0; i < modifiedSql.length(); i++) {
+    if (modifiedSql.charAt(i) == '?') {
+        paramCount++;
+    }
+}
+
+// Apply search pattern
+String searchValue = applySearchPattern(search, searchPattern);
+
+// Set all parameters
+PreparedStatement stmt = connection.prepareStatement(modifiedSql);
+for (int i = 1; i <= paramCount; i++) {
+    stmt.setString(i, searchValue);
+}
+```
+
+**Response Format:**
+
+```json
+{
+    "results": [
+        {"Column1": "Value1", "Column2": "Value2", ...},
+        {"Column1": "Value3", "Column2": "Value4", ...}
+    ],
+    "count": "2",
+    "searchTerm": "user input"
+}
+```
+
+---
+
+#### 7.1.4 GetLookupConfigService.java
+
+**Purpose:** Exposes the lookup configuration to the frontend JavaScript, allowing client-side access to document class and property settings.
+
+**Location:** `src/com/cnb/eds/editor/service/GetLookupConfigService.java`
+
+**Extends:** `com.ibm.ecm.extension.PluginService`
+
+**Service ID:** `"GetLookupConfigService"`
+
+**Responsibilities:**
+- Load configuration from classpath
+- Filter sensitive information (datasource credentials)
+- Return document class configurations to frontend
+
+**Security Considerations:**
+- Only `documentClasses` section is exposed to frontend
+- `dataSources` section (containing JNDI names) is NOT sent to client
+- This prevents credential exposure and limits information disclosure
+
+**Response Format:**
+
+```json
+{
+    "documentClasses": {
+        "VehicleRegistration": {
+            "desktops": ["Automotive", "Admin"],
+            "Vehicle Registration ET": {...},
+            "properties": {...}
+        }
+    }
+}
+```
+
+---
+
+#### 7.1.5 LookupConfigManager.java
+
+**Purpose:** Singleton class that loads, parses, and caches the JSON configuration file, providing accessor methods for other components.
+
+**Location:** `src/com/cnb/eds/editor/config/LookupConfigManager.java`
+
+**Pattern:** Singleton
+
+**Responsibilities:**
+- Load `lookupConfig.json` from classpath on first access
+- Cache parsed configuration in memory
+- Provide methods to query configuration
+- Support hot-reload for configuration updates
+
+**Key Methods:**
+
+| Method | Return Type | Description |
+|--------|-------------|-------------|
+| `getInstance()` | LookupConfigManager | Get singleton instance |
+| `getPropertyConfig(docClass, propName)` | JSONObject | Get config for specific property |
+| `hasCustomEditor(docClass, propName)` | boolean | Check if property has custom editor |
+| `getDocumentClassProperties(docClass)` | Map<String, JSONObject> | Get all properties for class |
+| `getDataSourceConfig(name)` | JSONObject | Get datasource configuration |
+| `isDesktopAllowed(docClass, desktopId)` | boolean | Check desktop access |
+| `reloadConfiguration()` | void | Reload config from file |
+
+**Configuration Loading:**
+
+```java
+private void loadConfiguration() {
+    InputStream is = getClass().getResourceAsStream(
+        "/com/cnb/eds/editor/config/lookupConfig.json");
+    
+    if (is == null) {
+        config = new JSONObject();
+        return;
+    }
+    
+    config = JSONObject.parse(is);
+    
+    // Log loaded document classes
+    JSONObject docClasses = (JSONObject) config.get("documentClasses");
+    System.out.println("Loaded " + docClasses.size() + " document class(es)");
+}
+```
+
+**Desktop Access Control:**
+
+```java
+public boolean isDesktopAllowed(String documentClass, String desktopId) {
+    JSONObject classConfig = getClassConfig(documentClass);
+    JSONArray desktops = (JSONArray) classConfig.get("desktops");
+    
+    // If no desktops configured, allow all
+    if (desktops == null || desktops.isEmpty()) {
+        return true;
+    }
+    
+    // Check if current desktop is in allowed list
+    for (int i = 0; i < desktops.size(); i++) {
+        if (desktops.get(i).equals(desktopId)) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+```
+
+---
+
+#### 7.1.6 ConnectionManager.java
+
+**Purpose:** Manages database connections for lookup queries, supporting JNDI DataSource lookup and connection pooling.
+
+**Location:** `src/com/cnb/eds/editor/connection/ConnectionManager.java`
+
+**Pattern:** Static utility class with connection caching
+
+**Responsibilities:**
+- Look up JNDI DataSources
+- Maintain connection pool (map of datasource name to connection)
+- Handle connection lifecycle
+
+**Key Methods:**
+
+| Method | Return Type | Description |
+|--------|-------------|-------------|
+| `getConnectionByDataSource(name)` | Connection | Get connection for named datasource |
+| `closeConnection(name)` | void | Close connection for datasource |
+| `closeAllConnections()` | void | Close all cached connections |
+
+**JNDI Lookup Process:**
+
+```java
+private static Connection getJNDIConnection(String dataSourceName, 
+                                            JSONObject config) throws Exception {
+    String jndiName = (String) config.get("jndiName");
+    
+    // Perform JNDI lookup
+    InitialContext ctx = new InitialContext();
+    DataSource ds = (DataSource) ctx.lookup(jndiName);
+    
+    // Get connection from pool
+    Connection conn = ds.getConnection();
+    
+    return conn;
+}
+```
+
+**Connection Caching:**
+
+```java
+public static Connection getConnectionByDataSource(String dataSourceName) 
+        throws Exception {
+    
+    // Check cache first
+    if (connectionPool.containsKey(dataSourceName)) {
+        Connection conn = connectionPool.get(dataSourceName);
+        if (conn != null && !conn.isClosed()) {
+            return conn; // Reuse existing connection
+        }
+        connectionPool.remove(dataSourceName); // Remove stale connection
+    }
+    
+    // Create new connection
+    Connection conn = getJNDIConnection(dataSourceName, config);
+    
+    // Cache for reuse
+    connectionPool.put(dataSourceName, conn);
+    
+    return conn;
+}
+```
+
+---
+
+### 7.2 Frontend Components
+
+#### 7.2.1 CNBPropertyEditorEDSPlugin.js
+
+**Purpose:** Main JavaScript file that initializes the plugin, loads configuration, and intercepts property rendering to apply Entry Template-specific settings.
+
+**Location:** `src/com/cnb/eds/editor/WebContent/CNBPropertyEditorEDSPlugin.js`
+
+**Module Type:** AMD (Asynchronous Module Definition)
+
+**Responsibilities:**
+- Load configuration from backend on startup
+- Intercept `CommonPropertiesPane.renderAttributes` using `dojo/aspect`
+- Apply property ordering based on configuration
+- Apply property visibility (show/hide)
+- Apply custom labels and descriptions
+- Apply required field settings
+- Apply default values
+- Apply read-only settings
+
+**Configuration Loading:**
+
+```javascript
+function loadConfiguration() {
+    Request.invokePluginService("CNBPropertyEditorEDSPlugin", 
+                                "GetLookupConfigService", {
+        requestParams: {},
+        requestCompleteCallback: function(response) {
+            editorConfig = response.documentClasses || {};
+            configLoaded = true;
+        },
+        requestFailedCallback: function(error) {
+            console.error("Failed to load configuration:", error);
+            editorConfig = {};
+            configLoaded = true;
+        }
+    });
+}
+```
+
+**Aspect Interception:**
+
+The plugin uses `dojo/aspect.around` to intercept the `renderAttributes` method of `CommonPropertiesPane`. This allows modification of attribute definitions before they are rendered.
+
+```javascript
+aspect.around(CommonPropertiesPane.prototype, "renderAttributes", 
+              function(original) {
+    return function(attributeDefinitions, item, reason, isReadOnly, params) {
+        
+        // Get Entry Template name
+        var entryTemplateName = params && params.entryTemplate 
+                                ? params.entryTemplate.name : null;
+        
+        // Get document class from first attribute
+        var documentClass = attributeDefinitions[0].contentClass.id;
+        
+        // Find Entry Template-specific configuration
+        var entryTemplateConfig = findEntryTemplateConfig(
+            documentClass, entryTemplateName);
+        
+        if (entryTemplateConfig) {
+            // Apply showProperties (visibility)
+            applyShowProperties(attributeDefinitions, entryTemplateConfig);
+            
+            // Apply custom labels
+            applyCustomLabels(attributeDefinitions, entryTemplateConfig);
+            
+            // Apply property ordering
+            attributeDefinitions = applyOrdering(
+                attributeDefinitions, entryTemplateConfig);
+            
+            // Apply required properties
+            applyRequiredProperties(attributeDefinitions, entryTemplateConfig);
+            
+            // Apply default values
+            applyDefaultValues(attributeDefinitions, entryTemplateConfig);
+            
+            // Apply read-only properties
+            applyReadOnlyProperties(attributeDefinitions, entryTemplateConfig);
+        }
+        
+        // Call original method with modified definitions
+        return original.call(this, attributeDefinitions, item, reason, 
+                            isReadOnly, params);
+    };
+});
+```
+
+**Property Ordering Implementation:**
+
+```javascript
+function applyOrdering(attributeDefinitions, config) {
+    var propertyDisplayOrder = config.propertyDisplayOrder;
+    if (!propertyDisplayOrder || propertyDisplayOrder.length === 0) {
+        return attributeDefinitions;
+    }
+    
+    var orderedAttributes = [];
+    var remainingAttributes = [].concat(attributeDefinitions);
+    
+    // Add properties in specified order
+    propertyDisplayOrder.forEach(function(propertyName) {
+        for (var i = 0; i < remainingAttributes.length; i++) {
+            if (remainingAttributes[i].id === propertyName) {
+                orderedAttributes.push(remainingAttributes[i]);
+                remainingAttributes.splice(i, 1);
+                break;
+            }
+        }
+    });
+    
+    // Add remaining properties at the end
+    remainingAttributes.forEach(function(attr) {
+        orderedAttributes.push(attr);
+    });
+    
+    return orderedAttributes;
+}
+```
+
+---
+
+#### 7.2.2 InlineAutocompleteEditor.js
+
+**Purpose:** Custom Dojo widget that provides an inline autocomplete editor with dropdown results table, supporting typeahead search and field population.
+
+**Location:** `src/com/cnb/eds/editor/WebContent/cNBPropertyEditorEDSPluginDojo/InlineAutocompleteEditor.js`
+
+**Module:** `cNBPropertyEditorEDSPluginDojo/InlineAutocompleteEditor`
+
+**Extends:** `ecm/widget/ValidationTextBox`, `dijit/_WidgetsInTemplateMixin`
+
+**Responsibilities:**
+- Render text input with dropdown button
+- Handle user input with debouncing
+- Execute searches (server-side or client-side filtering)
+- Display results in dropdown table
+- Handle selection and field population
+- Support various data types and multi-value properties
+
+**Operation Modes:**
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `"none"` | Server-side search on each keystroke | Large datasets, real-time data |
+| `"top500"` | Preload data, client-side filtering | Small/medium static datasets |
+| `"preselected"` | Preset value + top500 behavior | Fields with common default |
+
+**Widget Lifecycle:**
+
+```javascript
+constructor: function(params) {
+    // Extract lookupConfig from various possible locations
+    if (params.attributeDefinition && params.attributeDefinition.lookupConfig) {
+        this.lookupConfig = params.attributeDefinition.lookupConfig;
+    }
+},
+
+postCreate: function() {
+    this.inherited(arguments);
+    
+    // Load configuration options
+    this._loadConfiguration();
+    
+    // Attach event handlers
+    this.own(on(this.textbox, "keyup", lang.hitch(this, "_handleTextboxKeyup")));
+    this.own(on(this.textbox, "focus", lang.hitch(this, "_handleTextboxFocus")));
+    
+    // Populate table headers
+    this._populateTableHeaders();
+    
+    // Initialize based on preload mode
+    this._initializeEditor();
+},
+
+startup: function() {
+    this.inherited(arguments);
+    
+    // Apply tooltip after ICN initialization
+    if (this.tooltipMessage === "auto") {
+        this._generateAutoTooltip();
+    }
+}
+```
+
+**Search Handling:**
+
+```javascript
+_handleTextboxKeyup: function(evt) {
+    // Handle special keys
+    if (evt.keyCode === keys.ESCAPE) {
+        this._hideDropdown();
+        return;
+    }
+    
+    // Get search value
+    var searchValue = this.get("value") || "";
+    var minLength = this.lookupConfig.searchConfig.minLength || 2;
+    
+    // Check minimum length
+    if (searchValue.length < minLength) {
+        if (this._preloadedData) {
+            // Filter preloaded data
+            this._filterPreloadedData(searchValue);
+        } else {
+            this._hideDropdown();
+        }
+        return;
+    }
+    
+    // Execute search based on mode
+    if (this.preloadMode === "top500" || this.preloadMode === "preselected") {
+        // Client-side filtering
+        this._filterPreloadedData(searchValue);
+    } else {
+        // Server-side search with debounce
+        this._debounceSearch(searchValue);
+    }
+}
+```
+
+**Field Population:**
+
+```javascript
+_selectRecord: function(record) {
+    // Store selected record
+    this._selectedRecord = record;
+    
+    // Get primary key column
+    var resultColumns = this.lookupConfig.queryConfig.resultColumns;
+    var primaryKey = resultColumns[0];
+    var primaryValue = record[primaryKey];
+    
+    // Set this field's value
+    this.set("value", primaryValue);
+    
+    // Populate related fields
+    this._populateRelatedFields(record);
+    
+    // Clear field if configured
+    if (this.clearAfterSelection) {
+        this.set("value", "");
+    }
+    
+    // Hide dropdown
+    this._hideDropdown();
+},
+
+_populateRelatedFields: function(record) {
+    var propertiesPane = this._getPropertiesPane();
+    var fieldMappings = this.lookupConfig.fieldMappings || {};
+    
+    for (var sourceField in fieldMappings) {
+        var mappingConfig = fieldMappings[sourceField];
+        var targetField = mappingConfig.targetProperty;
+        var sourceValue = record[sourceField];
+        var dataType = mappingConfig.dataType || "xs:string";
+        var cardinality = mappingConfig.cardinality || "SINGLE";
+        
+        // Format value based on dataType
+        var formattedValue = this._formatValue(sourceValue, dataType, cardinality);
+        
+        // Set value on target property
+        this.setICNPropertyValue(propertiesPane, targetField, formattedValue);
+    }
+}
+```
+
+**Data Type Handling:**
+
+| Data Type | JavaScript Type | Conversion |
+|-----------|-----------------|------------|
+| `xs:string` | String | `String(value)` |
+| `xs:integer` | Number | `parseInt(value, 10)` |
+| `xs:double` | Number | `parseFloat(value)` |
+| `xs:boolean` | Boolean | `value === "true"` |
+| `xs:date` | Date | `new Date(value)` |
+| `xs:timestamp` | Date | `new Date(value)` |
+
+---
+
+#### 7.2.3 InlineAutocompleteEditor.html
+
+**Purpose:** HTML template for the InlineAutocompleteEditor widget, defining the DOM structure including text input, dropdown button, and results table.
+
+**Location:** `src/com/cnb/eds/editor/WebContent/cNBPropertyEditorEDSPluginDojo/templates/InlineAutocompleteEditor.html`
+
+**Template Structure:**
+
+```html
+<div class="inlineAutocompleteCombo">
+    <!-- Text input container -->
+    <div class="comboButtonContainer" data-dojo-attach-point="comboContainer">
+        <div data-dojo-attach-point="stateNode">
+            <!-- Validation icon -->
+            <div class="dijitValidationContainer">
+                <input class="dijitValidationIcon" value="✗" readonly/>
+            </div>
+            <!-- Text input -->
+            <div class="dijitInputContainer">
+                <input data-dojo-attach-point="textbox,focusNode" 
+                       autocomplete="off" placeholder=""/>
+            </div>
+        </div>
+        <!-- Dropdown arrow button -->
+        <div class="comboButtonArrow" 
+             data-dojo-attach-point="arrowButton"
+             data-dojo-attach-event="onClick: _toggleDropdown">
+            <span class="dijitArrowButtonInner"></span>
+        </div>
+    </div>
+    
+    <!-- Dropdown panel -->
+    <div class="inlineDropdown" 
+         data-dojo-attach-point="dropdownNode" 
+         style="display: none;">
+        <div class="dropdownTableContainer">
+            <table class="dropdownTable">
+                <thead>
+                    <tr data-dojo-attach-point="dropdownHeader">
+                        <!-- Headers populated dynamically -->
+                    </tr>
+                </thead>
+                <tbody data-dojo-attach-point="dropdownBody">
+                    <!-- Results populated dynamically -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+```
+
+**Attach Points:**
+
+| Attach Point | Element | Purpose |
+|--------------|---------|---------|
+| `comboContainer` | div | Main input container (for positioning) |
+| `stateNode` | div | Validation state container |
+| `textbox` | input | Text input element |
+| `focusNode` | input | Focus target (same as textbox) |
+| `arrowButton` | div | Dropdown toggle button |
+| `dropdownNode` | div | Dropdown container |
+| `dropdownHeader` | tr | Table header row |
+| `dropdownBody` | tbody | Table body for results |
+
+---
+
+#### 7.2.4 CNBPropertyEditorEDSPlugin.css
+
+**Purpose:** CSS styles for the plugin components, including the autocomplete editor and dropdown table.
+
+**Location:** `src/com/cnb/eds/editor/WebContent/CNBPropertyEditorEDSPlugin.css`
+
+**Key Style Classes:**
+
+| Class | Purpose |
+|-------|---------|
+| `.comboButtonContainer` | Flexbox container for input + button |
+| `.comboButtonArrow` | Dropdown arrow button styling |
+| `.inlineDropdown` | Fixed-position dropdown panel |
+| `.dropdownTable` | Results table styling |
+| `.dropdownTable thead` | Sticky header with blue background |
+| `.dropdownTable tbody tr:hover` | Row hover highlight |
+| `.loadingCell` | "Searching..." message styling |
+| `.noResultsCell` | "No results" message styling |
+| `.errorCell` | Error message styling |
+
+**Dropdown Positioning:**
+
+```css
+.inlineDropdown {
+    position: fixed;           /* Fixed positioning for scroll handling */
+    background-color: #ffffff;
+    border: 2px solid #4a90e2;
+    border-radius: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    z-index: 9999;            /* Above other elements */
+    max-width: 95vw;          /* Responsive width */
+}
+
+.inlineDropdown.position-below {
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+}
+
+.inlineDropdown.position-above {
+    border-bottom: none;
+    border-radius: 4px 4px 0 0;
+}
+```
+
+**Sticky Table Headers:**
+
+```css
+.dropdownTable thead {
+    position: sticky;
+    top: 0;
+    background-color: #4a90e2;
+    z-index: 10;
+}
+
+.dropdownTable thead th {
+    padding: 6px 8px;
+    font-weight: bold;
+    color: #ffffff;
+    white-space: nowrap;
+}
+```
+
+---
+
+## 8. Step-by-Step Execution Process
+
+This section provides a detailed walkthrough of the plugin's execution from startup through document creation.
+
+### 8.1 Phase 1: Plugin Initialization
+
+When IBM Content Navigator starts, the plugin is loaded and initialized:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Step 1: ICN Server Startup                                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  1.1 WebSphere loads ICN application                                        │
+│       ↓                                                                      │
+│  1.2 ICN scans plugins directory for JAR files                              │
+│       ↓                                                                      │
+│  1.3 ICN reads MANIFEST.MF for Plugin-Class attribute                       │
+│       → Plugin-Class: com.cnb.eds.editor.CNBPropertyEditorEDSPlugin         │
+│       ↓                                                                      │
+│  1.4 ICN instantiates plugin class                                          │
+│       → new CNBPropertyEditorEDSPlugin()                                    │
+│       ↓                                                                      │
+│  1.5 ICN calls plugin registration methods:                                 │
+│       → getId() returns "CNBPropertyEditorEDSPlugin"                        │
+│       → getResponseFilters() registers CNBCustomEditorResponseFilter        │
+│       → getServices() registers lookup and config services                  │
+│       → getScript() registers CNBPropertyEditorEDSPlugin.js                 │
+│       → getCSSFileName() registers CNBPropertyEditorEDSPlugin.css           │
+│       ↓                                                                      │
+│  1.6 LookupConfigManager singleton initializes:                             │
+│       → Loads /com/cnb/eds/editor/config/lookupConfig.json                  │
+│       → Parses JSON configuration                                           │
+│       → Caches in memory                                                    │
+│       ↓                                                                      │
+│  1.7 Plugin initialization complete                                         │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.2 Phase 2: User Login and Desktop Load
+
+When a user logs into ICN and accesses a desktop:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Step 2: User Session Initialization                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  2.1 User authenticates to ICN                                              │
+│       ↓                                                                      │
+│  2.2 ICN loads configured desktop                                           │
+│       ↓                                                                      │
+│  2.3 ICN loads plugin JavaScript resources:                                 │
+│       → Loads CNBPropertyEditorEDSPlugin.js                                 │
+│       → Loads CNBPropertyEditorEDSPlugin.css                                │
+│       ↓                                                                      │
+│  2.4 CNBPropertyEditorEDSPlugin.js executes:                                │
+│       → Calls loadConfiguration() function                                  │
+│       → Invokes GetLookupConfigService                                      │
+│       → Receives documentClasses configuration                              │
+│       → Stores in editorConfig variable                                     │
+│       ↓                                                                      │
+│  2.5 CNBPropertyEditorEDSPlugin.js sets up aspect:                          │
+│       → aspect.around(CommonPropertiesPane.prototype, "renderAttributes")   │
+│       → Interception ready for document creation                            │
+│       ↓                                                                      │
+│  2.6 Desktop ready for user interaction                                     │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.3 Phase 3: Document Creation - Add Document Dialog
+
+When user initiates document creation with an Entry Template:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Step 3: Add Document Dialog Opening                                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  3.1 User clicks "Add Document" or equivalent action                        │
+│       ↓                                                                      │
+│  3.2 User selects Entry Template (e.g., "Vehicle Registration ET")          │
+│       ↓                                                                      │
+│  3.3 ICN sends request to /p8/getEntryTemplate                              │
+│       → Parameters: template_name=VehicleRegistration, desktop=Automotive   │
+│       ↓                                                                      │
+│  3.4 Server processes request and prepares response                         │
+│       ↓                                                                      │
+│  3.5 CNBCustomEditorResponseFilter.filter() intercepts:                     │
+│       │                                                                      │
+│       ├── Extract template_name: "VehicleRegistration"                      │
+│       ├── Extract desktop: "Automotive"                                     │
+│       │                                                                      │
+│       ├── Check: Is "VehicleRegistration" in configuration?                 │
+│       │   → LookupConfigManager.hasDocumentClass("VehicleRegistration")     │
+│       │   → Returns TRUE                                                    │
+│       │                                                                      │
+│       ├── Check: Is "Automotive" desktop allowed?                           │
+│       │   → LookupConfigManager.isDesktopAllowed(                           │
+│       │       "VehicleRegistration", "Automotive")                          │
+│       │   → Configuration: "desktops": ["Automotive", "Admin"]              │
+│       │   → Returns TRUE                                                    │
+│       │                                                                      │
+│       ├── Get configured properties:                                        │
+│       │   → LookupConfigManager.getDocumentClassProperties(                 │
+│       │       "VehicleRegistration")                                        │
+│       │   → Returns: {RecordLookup: {...}, VehicleType: {...}}              │
+│       │                                                                      │
+│       ├── Process each property in response:                                │
+│       │   │                                                                  │
+│       │   ├── Property "RecordLookup":                                      │
+│       │   │   → Is configured? YES                                          │
+│       │   │   → Set propertyEditor = "cNBPropertyEditorEDSPluginDojo/       │
+│       │   │                           InlineAutocompleteEditor"             │
+│       │   │   → Embed lookupConfig in property definition                   │
+│       │   │                                                                  │
+│       │   ├── Property "VIN":                                               │
+│       │   │   → Is configured? NO                                           │
+│       │   │   → No modification                                             │
+│       │   │                                                                  │
+│       │   ├── Property "VehicleType":                                       │
+│       │   │   → Is configured? YES                                          │
+│       │   │   → Set propertyEditor, embed lookupConfig                      │
+│       │   │                                                                  │
+│       │   └── (continue for all properties...)                              │
+│       │                                                                      │
+│       └── Return modified response to ICN                                   │
+│       ↓                                                                      │
+│  3.6 ICN sends response to browser                                          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.4 Phase 4: Property Rendering
+
+When ICN renders the properties pane:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Step 4: Property Rendering with Aspect Interception                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  4.1 ICN calls CommonPropertiesPane.renderAttributes()                      │
+│       ↓                                                                      │
+│  4.2 Aspect interception activates (from CNBPropertyEditorEDSPlugin.js):    │
+│       │                                                                      │
+│       ├── Receive attributeDefinitions array                                │
+│       ├── Receive params with entryTemplate reference                       │
+│       │                                                                      │
+│       ├── Get Entry Template name:                                          │
+│       │   → params.entryTemplate.name = "Vehicle Registration ET"           │
+│       │                                                                      │
+│       ├── Get document class:                                               │
+│       │   → attributeDefinitions[0].contentClass.id = "VehicleRegistration" │
+│       │                                                                      │
+│       ├── Find Entry Template configuration:                                │
+│       │   → editorConfig["VehicleRegistration"]["Vehicle Registration ET"]  │
+│       │   → Found: {                                                        │
+│       │       propertyDisplayOrder: ["RecordLookup", "VIN", ...],           │
+│       │       showProperties: ["RecordLookup", "VIN", ...],                 │
+│       │       requiredProperties: ["RegistrationNumber", "VehicleType"]     │
+│       │     }                                                               │
+│       │                                                                      │
+│       ├── Apply showProperties:                                             │
+│       │   → Set hidden=true for properties not in list                      │
+│       │                                                                      │
+│       ├── Apply customLabelsAndDesc:                                        │
+│       │   → Update attr.name for label changes                              │
+│       │   → Update attr.description for descriptions                        │
+│       │                                                                      │
+│       ├── Apply propertyDisplayOrder:                                       │
+│       │   → Reorder attributeDefinitions array                              │
+│       │   → ["RecordLookup", "VIN", "RegistrationNumber", "VehicleType"]    │
+│       │                                                                      │
+│       ├── Apply requiredProperties:                                         │
+│       │   → Set attr.required=true for specified properties                 │
+│       │                                                                      │
+│       ├── Apply defaultValues (if any):                                     │
+│       │   → Set attr.defaultValue for specified properties                  │
+│       │                                                                      │
+│       └── Apply readOnlyProperties (if any):                                │
+│           → Set attr.readOnly=true for specified properties                 │
+│       ↓                                                                      │
+│  4.3 Call original renderAttributes() with modified definitions             │
+│       ↓                                                                      │
+│  4.4 ICN creates property editors based on propertyEditor attribute:        │
+│       │                                                                      │
+│       ├── "RecordLookup" has propertyEditor set:                            │
+│       │   → Create InlineAutocompleteEditor widget                          │
+│       │   → Pass lookupConfig in constructor params                         │
+│       │                                                                      │
+│       ├── "VIN" has no propertyEditor:                                      │
+│       │   → Create standard text editor                                     │
+│       │                                                                      │
+│       └── "VehicleType" has propertyEditor set:                             │
+│           → Create InlineAutocompleteEditor widget                          │
+│       ↓                                                                      │
+│  4.5 InlineAutocompleteEditor widgets initialize:                           │
+│       │                                                                      │
+│       ├── constructor():                                                    │
+│       │   → Extract lookupConfig from params                                │
+│       │                                                                      │
+│       ├── postCreate():                                                     │
+│       │   → Load configuration (preloadMode, allowClear, etc.)              │
+│       │   → Attach event handlers (keyup, focus, click)                     │
+│       │   → Populate table headers from displayColumns                      │
+│       │   → Initialize based on preloadMode                                 │
+│       │                                                                      │
+│       └── startup():                                                        │
+│           → Apply tooltips                                                  │
+│       ↓                                                                      │
+│  4.6 Properties pane rendered and ready for user input                      │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.5 Phase 5: User Interaction - Search and Selection
+
+When user interacts with a lookup field:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Step 5: Search Execution                                                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  5.1 User focuses on "RecordLookup" field                                   │
+│       ↓                                                                      │
+│  5.2 _handleTextboxFocus() executes:                                        │
+│       → If preloadMode="top500" and data loaded: show dropdown              │
+│       → Otherwise: wait for typing                                          │
+│       ↓                                                                      │
+│  5.3 User types "ABC" in the field                                          │
+│       ↓                                                                      │
+│  5.4 _handleTextboxKeyup() executes for each keystroke:                     │
+│       │                                                                      │
+│       ├── "A" typed:                                                        │
+│       │   → searchValue = "A"                                               │
+│       │   → minLength = 2                                                   │
+│       │   → Length check: 1 < 2, skip search                                │
+│       │                                                                      │
+│       ├── "B" typed:                                                        │
+│       │   → searchValue = "AB"                                              │
+│       │   → Length check: 2 >= 2, proceed                                   │
+│       │   → Debounce timer started (300ms)                                  │
+│       │                                                                      │
+│       └── "C" typed:                                                        │
+│           → searchValue = "ABC"                                             │
+│           → Previous timer cancelled                                        │
+│           → New debounce timer started (300ms)                              │
+│       ↓                                                                      │
+│  5.5 Debounce timer expires (no more typing for 300ms)                      │
+│       ↓                                                                      │
+│  5.6 _performSearch("ABC") executes:                                        │
+│       │                                                                      │
+│       ├── Show loading indicator in dropdown                                │
+│       │                                                                      │
+│       ├── Call Request.invokePluginService():                               │
+│       │   → Plugin: "CNBPropertyEditorEDSPlugin"                            │
+│       │   → Service: "CustomEditorGenericLookupService"                     │
+│       │   → Parameters:                                                     │
+│       │       search: "ABC"                                                 │
+│       │       limit: 1000                                                   │
+│       │       lookupConfig: (JSON string of configuration)                  │
+│       │                                                                      │
+│       └── Wait for response...                                              │
+│       ↓                                                                      │
+│  5.7 Server-side processing:                                                │
+│       │                                                                      │
+│       ├── CustomEditorGenericLookupService.execute():                       │
+│       │   │                                                                  │
+│       │   ├── Parse parameters                                              │
+│       │   │   → search = "ABC"                                              │
+│       │   │   → limit = 1000                                                │
+│       │   │   → lookupConfig = (parsed JSON)                                │
+│       │   │                                                                  │
+│       │   ├── Extract query configuration:                                  │
+│       │   │   → sql = "SELECT TOP {limit} VIN, RegistrationNumber...        │
+│       │   │           WHERE VIN LIKE ? OR RegistrationNumber LIKE ?"        │
+│       │   │   → dataSource = "RAMDB"                                        │
+│       │   │   → searchPattern = "contains"                                  │
+│       │   │                                                                  │
+│       │   ├── Get database connection:                                      │
+│       │   │   → ConnectionManager.getConnectionByDataSource("RAMDB")        │
+│       │   │   → JNDI lookup: "jdbc/RAMDB"                                   │
+│       │   │   → Return Connection                                           │
+│       │   │                                                                  │
+│       │   ├── Build SQL:                                                    │
+│       │   │   → Replace {limit}: "SELECT TOP 1000..."                       │
+│       │   │   → Apply pattern: "ABC" → "%ABC%"                              │
+│       │   │   → Create PreparedStatement                                    │
+│       │   │   → Set parameter 1: "%ABC%"                                    │
+│       │   │   → Set parameter 2: "%ABC%"                                    │
+│       │   │                                                                  │
+│       │   ├── Execute query:                                                │
+│       │   │   → ResultSet returned                                          │
+│       │   │   → Iterate rows, create JSON objects                           │
+│       │   │                                                                  │
+│       │   └── Return JSON response:                                         │
+│       │       {                                                              │
+│       │         "results": [                                                 │
+│       │           {"VIN":"ABC123","RegistrationNumber":"REG001",...},       │
+│       │           {"VIN":"XYZABC","RegistrationNumber":"REG002",...}        │
+│       │         ],                                                           │
+│       │         "count": "2",                                                │
+│       │         "searchTerm": "ABC"                                          │
+│       │       }                                                              │
+│       │                                                                      │
+│       └── Response sent to browser                                          │
+│       ↓                                                                      │
+│  5.8 _handleSearchResults() processes response:                             │
+│       │                                                                      │
+│       ├── Extract results array                                             │
+│       │                                                                      │
+│       ├── If empty: _showNoResults()                                        │
+│       │                                                                      │
+│       └── If results: _populateDropdown(results)                            │
+│           → Clear dropdownBody                                              │
+│           → For each result:                                                │
+│               → Create table row                                            │
+│               → Create cells for each resultColumn                          │
+│               → Attach click handler                                        │
+│       ↓                                                                      │
+│  5.9 Dropdown displayed with search results                                 │
+│                                                                              │
+│  ┌───────────────────────────────────────┐                                  │
+│  │ VIN        │ Registration │ Owner     │                                  │
+│  ├───────────────────────────────────────┤                                  │
+│  │ ABC123     │ REG001       │ John Doe  │  ← User clicks this row          │
+│  │ XYZABC     │ REG002       │ Jane Doe  │                                  │
+│  └───────────────────────────────────────┘                                  │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.6 Phase 6: Field Population
+
+When user selects a row from the dropdown:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Step 6: Selection and Field Population                                       │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  6.1 User clicks on row: {"VIN":"ABC123", "RegistrationNumber":"REG001",    │
+│                           "OwnerName":"John Doe", ...}                       │
+│       ↓                                                                      │
+│  6.2 Row click handler triggers _selectRecord(record):                      │
+│       │                                                                      │
+│       ├── Store selected record:                                            │
+│       │   → this._selectedRecord = record                                   │
+│       │                                                                      │
+│       ├── Get primary key (first result column):                            │
+│       │   → primaryKey = "VIN"                                              │
+│       │   → primaryValue = "ABC123"                                         │
+│       │                                                                      │
+│       ├── Set this field's value:                                           │
+│       │   → this.set("value", "ABC123")                                     │
+│       │                                                                      │
+│       ├── Trigger onChange:                                                 │
+│       │   → this.onChange("ABC123")                                         │
+│       │                                                                      │
+│       └── Call _populateRelatedFields(record)                               │
+│       ↓                                                                      │
+│  6.3 _populateRelatedFields() executes:                                     │
+│       │                                                                      │
+│       ├── Get properties pane:                                              │
+│       │   → propertiesPane = this._getPropertiesPane()                      │
+│       │                                                                      │
+│       ├── Get field mappings from configuration:                            │
+│       │   → fieldMappings = {                                               │
+│       │       "VIN": {targetProperty: "VIN", dataType: "xs:string"},        │
+│       │       "RegistrationNumber": {targetProperty: "RegistrationNumber"}, │
+│       │       "OwnerName": {targetProperty: "OwnerName"}                    │
+│       │     }                                                               │
+│       │                                                                      │
+│       ├── Process "VIN" mapping:                                            │
+│       │   → sourceValue = record["VIN"] = "ABC123"                          │
+│       │   → targetProperty = "VIN"                                          │
+│       │   → dataType = "xs:string"                                          │
+│       │   → formattedValue = String("ABC123") = "ABC123"                    │
+│       │   → setICNPropertyValue(pane, "VIN", "ABC123", "SINGLE")            │
+│       │                                                                      │
+│       ├── Process "RegistrationNumber" mapping:                             │
+│       │   → sourceValue = "REG001"                                          │
+│       │   → setICNPropertyValue(pane, "RegistrationNumber", "REG001")       │
+│       │                                                                      │
+│       └── Process "OwnerName" mapping:                                      │
+│           → sourceValue = "John Doe"                                        │
+│           → setICNPropertyValue(pane, "OwnerName", "John Doe")              │
+│       ↓                                                                      │
+│  6.4 setICNPropertyValue() for each target field:                           │
+│       │                                                                      │
+│       ├── Find field in propertiesPane._propertyEditors._fields             │
+│       │                                                                      │
+│       ├── Set value based on cardinality:                                   │
+│       │   → SINGLE: field.set("value", value)                               │
+│       │   → LIST: multiValuePane.setDataValues(valueArray, ...)             │
+│       │                                                                      │
+│       ├── Set displayedValue:                                               │
+│       │   → field.set("displayedValue", value)                              │
+│       │                                                                      │
+│       ├── Mark field as changed:                                            │
+│       │   → field._hasBeenBlurred = true                                    │
+│       │                                                                      │
+│       └── Trigger onChange:                                                 │
+│           → field.onChange(value)                                           │
+│       ↓                                                                      │
+│  6.5 Check clearAfterSelection:                                             │
+│       → If true: this.set("value", "") (clear lookup field)                 │
+│       ↓                                                                      │
+│  6.6 Hide dropdown:                                                         │
+│       → this._hideDropdown()                                                │
+│       ↓                                                                      │
+│  6.7 Field population complete                                              │
+│                                                                              │
+│  Result: Form now shows:                                                    │
+│  ┌─────────────────────────────────────────────────────────┐                │
+│  │ Record Lookup:      [                      ] (cleared)  │                │
+│  │ VIN:                [ ABC123              ]             │                │
+│  │ Registration Number:[ REG001              ]             │                │
+│  │ Owner Name:         [ John Doe            ]             │                │
+│  │ Vehicle Type:       [                      ]            │                │
+│  └─────────────────────────────────────────────────────────┘                │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 8.7 Phase 7: Document Submission
+
+When user completes the form and saves:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ Step 7: Document Submission                                                  │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  7.1 User clicks "Add" or "Save" button                                     │
+│       ↓                                                                      │
+│  7.2 ICN validates required fields:                                         │
+│       → Check each property with required=true                              │
+│       → If validation fails: show error, stop                               │
+│       → If validation passes: continue                                      │
+│       ↓                                                                      │
+│  7.3 ICN collects property values:                                          │
+│       → For each property editor:                                           │
+│           → Call getValue() or getValueAsArray()                            │
+│           → Include in document metadata                                    │
+│       ↓                                                                      │
+│  7.4 ICN submits document to repository:                                    │
+│       → Create document with content                                        │
+│       → Apply metadata properties                                           │
+│       ↓                                                                      │
+│  7.5 Document created successfully                                          │
+│       → Dialog closes                                                       │
+│       → Browse view refreshes                                               │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 9. Configuration Guide
+
+### 9.1 Configuration File Overview
+
+The plugin's behavior is controlled by a single JSON configuration file located at:
+
+```
+src/com/cnb/eds/editor/config/lookupConfig.json
+```
+
+This file defines:
+- Database connections (DataSources)
+- Document class configurations
+- Entry Template-specific settings
+- Property editor configurations
+
+### 9.2 Configuration File Structure
+
+```json
+{
+  "dataSources": {
+    "<DataSourceName>": {
+      "type": "jndi",
+      "jndiName": "<JNDI Name>"
+    }
+  },
+  "documentClasses": {
+    "<DocumentClassName>": {
+      "desktops": ["<DesktopId1>", "<DesktopId2>"],
+      "<EntryTemplateName>": {
+        "propertyDisplayOrder": ["<Prop1>", "<Prop2>"],
+        "showProperties": ["<Prop1>", "<Prop2>"],
+        "customLabelsAndDesc": {
+          "labels": {"<PropName>": "<CustomLabel>"},
+          "desc": {"<PropName>": "<CustomDescription>"}
+        },
+        "requiredProperties": ["<Prop1>", "<Prop2>"],
+        "defaultValues": {"<PropName>": "<DefaultValue>"},
+        "readOnlyProperties": ["<Prop1>"]
+      },
+      "properties": {
+        "<PropertyName>": {
+          "displayName": "<Display Name>",
+          "editorType": "inlineAutocomplete",
+          "serviceName": "CustomEditorGenericLookupService",
+          "dataSource": "<DataSourceName>",
+          "preloadMode": "none|top500|preselected",
+          "allowClear": true,
+          "allowEdit": true,
+          "clearAfterSelection": false,
+          "tooltipMessage": "auto|<Custom Message>",
+          "hasDependentProperties": true,
+          "queryConfig": {
+            "sql": "<SQL Query>",
+            "resultColumns": ["<Col1>", "<Col2>"],
+            "filterColumns": ["<Col1>"],
+            "searchPattern": "contains|startsWith|endsWith|exact"
+          },
+          "displayColumns": {
+            "<ColumnName>": "<Display Header>"
+          },
+          "fieldMappings": {
+            "<SourceColumn>": {
+              "sourceAlias": "<SourceColumn>",
+              "targetProperty": "<ICNPropertyName>",
+              "dataType": "xs:string|xs:integer|xs:date|...",
+              "cardinality": "SINGLE|LIST"
+            }
+          },
+          "searchConfig": {
+            "minLength": 2,
+            "debounceDelay": 300,
+            "placeholder": "<Placeholder Text>",
+            "limit": 1000
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+### 9.3 DataSource Configuration
+
+DataSources define database connections used by lookup properties.
+
+#### 9.3.1 JNDI DataSource (Recommended)
+
+```json
+"dataSources": {
+  "RAMDB": {
+    "type": "jndi",
+    "jndiName": "jdbc/RAMDB"
+  }
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `type` | Yes | Must be `"jndi"` |
+| `jndiName` | Yes | JNDI name as configured in WebSphere |
+
+**Prerequisites:**
+- DataSource must be configured in WebSphere Admin Console
+- JNDI name must match exactly (case-sensitive)
+- Connection pool should be tested successfully
+- DataSource scope must include ICN application
+
+### 9.4 Document Class Configuration
+
+Document class configuration defines which classes have custom editors and how they behave.
+
+#### 9.4.1 Basic Structure
+
+```json
+"documentClasses": {
+  "VehicleRegistration": {
+    "desktops": ["Automotive", "Admin"],
+    "Vehicle Registration ET": {
+      // Entry Template settings
+    },
+    "properties": {
+      // Property configurations
+    }
+  }
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `desktops` | No | Array of desktop IDs. If omitted, applies to all desktops. |
+| `<EntryTemplateName>` | No | Entry Template-specific settings block |
+| `properties` | Yes | Property editor configurations |
+
+#### 9.4.2 Desktop Restrictions
+
+The `desktops` array controls which ICN desktops can use this configuration:
+
+```json
+"desktops": ["Finance", "Admin"]
+```
+
+- If a user accesses document creation from a desktop NOT in this list, the custom editors are not applied
+- If `desktops` is omitted or empty, the configuration applies to ALL desktops
+- Desktop IDs must match exactly (case-sensitive)
+
+### 9.5 Entry Template Configuration
+
+Entry Template configuration allows different settings for each Entry Template within a document class.
+
+```json
+"Vehicle Registration ET": {
+  "propertyDisplayOrder": ["RecordLookup", "VIN", "RegistrationNumber", "VehicleType"],
+  "showProperties": ["RecordLookup", "VIN", "RegistrationNumber", "VehicleType", "OwnerName"],
+  "customLabelsAndDesc": {
+    "labels": {
+      "RegistrationNumber": "Vehicle Registration Number",
+      "OwnerName": "Registered Owner"
+    },
+    "desc": {
+      "RegistrationNumber": "Enter the official registration number from the vehicle title",
+      "OwnerName": "Full legal name of the vehicle owner"
+    }
+  },
+  "requiredProperties": ["RegistrationNumber", "VehicleType"],
+  "defaultValues": {
+    "VehicleType": "Car"
+  },
+  "readOnlyProperties": ["VIN"]
+}
+```
+
+#### 9.5.1 Property Display Order
+
+```json
+"propertyDisplayOrder": ["RecordLookup", "VIN", "RegistrationNumber", "VehicleType"]
+```
+
+Controls the order properties appear in the form:
+- Properties listed first appear at the top
+- Properties not in the list appear at the bottom in their default order
+- Must use property symbolic names (not display names)
+
+#### 9.5.2 Show Properties (Visibility)
+
+```json
+"showProperties": ["RecordLookup", "VIN", "RegistrationNumber", "VehicleType", "OwnerName"]
+```
+
+Controls which properties are visible:
+- Only listed properties are shown
+- Unlisted properties are hidden (`hidden=true`)
+- Useful for simplifying forms by hiding unnecessary properties
+
+#### 9.5.3 Custom Labels and Descriptions
+
+```json
+"customLabelsAndDesc": {
+  "labels": {
+    "RegistrationNumber": "Vehicle Registration Number"
+  },
+  "desc": {
+    "RegistrationNumber": "Enter the official registration number from the vehicle title"
+  }
+}
+```
+
+Customizes property presentation:
+- `labels`: Changes the property label displayed to users
+- `desc`: Adds descriptive text/tooltip for the property
+
+#### 9.5.4 Required Properties
+
+```json
+"requiredProperties": ["RegistrationNumber", "VehicleType"]
+```
+
+Makes specified properties mandatory:
+- Listed properties must have values before submission
+- Validation prevents saving without required values
+- Overrides any default required settings from FileNet
+
+#### 9.5.5 Default Values
+
+```json
+"defaultValues": {
+  "VehicleType": "Car",
+  "Status": "Active"
+}
+```
+
+Sets initial values for properties:
+- Values are set when the form loads
+- Users can change default values
+- Useful for common or expected values
+
+#### 9.5.6 Read-Only Properties
+
+```json
+"readOnlyProperties": ["VIN", "CreatedDate"]
+```
+
+Makes properties non-editable:
+- Listed properties cannot be modified by users
+- Useful for system-populated or sensitive fields
+- Values can still be set programmatically (via lookup population)
+
+### 9.6 Property Editor Configuration
+
+Property configurations define which properties have custom editors and how they behave.
+
+#### 9.6.1 Complete Property Configuration
+
+```json
+"RecordLookup": {
+  "displayName": "Record Lookup",
+  "editorType": "inlineAutocomplete",
+  "serviceName": "CustomEditorGenericLookupService",
+  "dataSource": "RAMDB",
+  "preloadMode": "none",
+  "allowClear": true,
+  "allowEdit": true,
+  "clearAfterSelection": true,
+  "tooltipMessage": "auto",
+  "hasDependentProperties": true,
+  "queryConfig": {
+    "sql": "SELECT TOP {limit} VIN, RegistrationNumber, OwnerName FROM VehicleInfo WHERE VIN LIKE ? OR RegistrationNumber LIKE ? ORDER BY RegistrationNumber",
+    "resultColumns": ["VIN", "RegistrationNumber", "OwnerName"],
+    "filterColumns": ["VIN", "RegistrationNumber"],
+    "searchPattern": "contains"
+  },
+  "displayColumns": {
+    "VIN": "VIN",
+    "RegistrationNumber": "Registration Number",
+    "OwnerName": "Owner Name"
+  },
+  "fieldMappings": {
+    "VIN": {
+      "sourceAlias": "VIN",
+      "targetProperty": "VIN",
+      "dataType": "xs:string",
+      "cardinality": "SINGLE"
+    },
+    "RegistrationNumber": {
+      "sourceAlias": "RegistrationNumber",
+      "targetProperty": "RegistrationNumber",
+      "dataType": "xs:string",
+      "cardinality": "SINGLE"
+    },
+    "OwnerName": {
+      "sourceAlias": "OwnerName",
+      "targetProperty": "OwnerName",
+      "dataType": "xs:string",
+      "cardinality": "SINGLE"
+    }
+  },
+  "searchConfig": {
+    "minLength": 2,
+    "debounceDelay": 300,
+    "placeholder": "Type VIN or Registration Number...",
+    "limit": 1000
+  }
+}
+```
+
+#### 9.6.2 Basic Settings
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `displayName` | No | - | Display name for the property |
+| `editorType` | Yes | - | Must be `"inlineAutocomplete"` |
+| `serviceName` | No | `"CustomEditorGenericLookupService"` | Backend service name |
+| `dataSource` | Yes | - | DataSource name from `dataSources` section |
+
+#### 9.6.3 Behavior Settings
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `preloadMode` | No | `"none"` | Data loading strategy |
+| `allowClear` | No | `true` | Allow user to clear selection |
+| `allowEdit` | No | `true` | Allow user to type/edit value |
+| `clearAfterSelection` | No | `false` | Clear field after populating dependents |
+| `tooltipMessage` | No | - | Tooltip text or `"auto"` |
+| `hasDependentProperties` | No | `false` | Indicates dependent field population |
+
+**Preload Modes:**
+
+| Mode | Behavior | Best For |
+|------|----------|----------|
+| `"none"` | Search server on each keystroke | Large datasets, real-time data |
+| `"top500"` | Preload data, filter client-side | Small/medium static datasets |
+| `"preselected"` | Preset value + top500 behavior | Fields with common defaults |
+
+#### 9.6.4 Query Configuration
+
+```json
+"queryConfig": {
+  "sql": "SELECT TOP {limit} VIN, RegistrationNumber, OwnerName FROM VehicleInfo WHERE VIN LIKE ? OR RegistrationNumber LIKE ? ORDER BY RegistrationNumber",
+  "resultColumns": ["VIN", "RegistrationNumber", "OwnerName"],
+  "filterColumns": ["VIN", "RegistrationNumber"],
+  "searchPattern": "contains"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `sql` | Yes | SQL query with `{limit}` and `?` placeholders |
+| `resultColumns` | Yes | Array of column names in result order |
+| `filterColumns` | Yes | Columns used for search filtering |
+| `searchPattern` | No | Pattern type: `"contains"`, `"startsWith"`, `"endsWith"`, `"exact"` |
+
+**SQL Query Guidelines:**
+
+1. Use `{limit}` placeholder for result limiting:
+   ```sql
+   SELECT TOP {limit} ... -- SQL Server
+   SELECT ... LIMIT {limit} -- MySQL
+   SELECT ... FETCH FIRST {limit} ROWS ONLY -- DB2
+   ```
+
+2. Use `?` for search parameters (parameterized queries):
+   ```sql
+   WHERE Column1 LIKE ? OR Column2 LIKE ?
+   ```
+
+3. Include ORDER BY for consistent results:
+   ```sql
+   ORDER BY ColumnName ASC
+   ```
+
+4. Use column aliases if needed:
+   ```sql
+   SELECT Model_Code AS ModelCode, Model_Name AS ModelName
+   ```
+
+#### 9.6.5 Display Columns
+
+```json
+"displayColumns": {
+  "VIN": "Vehicle Identification Number",
+  "RegistrationNumber": "Registration #",
+  "OwnerName": "Owner"
+}
+```
+
+Maps database column names to display headers in the dropdown table:
+- Key: Column name as returned by query (or alias)
+- Value: Header text displayed to user
+
+#### 9.6.6 Field Mappings
+
+```json
+"fieldMappings": {
+  "VIN": {
+    "sourceAlias": "VIN",
+    "targetProperty": "VIN",
+    "dataType": "xs:string",
+    "cardinality": "SINGLE"
+  },
+  "RegistrationDate": {
+    "sourceAlias": "RegistrationDate",
+    "targetProperty": "RegistrationDate",
+    "dataType": "xs:date",
+    "cardinality": "SINGLE"
+  }
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `sourceAlias` | Yes | Column name in query result |
+| `targetProperty` | Yes | ICN property symbolic name to populate |
+| `dataType` | No | Data type for value conversion |
+| `cardinality` | No | `"SINGLE"` or `"LIST"` (multi-value) |
+
+**Supported Data Types:**
+
+| Data Type | Description | JavaScript Conversion |
+|-----------|-------------|----------------------|
+| `xs:string` | Text values | `String(value)` |
+| `xs:integer` | Whole numbers | `parseInt(value, 10)` |
+| `xs:long` | Large integers | `parseInt(value, 10)` |
+| `xs:double` | Decimal numbers | `parseFloat(value)` |
+| `xs:decimal` | Precise decimals | `parseFloat(value)` |
+| `xs:boolean` | True/false | `value === "true"` |
+| `xs:date` | Date values | `new Date(value)` |
+| `xs:timestamp` | Date and time | `new Date(value)` |
+| `xs:time` | Time only | `new Date(value)` |
+
+#### 9.6.7 Search Configuration
+
+```json
+"searchConfig": {
+  "minLength": 2,
+  "debounceDelay": 300,
+  "placeholder": "Type VIN or Registration Number...",
+  "limit": 1000
+}
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `minLength` | `2` | Minimum characters before search triggers |
+| `debounceDelay` | `300` | Milliseconds to wait after typing stops |
+| `placeholder` | - | Placeholder text in input field |
+| `limit` | `500` | Maximum results to return |
+
+---
+
+## 10. How to Add New Class Configuration
+
+This section provides step-by-step instructions for adding a new document class to the plugin configuration.
+
+### 10.1 Prerequisites Checklist
+
+Before adding a new configuration, ensure:
+
+- [ ] Document class exists in FileNet repository
+- [ ] Entry Template(s) created for the document class
+- [ ] Entry Template uses **default layout** (not custom layout)
+- [ ] Database table(s) available for lookup data
+- [ ] JNDI DataSource configured and tested in WebSphere
+- [ ] ICN desktop ID known where configuration should apply
+
+### 10.2 Step-by-Step Instructions
+
+#### Step 1: Plan the Configuration
+
+Document the following information:
+
+| Item | Example | Your Value |
+|------|---------|------------|
+| Document Class Name | `Invoice` | |
+| Entry Template Name(s) | `Invoice Entry Template` | |
+| Desktop ID(s) | `Finance`, `Admin` | |
+| Lookup Property Name | `VendorLookup` | |
+| DataSource Name | `INVOICEDB` | |
+| Database Table | `Vendors` | |
+| Search Columns | `VendorID`, `VendorName` | |
+| Target Properties | `VendorID`, `VendorName`, `VendorAddress` | |
+
+#### Step 2: Add DataSource (if new)
+
+If using a new database, add to the `dataSources` section:
+
+```json
+"dataSources": {
+  "INVOICEDB": {
+    "type": "jndi",
+    "jndiName": "jdbc/InvoiceDatabase"
+  }
+}
+```
+
+#### Step 3: Add Document Class Entry
+
+Add new document class under `documentClasses`:
+
+```json
+"documentClasses": {
+  "Invoice": {
+    "desktops": ["Finance", "Admin"],
+    "Invoice Entry Template": {
+      // Entry Template settings (Step 4)
+    },
+    "properties": {
+      // Property configurations (Step 5)
+    }
+  }
+}
+```
+
+#### Step 4: Configure Entry Template Settings
+
+Add Entry Template-specific settings:
+
+```json
+"Invoice Entry Template": {
+  "propertyDisplayOrder": [
+    "VendorLookup",
+    "VendorID",
+    "VendorName",
+    "VendorAddress",
+    "InvoiceNumber",
+    "InvoiceDate",
+    "Amount"
+  ],
+  "showProperties": [
+    "VendorLookup",
+    "VendorID",
+    "VendorName",
+    "VendorAddress",
+    "InvoiceNumber",
+    "InvoiceDate",
+    "Amount"
+  ],
+  "customLabelsAndDesc": {
+    "labels": {
+      "VendorLookup": "Search Vendor",
+      "InvoiceDate": "Invoice Date"
+    },
+    "desc": {
+      "VendorLookup": "Search by Vendor ID or Name to auto-populate vendor information"
+    }
+  },
+  "requiredProperties": ["VendorID", "InvoiceNumber", "InvoiceDate", "Amount"],
+  "defaultValues": {
+    "InvoiceDate": ""
+  },
+  "readOnlyProperties": ["VendorID", "VendorName", "VendorAddress"]
+}
+```
+
+#### Step 5: Configure Lookup Property
+
+Add property editor configuration:
+
+```json
+"properties": {
+  "VendorLookup": {
+    "displayName": "Vendor Search",
+    "editorType": "inlineAutocomplete",
+    "serviceName": "CustomEditorGenericLookupService",
+    "dataSource": "INVOICEDB",
+    "preloadMode": "top500",
+    "allowClear": true,
+    "allowEdit": true,
+    "clearAfterSelection": true,
+    "tooltipMessage": "Search by Vendor ID or Name",
+    "hasDependentProperties": true,
+    "queryConfig": {
+      "sql": "SELECT TOP {limit} VendorID, VendorName, VendorAddress, VendorPhone FROM Vendors WHERE VendorID LIKE ? OR VendorName LIKE ? ORDER BY VendorName",
+      "resultColumns": ["VendorID", "VendorName", "VendorAddress", "VendorPhone"],
+      "filterColumns": ["VendorID", "VendorName"],
+      "searchPattern": "contains"
+    },
+    "displayColumns": {
+      "VendorID": "Vendor ID",
+      "VendorName": "Vendor Name",
+      "VendorAddress": "Address",
+      "VendorPhone": "Phone"
+    },
+    "fieldMappings": {
+      "VendorID": {
+        "sourceAlias": "VendorID",
+        "targetProperty": "VendorID",
+        "dataType": "xs:string",
+        "cardinality": "SINGLE"
+      },
+      "VendorName": {
+        "sourceAlias": "VendorName",
+        "targetProperty": "VendorName",
+        "dataType": "xs:string",
+        "cardinality": "SINGLE"
+      },
+      "VendorAddress": {
+        "sourceAlias": "VendorAddress",
+        "targetProperty": "VendorAddress",
+        "dataType": "xs:string",
+        "cardinality": "SINGLE"
+      }
+    },
+    "searchConfig": {
+      "minLength": 1,
+      "debounceDelay": 200,
+      "placeholder": "Type vendor ID or name...",
+      "limit": 500
+    }
+  }
+}
+```
+
+#### Step 6: Validate JSON Syntax
+
+Before deploying, validate the JSON:
+
+1. Use a JSON validator tool (online or IDE)
+2. Check for:
+   - Missing commas between elements
+   - Unmatched braces/brackets
+   - Invalid characters
+   - Duplicate keys
+
+#### Step 7: Build and Deploy
+
+```bash
+# Navigate to plugin directory
+cd CNBPropertyEditorEDSPlugin
+
+# Build the plugin
+ant clean all
+
+# Verify JAR was created
+dir CNBPropertyEditorEDSPlugin.jar
+
+# Deploy to ICN (copy to plugins directory or upload via Admin)
+```
+
+#### Step 8: Verify Configuration
+
+1. Clear browser cache
+2. Log into ICN using configured desktop
+3. Navigate to folder where documents are created
+4. Click "Add Document"
+5. Select the configured Entry Template
+6. Verify:
+   - Lookup field appears with autocomplete editor
+   - Properties are in configured order
+   - Required fields are marked
+   - Hidden fields are not visible
+7. Test search:
+   - Type in lookup field
+   - Verify dropdown appears with results
+   - Select a row
+   - Verify dependent fields are populated
+
+### 10.3 Configuration Examples
+
+#### Example 1: Customer Lookup
+
+```json
+"CustomerDocument": {
+  "desktops": ["CRM", "Admin"],
+  "Customer Document ET": {
+    "propertyDisplayOrder": ["CustomerSearch", "CustomerID", "CustomerName", "Email", "Phone"],
+    "showProperties": ["CustomerSearch", "CustomerID", "CustomerName", "Email", "Phone"],
+    "requiredProperties": ["CustomerID", "CustomerName"],
+    "readOnlyProperties": ["CustomerID", "CustomerName", "Email"]
+  },
+  "properties": {
+    "CustomerSearch": {
+      "displayName": "Customer Search",
+      "editorType": "inlineAutocomplete",
+      "dataSource": "CRMDB",
+      "preloadMode": "none",
+      "clearAfterSelection": true,
+      "tooltipMessage": "auto",
+      "hasDependentProperties": true,
+      "queryConfig": {
+        "sql": "SELECT TOP {limit} CustomerID, CustomerName, Email, Phone FROM Customers WHERE CustomerID LIKE ? OR CustomerName LIKE ? OR Email LIKE ? ORDER BY CustomerName",
+        "resultColumns": ["CustomerID", "CustomerName", "Email", "Phone"],
+        "filterColumns": ["CustomerID", "CustomerName", "Email"],
+        "searchPattern": "contains"
+      },
+      "displayColumns": {
+        "CustomerID": "ID",
+        "CustomerName": "Name",
+        "Email": "Email",
+        "Phone": "Phone"
+      },
+      "fieldMappings": {
+        "CustomerID": {"sourceAlias": "CustomerID", "targetProperty": "CustomerID", "dataType": "xs:string", "cardinality": "SINGLE"},
+        "CustomerName": {"sourceAlias": "CustomerName", "targetProperty": "CustomerName", "dataType": "xs:string", "cardinality": "SINGLE"},
+        "Email": {"sourceAlias": "Email", "targetProperty": "Email", "dataType": "xs:string", "cardinality": "SINGLE"},
+        "Phone": {"sourceAlias": "Phone", "targetProperty": "Phone", "dataType": "xs:string", "cardinality": "SINGLE"}
+      },
+      "searchConfig": {
+        "minLength": 2,
+        "debounceDelay": 300,
+        "placeholder": "Search by ID, name, or email...",
+        "limit": 1000
+      }
+    }
+  }
+}
+```
+
+#### Example 2: Product Catalog (Preloaded)
+
+```json
+"OrderDocument": {
+  "desktops": ["Sales"],
+  "Order Entry Template": {
+    "propertyDisplayOrder": ["ProductCode", "ProductName", "Category", "Price", "Quantity"],
+    "showProperties": ["ProductCode", "ProductName", "Category", "Price", "Quantity"],
+    "requiredProperties": ["ProductCode", "Quantity"]
+  },
+  "properties": {
+    "ProductCode": {
+      "displayName": "Product",
+      "editorType": "inlineAutocomplete",
+      "dataSource": "PRODUCTDB",
+      "preloadMode": "top500",
+      "allowClear": true,
+      "allowEdit": false,
+      "clearAfterSelection": false,
+      "tooltipMessage": "Select a product from the catalog",
+      "hasDependentProperties": true,
+      "queryConfig": {
+        "sql": "SELECT ProductCode, ProductName, Category, Price FROM Products WHERE Active = 1 ORDER BY ProductName",
+        "resultColumns": ["ProductCode", "ProductName", "Category", "Price"],
+        "filterColumns": ["ProductCode", "ProductName"],
+        "searchPattern": "contains"
+      },
+      "displayColumns": {
+        "ProductCode": "Code",
+        "ProductName": "Product",
+        "Category": "Category",
+        "Price": "Price"
+      },
+      "fieldMappings": {
+        "ProductCode": {"sourceAlias": "ProductCode", "targetProperty": "ProductCode", "dataType": "xs:string", "cardinality": "SINGLE"},
+        "ProductName": {"sourceAlias": "ProductName", "targetProperty": "ProductName", "dataType": "xs:string", "cardinality": "SINGLE"},
+        "Category": {"sourceAlias": "Category", "targetProperty": "Category", "dataType": "xs:string", "cardinality": "SINGLE"},
+        "Price": {"sourceAlias": "Price", "targetProperty": "Price", "dataType": "xs:double", "cardinality": "SINGLE"}
+      },
+      "searchConfig": {
+        "minLength": 0,
+        "debounceDelay": 100,
+        "placeholder": "Select product...",
+        "limit": 500
+      }
+    }
+  }
+}
+```
+
+---
+
+## 11. Deployment Guide
+
+### 11.1 Prerequisites
+
+| Requirement | Description |
+|-------------|-------------|
+| **IBM Content Navigator** | Version 3.0.x installed and configured |
+| **WebSphere Application Server** | With ICN deployed |
+| **JNDI DataSource** | Configured and tested for each database |
+| **Build Environment** | JDK 1.6+, Apache Ant |
+| **Admin Access** | ICN Administration desktop access |
+
+### 11.2 JNDI DataSource Setup
+
+#### 11.2.1 WebSphere Configuration
+
+1. Log into WebSphere Admin Console
+2. Navigate to **Resources → JDBC → Data Sources**
+3. Select appropriate scope (Cell, Node, or Server)
+4. Click **New**
+5. Configure DataSource:
+   - **JNDI Name**: `jdbc/RAMDB` (must match configuration)
+   - **Database Type**: Microsoft SQL Server
+   - **Database Name**: Your database name
+   - **Server Name**: Database server hostname
+   - **Port**: Database port (default: 1433)
+6. Configure authentication:
+   - Create J2C Authentication Alias
+   - Enter database username and password
+7. Configure connection pool:
+   - **Maximum Connections**: 10-50 (based on load)
+   - **Minimum Connections**: 1-5
+   - **Connection Timeout**: 180 seconds
+8. **Test Connection** to verify connectivity
+9. **Save** configuration
+
+#### 11.2.2 Verify DataSource Scope
+
+Ensure the DataSource is available to ICN:
+
+1. Check DataSource scope includes ICN application
+2. If using Cell scope, DataSource is available to all servers
+3. If using Server scope, must be configured on ICN server
+
+### 11.3 Build Process
+
+#### 11.3.1 Build Environment Setup
+
+Ensure the following are installed:
+- JDK 1.6 or higher (1.8 recommended)
+- Apache Ant 1.9 or higher
+- Access to navigatorAPI.jar from ICN installation
+
+#### 11.3.2 Build Commands
+
+```bash
+# Navigate to plugin directory
+cd d:\rasystem\Workspace\CNBPropertyEditorEDSPlugin
+
+# Clean previous build
+ant clean
+
+# Compile and package
+ant all
+
+# Or run all steps
+ant clean all
+```
+
+#### 11.3.3 Verify Build Output
+
+```bash
+# Check JAR was created
+dir CNBPropertyEditorEDSPlugin.jar
+
+# Verify JAR contents (optional)
+jar tf CNBPropertyEditorEDSPlugin.jar
+```
+
+Expected JAR contents:
+```
+META-INF/MANIFEST.MF
+com/cnb/eds/editor/CNBPropertyEditorEDSPlugin.class
+com/cnb/eds/editor/config/LookupConfigManager.class
+com/cnb/eds/editor/config/lookupConfig.json
+com/cnb/eds/editor/connection/ConnectionManager.class
+com/cnb/eds/editor/filters/CNBCustomEditorResponseFilter.class
+com/cnb/eds/editor/service/CustomEditorGenericLookupService.class
+com/cnb/eds/editor/service/GetLookupConfigService.class
+com/cnb/eds/editor/WebContent/CNBPropertyEditorEDSPlugin.js
+com/cnb/eds/editor/WebContent/CNBPropertyEditorEDSPlugin.css
+com/cnb/eds/editor/WebContent/cNBPropertyEditorEDSPluginDojo/...
+```
+
+### 11.4 Plugin Deployment
+
+#### 11.4.1 Deploy via ICN Administration
+
+1. Log into ICN with Administrator privileges
+2. Open **Administration Desktop**
+3. Navigate to **Settings → Plugins**
+4. Click **New Plugin**
+5. Enter JAR file path or click **Browse** to select
+6. Click **Load**
+7. Verify plugin information displays correctly:
+   - Name: CNB Custom Property Editor EDS Plugin
+   - Version: 1.0.0
+   - ID: CNBPropertyEditorEDSPlugin
+8. Click **Save**
+
+#### 11.4.2 Deploy via File Copy
+
+1. Copy JAR to ICN plugins directory:
+   ```
+   <ICN_INSTALL>/plugins/CNBPropertyEditorEDSPlugin.jar
+   ```
+2. Restart ICN application (or use plugin reload if supported)
+
+### 11.5 Post-Deployment Verification
+
+#### 11.5.1 Verify Plugin Loading
+
+1. Check ICN system logs for plugin initialization:
+   ```
+   [LookupConfigManager] Configuration loaded successfully
+   [LookupConfigManager] Loaded N document class(es)
+   ```
+
+2. In ICN Administration, verify plugin shows as loaded
+
+#### 11.5.2 Functional Verification
+
+1. **Clear browser cache** (Ctrl+Shift+Delete)
+2. Log into configured desktop
+3. Navigate to a folder
+4. Click **Add Document**
+5. Select configured Entry Template
+6. Verify:
+   - [ ] Custom autocomplete editor appears on lookup field
+   - [ ] Dropdown button is visible
+   - [ ] Properties are in configured order
+   - [ ] Required fields show asterisk
+   - [ ] Hidden fields are not visible
+   - [ ] Read-only fields cannot be edited
+7. Test search functionality:
+   - [ ] Type in lookup field
+   - [ ] Dropdown appears with results
+   - [ ] Results match search criteria
+8. Test selection:
+   - [ ] Click on result row
+   - [ ] Dependent fields are populated
+   - [ ] Lookup field clears (if configured)
+9. Test form submission:
+   - [ ] Fill remaining required fields
+   - [ ] Click Add/Save
+   - [ ] Document created successfully
+
+---
+
+## 12. Known Limitations
+
+### 12.1 Scope Limitations
+
+| Limitation | Description | Workaround |
+|------------|-------------|------------|
+| **Entry Template Only** | Plugin only works with Entry Template-based document creation | Use Entry Templates for document creation |
+| **New Documents Only** | Custom editors not triggered when editing existing documents | None - by design |
+| **Add Document Only** | Only applicable when using "Add Document" action with Entry Template | None - by design |
+| **Default Layout Required** | Entry Templates must use default layout (custom layouts not supported) | Convert Entry Templates to use default layout |
+
+### 12.2 Technical Limitations
+
+| Limitation | Description | Workaround |
+|------------|-------------|------------|
+| **Single DataSource per Property** | Each lookup property connects to one datasource | Create separate properties for different datasources |
+| **SQL Server Syntax** | Default SQL uses SQL Server syntax (TOP, brackets) | Modify SQL for other databases |
+| **Synchronous Population** | Dependent fields populated synchronously | None - acceptable for typical use |
+
+### 12.3 Browser/Environment Limitations
+
+| Limitation | Description | Workaround |
+|------------|-------------|------------|
+| **ICN Version** | Designed for ICN 3.0.x | Test on other versions before use |
+| **WebSphere Only** | Tested on WebSphere only | Test on other app servers if needed |
+| **JNDI Required** | Requires JNDI DataSource configuration | Configure DataSources in app server |
+
+---
+
+## 13. Best Practices
+
+### 13.1 Configuration Best Practices
+
+| Practice | Recommendation |
+|----------|----------------|
+| **Naming Conventions** | Use consistent, descriptive names for DataSources |
+| **Desktop Restrictions** | Always specify `desktops` array to limit scope |
+| **Entry Template Names** | Match names exactly (case-sensitive) |
+| **Property Names** | Use FileNet symbolic names, not display names |
+| **JSON Validation** | Always validate JSON before deployment |
+
+### 13.2 SQL Query Best Practices
+
+| Practice | Example |
+|----------|---------|
+| **Use parameterized queries** | `WHERE Column LIKE ?` |
+| **Include result limits** | `SELECT TOP {limit}` |
+| **Add ORDER BY** | `ORDER BY ColumnName` |
+| **Select only needed columns** | Don't use `SELECT *` |
+| **Create indexes** | Index columns used in WHERE and ORDER BY |
+
+### 13.3 Performance Best Practices
+
+| Practice | Recommendation |
+|----------|----------------|
+| **Preload Mode Selection** | Use `top500` for <500 records, `none` for larger datasets |
+| **Result Limits** | Set reasonable limits (500-1000) |
+| **Debounce Delay** | 200-500ms to prevent excessive queries |
+| **Database Indexes** | Index filter columns for fast searches |
+
+### 13.4 Security Best Practices
+
+| Practice | Recommendation |
+|----------|----------------|
+| **JNDI Only** | Never use direct database credentials |
+| **Minimum Privileges** | Database user should have SELECT only |
+| **Desktop Restrictions** | Limit configurations to appropriate desktops |
+| **Audit Logging** | Enable database query logging if required |
+
+---
+
+## 14. Troubleshooting Guide
+
+### 14.1 Common Issues
+
+#### Issue: Lookup field not appearing
+
+**Symptoms:** Standard text field instead of autocomplete editor
+
+**Possible Causes:**
+1. Document class name mismatch
+2. Desktop not in allowed list
+3. Entry Template name mismatch
+4. Plugin not loaded
+
+**Resolution:**
+1. Check document class name matches exactly in configuration
+2. Verify desktop ID is in `desktops` array
+3. Confirm Entry Template name matches exactly
+4. Check ICN Administration → Plugins
+
+#### Issue: Search returns no results
+
+**Symptoms:** "No results found" message
+
+**Possible Causes:**
+1. Database connection failed
+2. SQL query error
+3. No matching data
+4. DataSource not found
+
+**Resolution:**
+1. Check WebSphere logs for connection errors
+2. Test SQL query directly in database
+3. Verify data exists matching search pattern
+4. Confirm JNDI name matches WebSphere configuration
+
+#### Issue: Fields not populating
+
+**Symptoms:** Selection works but target fields remain empty
+
+**Possible Causes:**
+1. Field mapping misconfiguration
+2. Target property name mismatch
+3. Data type conversion error
+
+**Resolution:**
+1. Verify `targetProperty` matches FileNet symbolic name
+2. Check browser console for JavaScript errors
+3. Confirm `sourceAlias` matches SQL column name/alias
+
+#### Issue: Configuration not loading
+
+**Symptoms:** No custom behavior at all
+
+**Possible Causes:**
+1. JSON syntax error
+2. Configuration file not in JAR
+3. Plugin initialization failure
+
+**Resolution:**
+1. Validate JSON with online validator
+2. Check JAR contents include lookupConfig.json
+3. Check ICN logs for initialization errors
+
+### 14.2 Diagnostic Logging
+
+Enable console logging in browser to see detailed execution:
+
+1. Open browser Developer Tools (F12)
+2. Go to Console tab
+3. Filter by "CNBPropertyEditorEDSPlugin" or "EDSResponseFilter"
+4. Reproduce the issue
+5. Review log messages for errors
+
+### 14.3 Server-Side Logging
+
+Check WebSphere logs for backend errors:
+
+1. Location: `<WAS_PROFILE>/logs/<SERVER>/SystemOut.log`
+2. Search for:
+   - `[LookupConfigManager]`
+   - `[ConnectionManager]`
+   - `[CustomEditorGenericLookupService]`
+   - `[EDSResponseFilter]`
+
+---
+
+## 15. Appendices
+
+### 15.1 Appendix A: Complete Configuration Example
+
+See the `lookupConfig.json` file in the plugin source for a complete working example.
+
+### 15.2 Appendix B: Supported Data Types
+
+| XSD Type | Java Type | JavaScript Type | Example Value |
+|----------|-----------|-----------------|---------------|
+| `xs:string` | String | String | `"ABC123"` |
+| `xs:integer` | Integer | Number | `42` |
+| `xs:long` | Long | Number | `123456789` |
+| `xs:double` | Double | Number | `3.14159` |
+| `xs:decimal` | BigDecimal | Number | `99.99` |
+| `xs:boolean` | Boolean | Boolean | `true` |
+| `xs:date` | Date | Date | `2024-01-15` |
+| `xs:timestamp` | Timestamp | Date | `2024-01-15T10:30:00` |
+| `xs:time` | Time | Date | `10:30:00` |
+
+### 15.3 Appendix C: Search Pattern Reference
+
+| Pattern | SQL Result | Example Input | SQL Value |
+|---------|------------|---------------|-----------|
+| `startsWith` | `value%` | `"ABC"` | `"ABC%"` |
+| `endsWith` | `%value` | `"ABC"` | `"%ABC"` |
+| `contains` | `%value%` | `"ABC"` | `"%ABC%"` |
+| `exact` | `value` | `"ABC"` | `"ABC"` |
+
+### 15.4 Appendix D: Glossary
+
+| Term | Definition |
+|------|------------|
+| **ICN** | IBM Content Navigator |
+| **EDS** | External Data Service / Entry Data Service |
+| **Entry Template** | ICN template defining document creation workflow |
+| **JNDI** | Java Naming and Directory Interface |
+| **DataSource** | Application server managed database connection pool |
+| **Dojo** | JavaScript framework used by ICN |
+| **AMD** | Asynchronous Module Definition (JavaScript module format) |
+| **Aspect** | Programming technique for intercepting method calls |
+
+---
+
+## Document End
+
+**CNBPropertyEditorEDSPlugin Technical Documentation**  
+Version 1.0 | January 2026
