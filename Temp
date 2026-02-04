@@ -1,1 +1,91 @@
-temp
+Project Overview
+
+The project involves two parallel activities: Claims migration from Wawanesa AWS Cloud to Guidewire Cloud, and document migration into FileNet
+
+Total scope includes approximately 1.3 million claims, 23 million documents, and 50 TB of content
+
+Claims are migrated first by the ClaimCenter team and then handed over to the Document Migration team for FileNet ingestion
+
+All document content and metadata were already received from Wawanesa, downloaded, and stored locally on the migration server
+
+During migration, documents are read from local storage and pushed batch-by-batch into the FileNet repository, with no remote content dependency
+
+2. Phase-Wise Migration Plan
+
+Phase 1 (Pilot – Feb 13): 25,000 closed claims (0–3 years) from an overall pool of ~200,000 closed claims
+
+Phase 2: Open claims migration covering ~6,000 claims and ~678K documents, post business sign-off
+
+Phase 3: Remaining closed claims (0–3 years), approximately 200,000 claims and ~6.5 million documents
+
+Daily operational model includes ClaimCenter sharing migrated claims with the Document Migration team for FileNet processing
+
+3. Throughput & Environment Details
+
+Target ingestion rate is ~500K documents per day, controlled due to FileNet subscriptions
+
+UAT environment: 8 CPU cores and 32 GB RAM
+
+Production environment: 16 CPU cores and 64 GB RAM
+
+Observed performance difference: UAT processes 100K documents in ~30 minutes, while Pre-Prod/Production takes ~6.5 hours for the same volume
+
+4. Key Performance Concern
+
+Significant performance degradation observed in Pre-Prod/Production compared to UAT
+
+Since content is accessed locally in both environments, the performance gap is not related to network or remote storage
+
+Further investigation is required across FileNet configuration, subscriptions, database performance, storage I/O, and infrastructure
+
+5. ECM Team – Roles & Responsibilities (Production Support)
+
+Monitor FileNet production environment health and ensure overall system stability during document migration runs
+
+Monitor production storage capacity, including object store and content storage utilization
+
+Support FileNet availability and restore services promptly in case of system outages
+
+Investigate FileNet performance issues, including document commit delays and database-level slowness
+
+Monitor FileNet subscriptions, event queues, and backlogs to avoid throttling or heap pressure
+
+Review and adjust subscription and queue threshold configurations based on ingestion throughput
+
+Implement and validate object model, property, and configuration changes in production aligned with UAT
+
+Provide proactive support during high-volume migration windows in coordination with the migration team
+
+6. Additional Discussion – UAT vs Pre-Prod Performance Testing
+
+Discussed why document ingestion is slower in Pre-Prod compared to UAT
+
+Rameshwari to conduct additional ingestion tests in UAT using larger file sizes (5 MB and 10 MB)
+
+Results will be compared with Pre-Prod/Staging to understand file-size impact on performance
+
+7. Additional Discussion – Performance Tuning (Threads & Instances)
+
+Mahendra suggested increasing the number of processing threads and scaling the number of application instances
+
+Rameshwari is working on increasing thread counts and instance capacity to evaluate performance improvements
+
+Objective is to validate whether the tuning helps achieve the target throughput of ~500K documents per day
+
+8. Additional Discussion – Document Security Issue in Pre-Prod
+
+Users were unable to view documents in Pre-Prod due to missing user-specific security groups
+
+Root cause identified as FileNet subscriptions being disabled in Pre-Prod, preventing security group assignment
+
+ECM team suggested triggering subscriptions by updating a business property (Amount = 0.0) on affected documents
+
+Rameshwari initiated a Content Engine API–based script to update documents and force subscription execution
+
+Scope includes 5,220 claims, approximately 554K documents
+
+Processing is running from a local server and facing intermittent network disconnections
+
+As of now, 800 claims have been processed, with remaining claims being handled by the offshore team
+
+Once complete, document security is expected to be corrected and users should regain access, with a consolidated progress update to be shared
