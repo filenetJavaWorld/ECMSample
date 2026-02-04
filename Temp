@@ -1,1 +1,84 @@
-temp
+Hello Team,
+
+As discussed, we completed multiple benchmark runs for the FileNet migration utility using different content sizes and thread configurations. Based on the actual execution logs and observed throughput, we have prepared a detailed time-to-complete estimate for migrating up to **500,000 documents**, categorized by **file size** and **number of threads**.
+
+All tests were executed with:
+
+* Batch size: 100
+* Success rate: 100%
+* Same environment (Content Engine, database, storage, and network)
+
+The results below reflect **measured throughput for 5 threads** and **realistic scaling projections** for higher thread counts, considering typical FileNet CE, database, and storage constraints.
+
+---
+
+### 1 MB Content Files – Estimated Time for 500,000 Documents
+
+|    Threads | Estimated Time      |
+| ---------: | ------------------- |
+|  5 threads | ~3 hours 21 minutes |
+| 10 threads | ~2 hours 09 minutes |
+| 15 threads | ~1 hour 39 minutes  |
+| 20 threads | ~1 hour 23 minutes  |
+
+---
+
+### 2 MB Content Files – Estimated Time for 500,000 Documents
+
+|    Threads | Estimated Time      |
+| ---------: | ------------------- |
+|  5 threads | ~4 hours 45 minutes |
+| 10 threads | ~3 hours 02 minutes |
+| 15 threads | ~2 hours 20 minutes |
+| 20 threads | ~1 hour 57 minutes  |
+
+---
+
+### 4 MB Content Files – Estimated Time for 500,000 Documents
+
+|    Threads | Estimated Time      |
+| ---------: | ------------------- |
+|  5 threads | ~6 hours 44 minutes |
+| 10 threads | ~4 hours 19 minutes |
+| 15 threads | ~3 hours 19 minutes |
+| 20 threads | ~2 hours 46 minutes |
+
+---
+
+### 9 MB Content Files (Worst Case) – Estimated Time for 500,000 Documents
+
+|    Threads | Estimated Time       |
+| ---------: | -------------------- |
+|  5 threads | ~11 hours 41 minutes |
+| 10 threads | ~7 hours 29 minutes  |
+| 15 threads | ~5 hours 46 minutes  |
+| 20 threads | ~4 hours 48 minutes  |
+
+---
+
+### Key Observations
+
+* Migration performance is strongly influenced by **content size**.
+* Increasing threads improves throughput, but scaling is **not linear** due to Content Engine I/O, database activity, and storage limits.
+* Noticeable diminishing returns begin beyond **10–15 threads**.
+* Even for large (9 MB) documents, **500K documents can be migrated within a single working day** with appropriate threading.
+
+---
+
+### Recommendation
+
+Based on stability, throughput, and resource utilization, we recommend:
+
+* **10 to 15 threads** as the optimal configuration for sustained migrations.
+* Higher thread counts (20+) should be used only after confirming CE JVM heap sizing, database connection pool limits, and storage IOPS capacity.
+
+---
+
+Please let us know if you would like:
+
+* A consolidated Excel version of these estimates
+* Projections for mixed file-size distributions
+* Capacity planning recommendations for 1M+ documents per day
+
+Regards,
+Rameshwar
