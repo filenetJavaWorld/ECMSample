@@ -1,1 +1,334 @@
-temp
+package com.cnb;
+
+import com.google.gson.*;
+
+import java.io.*;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public class EDS_TestCase_CSV_Generator {
+
+    private static final AtomicInteger COUNTER = new AtomicInteger(1);
+
+    private static final String[] HEADERS = {
+            "Test case ID",
+            "Document class",
+            "Entry Template Name",
+            "Test case type",
+            "Input scenario",
+            "Input values",
+            "Output scenario",
+            "Expected result",
+            "Actual Results",
+            "Testing Status",
+            "Test result",
+            "Comments"
+    };
+
+    public static void main(String[] args) throws Exception {
+
+    	 String jsonPath = args.length > 0 ? args[0] : "D:\\Data\\cnb\\lookupConfig.json";
+         String csvPath  = args.length > 1 ? args[1] : "D:\\Data\\cnb\\EDS_Test_Cases.csv";
+
+        JsonObject root;
+        try (FileReader fr = new FileReader(jsonPath)) {
+            root = JsonParser.parseReader(fr).getAsJsonObject();
+        }
+
+        JsonObject documentClasses = root.getAsJsonObject("documentClasses");
+        if (documentClasses == null) {
+            System.out.println("ERROR: documentClasses not found.");
+            return;
+        }
+
+        try (PrintWriter writer = new PrintWriter(new FileWriter(csvPath))) {
+
+            writer.println(String.join(",", HEADERS));
+
+            for (String docClass : documentClasses.keySet()) {
+
+                JsonObject dcObj = documentClasses.getAsJsonObject(docClass);
+                if (dcObj == null) continue;
+
+                // Gather template names under this docClass
+                List<String> templates = new ArrayList<>();
+                for (String key : dcObj.keySet()) {
+                    if (!key.equalsIgnoreCase("desktops") && !key.equalsIgnoreCase("properties")) {
+                        templates.add(key);
+                    }
+                }
+
+                // 1) Desktop visibility testcases
+                String desktopList = dcObj.has("desktops")
+                        ? clean(dcObj.getAsJsonArray("desktops").toString())
+                        : "Not configured";
+
+                writeRow(writer,
+                        "Desktop visibility validation",
+                        docClass,
+                        "",
+                        "Verify EDS/EDS-driven UI is available only in configured desktops",
+                        "Configured desktops: " + desktopList,
+                        "EDS should be visible only in configured desktops",
+                        "EDS should be displayed only in configured desktops and hidden in others"
+                );
+
+                // For each entry template
+                for (String templateName : templates) {
+
+                    JsonObject templateObj = dcObj.getAsJsonObject(templateName);
+                    if (templateObj == null) continue;
+
+                    // 2) Entry-template visibility testcase
+                    writeRow(writer,
+                            "Entry template visibility validation",
+                            docClass,
+                            templateName,
+                            "Verify EDS is displayed only for configured entry template under this document class",
+                            "Configured entry templates for this class: " + String.join("|", templates),
+                            "EDS should be displayed only for the selected entry template",
+                            "EDS should not be displayed for other entry templates under the same document class"
+                    );
+
+                    // 3) propertyDisplayOrder
+                    writeRow(writer,
+                            "Properties display order validation",
+                            docClass,
+                            templateName,
+                            "Verify that document properties are displayed in the same order as configured in 'propertyDisplayOrder'",
+                            "Properties should display as below order: " + arrayAsCsv(templateObj, "propertyDisplayOrder"),
+                            "Properties should be displayed in the same order we mentioned",
+                            "Properties should be displayed in the same order we mentioned"
+                    );
+
+                    // 4) showProperties
+                    writeRow(writer,
+                            "Properties visibility (show/hide) validation",
+                            docClass,
+                            templateName,
+                            "Verify that document properties visibility is as configured in 'showProperties'",
+                            "Properties configured in showProperties: " + arrayAsCsv(templateObj, "showProperties"),
+                            "Only showProperties should be displayed; remaining properties should be hidden",
+                            "Properties configured should be displayed in 'showProperties'"
+                    );
+
+                    // 5) customLabelsAndDesc
+                    writeRow(writer,
+                            "Properties custom label and description validation",
+                            docClass,
+                            templateName,
+                            "Verify that custom labels and descriptions are applied as configured in 'customLabelsAndDesc'",
+                            labelsDescText(templateObj),
+                            "Properties should show as per the label and description configured",
+                            "Properties should show as per the label and description configured"
+                    );
+
+                    // 6) requiredProperties
+                    writeRow(writer,
+                            "Required properties validation",
+                            docClass,
+                            templateName,
+                            "Verify that mandatory properties are enforced as required as configured in 'requiredProperties'",
+                            "Properties to be enforced as required: " + arrayAsCsv(templateObj, "requiredProperties"),
+                            "Properties should show as per required configured",
+                            "Properties should have required mandate as per the configuration"
+                    );
+
+                    // 7) Record lookup + autocomplete behaviors (IMPORTANT FIX)
+                    JsonObject propsObj = templateObj.getAsJsonObject("properties");
+                    if (propsObj != null) {
+                        for (String propName : propsObj.keySet()) {
+                            JsonObject propCfg = propsObj.getAsJsonObject(propName);
+                            if (propCfg == null) continue;
+
+                            // We only generate autocomplete/lookup cases if queryConfig or searchConfig exists
+                            JsonObject searchConfig = propCfg.getAsJsonObject("searchConfig");
+                            JsonObject queryConfig  = propCfg.getAsJsonObject("queryConfig");
+                            JsonObject displayCols  = propCfg.getAsJsonObject("displayColumns");
+                            JsonObject fieldMaps    = propCfg.getAsJsonObject("fieldMappings");
+
+                            if (searchConfig == null && queryConfig == null && displayCols == null && fieldMaps == null) {
+                                continue;
+                            }
+
+                            // 7.1 minLength
+                            if (searchConfig != null && searchConfig.has("minLength")) {
+                                String minLen = safeStr(searchConfig, "minLength");
+                                writeRow(writer,
+                                        "Record lookup min length validation",
+                                        docClass,
+                                        templateName,
+                                        "Verify lookup search triggers only after minimum characters for property '" + propName + "'",
+                                        "minLength=" + minLen + ", placeholder=" + safeStr(searchConfig, "placeholder"),
+                                        "Search should trigger only after entering minimum configured characters",
+                                        "Search must trigger only after entering " + minLen + " characters"
+                                );
+                            }
+
+                            // 7.2 placeholder
+                            if (searchConfig != null && searchConfig.has("placeholder")) {
+                                writeRow(writer,
+                                        "Record lookup placeholder validation",
+                                        docClass,
+                                        templateName,
+                                        "Verify configured placeholder is displayed for property '" + propName + "'",
+                                        "placeholder=" + safeStr(searchConfig, "placeholder"),
+                                        "Placeholder should match configuration",
+                                        "Correct placeholder should be displayed"
+                                );
+                            }
+
+                            // 7.3 limit
+                            if (searchConfig != null && searchConfig.has("limit")) {
+                                writeRow(writer,
+                                        "Record lookup result limit validation",
+                                        docClass,
+                                        templateName,
+                                        "Verify lookup results are limited as configured for property '" + propName + "'",
+                                        "limit=" + safeStr(searchConfig, "limit"),
+                                        "Result count should not exceed configured limit",
+                                        "Results should be limited as configured"
+                                );
+                            }
+
+                            // 7.4 searchPattern contains/startsWith/equals
+                            if (queryConfig != null && queryConfig.has("searchPattern")) {
+                                String pattern = safeStr(queryConfig, "searchPattern");
+                                String whereMeaning = patternMeaning(pattern);
+                                writeRow(writer,
+                                        "Record lookup search pattern validation",
+                                        docClass,
+                                        templateName,
+                                        "Verify lookup uses searchPattern '" + pattern + "' for property '" + propName + "'",
+                                        "searchPattern=" + pattern + ", sql=" + safeStr(queryConfig, "sql"),
+                                        "Lookup should return results as per configured search pattern",
+                                        "Results should be returned where the search value " + whereMeaning
+                                );
+                            }
+
+                            // 7.5 display columns count/visibility
+                            if (displayCols != null && displayCols.size() > 0) {
+                                writeRow(writer,
+                                        "Record lookup display columns validation",
+                                        docClass,
+                                        templateName,
+                                        "Verify lookup popup displays configured columns for property '" + propName + "'",
+                                        "displayColumns=" + clean(displayCols.toString()),
+                                        "Popup should show only configured display columns",
+                                        "Popup should show exactly the configured display columns"
+                                );
+                            }
+
+                            // 7.6 fieldMappings auto-population
+                            if (fieldMaps != null && fieldMaps.size() > 0) {
+                                writeRow(writer,
+                                        "Record lookup field mapping auto-population validation",
+                                        docClass,
+                                        templateName,
+                                        "Verify selecting a lookup result auto-populates target properties for '" + propName + "'",
+                                        "fieldMappings=" + clean(fieldMaps.toString()),
+                                        "On selecting a row in popup, mapped target properties should be auto-populated",
+                                        "Target properties should be auto-populated as per configured fieldMappings"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        System.out.println("CSV generated successfully: " + csvPath);
+    }
+
+    // ---------------- CSV helpers ----------------
+
+    private static void writeRow(
+            PrintWriter writer,
+            String testCaseType,
+            String docClass,
+            String entryTemplate,
+            String inputScenario,
+            String inputValues,
+            String outputScenario,
+            String expectedResult
+    ) {
+        writer.println(csv(
+                String.format("TC%05d", COUNTER.getAndIncrement()),
+                docClass,
+                entryTemplate,
+                testCaseType,
+                inputScenario,
+                inputValues,
+                outputScenario,
+                expectedResult,
+                "Same with expected Results",
+                "Completed",
+                "Success",
+                ""
+        ));
+    }
+
+    private static String csv(String... values) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < values.length; i++) {
+            sb.append("\"")
+              .append(values[i] == null ? "" : values[i].replace("\"", "\"\""))
+              .append("\"");
+            if (i < values.length - 1) sb.append(",");
+        }
+        return sb.toString();
+    }
+
+    // ---------------- JSON helpers ----------------
+
+    private static String arrayAsCsv(JsonObject obj, String key) {
+        if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) return "Not configured";
+        JsonArray arr = obj.getAsJsonArray(key);
+        if (arr == null || arr.size() == 0) return "Not configured";
+        List<String> out = new ArrayList<>();
+        for (JsonElement e : arr) {
+            if (e != null && !e.isJsonNull()) out.add(e.getAsString());
+        }
+        return String.join(",", out);
+    }
+
+    private static String labelsDescText(JsonObject templateObj) {
+        JsonObject cld = templateObj.getAsJsonObject("customLabelsAndDesc");
+        if (cld == null) return "No custom labels exist. No custom descriptions exist.";
+
+        JsonObject labels = cld.getAsJsonObject("labels");
+        JsonObject desc   = cld.getAsJsonObject("desc");
+
+        String labelsText = (labels != null && labels.size() > 0)
+                ? "Labels: " + clean(labels.toString())
+                : "No custom labels exist.";
+
+        String descText = (desc != null && desc.size() > 0)
+                ? "Descriptions: " + clean(desc.toString())
+                : "No custom descriptions exist.";
+
+        return labelsText + " " + descText;
+    }
+
+    private static String safeStr(JsonObject obj, String key) {
+        if (obj == null || !obj.has(key) || obj.get(key).isJsonNull()) return "Not configured";
+        JsonElement el = obj.get(key);
+        if (el.isJsonPrimitive()) return el.getAsString();
+        return clean(el.toString());
+    }
+
+    private static String clean(String s) {
+        if (s == null) return "";
+        return s.replace("\r", " ").replace("\n", " ").replace("\"", "");
+    }
+
+    private static String patternMeaning(String pattern) {
+        if (pattern == null) return "matches configured rule";
+        switch (pattern.trim().toLowerCase()) {
+            case "contains":   return "is contained in the search column values (LIKE %value%)";
+            case "startswith": return "starts with the search value (LIKE value%)";
+            case "equals":     return "exactly equals the search value (= value)";
+            default:           return "matches configured rule (" + pattern + ")";
+        }
+    }
+}
