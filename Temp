@@ -1,1 +1,221 @@
-temp
+package com.cnb;
+
+import com.google.gson.*;
+
+import java.io.*;
+import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Generates Search Template test cases from SearchTemplate.json as CSV.
+ * Repeats template-driven test cases for each configured search template,
+ * with user-friendly input scenario and expected result messages.
+ */
+public class SearchTemplate_TestCase_Generator {
+
+    private static final AtomicInteger COUNTER = new AtomicInteger(1);
+
+    private static final String[] HEADERS = {
+            "Test case ID",
+            "Search Template",
+            "Document class",
+            "Category",
+            "Test case type",
+            "Input scenario",
+            "Expected result",
+            "Actual Results",
+            "Testing Status",
+            "Test result",
+            "Comments"
+    };
+
+    public static void main(String[] args) throws Exception {
+        String jsonPath = args.length > 0 ? args[0] : "D:\\Data\\cnb\\SearchTemplate.json";
+        String outPath = args.length > 1 ? args[1] : "D:\\Data\\cnb\\SearchTemplate_Test_Cases.csv";
+
+        JsonObject root;
+        try (FileReader fr = new FileReader(jsonPath)) {
+            root = JsonParser.parseReader(fr).getAsJsonObject();
+        }
+
+        try (PrintWriter writer = new PrintWriter(new FileWriter(outPath))) {
+            writer.println(String.join(",", HEADERS));
+
+            // ---------- Section A: Global test cases (once) ----------
+            writeRow(writer, "", "", "Navigation", "G-01",
+                    "User logs in and checks the top navigation bar for the Quick Navigation icon.",
+                    "Quick Nav icon is visible after login");
+            writeRow(writer, "", "", "Navigation", "G-02",
+                    "User opens Quick Navigation and looks for the Search option.",
+                    "Search option is visible and clickable");
+            writeRow(writer, "", "", "Navigation", "G-03",
+                    "User clicks Search and waits for the search landing page to load.",
+                    "Search page loads with Recent Searches and All Searches panels");
+            writeRow(writer, "", "", "Security", "G-04",
+                    "User logs in and opens the Search area; verify which search templates are shown based on the user's security groups.",
+                    "Only authorized templates are visible for the logged-in user");
+
+            // ---------- Section B: Template-driven test cases (per template) ----------
+            for (String templateName : root.keySet()) {
+                JsonElement el = root.get(templateName);
+                if (el == null || !el.isJsonArray()) continue;
+
+                JsonArray columns = el.getAsJsonArray();
+                List<String> levelNames = new ArrayList<>();
+                for (JsonElement col : columns) {
+                    if (col != null && col.isJsonObject() && col.getAsJsonObject().has("colSymName")) {
+                        levelNames.add(col.getAsJsonObject().get("colSymName").getAsString());
+                    }
+                }
+
+                String documentClass = deriveDocumentClass(templateName);
+                String level1 = levelNames.isEmpty() ? "DocType" : levelNames.get(0);
+                String level2 = levelNames.size() < 2 ? null : levelNames.get(1);
+
+                writeTemplateRows(writer, templateName, documentClass, level1, level2);
+            }
+        }
+
+        System.out.println("Search template test cases generated successfully: " + outPath);
+    }
+
+    /** Derive document class from template name. */
+    private static String deriveDocumentClass(String templateName) {
+        if (templateName == null || templateName.isEmpty()) return "DC_Unknown_Documents";
+        String n = templateName.trim().replace(" ", "_").replace("-", "_");
+        if (n.endsWith("_Search")) {
+            n = n.substring(0, n.length() - 7) + "_Documents";
+        } else if (!n.endsWith("_Documents")) {
+            n = n + "_Documents";
+        }
+        return "DC_" + n;
+    }
+
+    private static void writeTemplateRows(PrintWriter w, String templateName, String documentClass,
+                                          String level1, String level2) {
+        // Category: Template visibility
+        writeRow(w, templateName, documentClass, "Template visibility", "T-01",
+                "User opens the Search page and looks at the All Searches list.",
+                "Template \"" + templateName + "\" is listed and can be selected.");
+        writeRow(w, templateName, documentClass, "Template visibility", "T-02",
+                "User types in the search filter textbox to find a template by name.",
+                "Typing \"" + templateName + "\" filters the list and shows the " + templateName + " template.");
+        writeRow(w, templateName, documentClass, "Template visibility", "T-03",
+                "User logs in with an account that does not have access to this search template.",
+                "Template \"" + templateName + "\" is not visible for the unauthorized user.");
+
+        // Category: Search criteria UI
+        writeRow(w, templateName, documentClass, "Search criteria UI", "T-04",
+                "User selects the \"" + templateName + "\" template and waits for the criteria panel to load.",
+                "Search criteria panel loads successfully with no errors.");
+        writeRow(w, templateName, documentClass, "Search criteria UI", "T-05",
+                "User reviews the search form and checks that all configured search fields are present.",
+                "All configured metadata fields are visible and usable.");
+        writeRow(w, templateName, documentClass, "Search criteria UI", "T-06",
+                "User looks at the operator dropdown or default operator for each search field.",
+                "Operators (e.g. Equals, Like) are correctly defaulted as per configuration.");
+
+        // Category: Search execution
+        writeRow(w, templateName, documentClass, "Search execution", "T-07",
+                "User enters valid values in the search criteria and runs the search.",
+                "Results are returned successfully and displayed in the results area.");
+        writeRow(w, templateName, documentClass, "Search execution", "T-08",
+                "User runs the search with no criteria or empty values (if allowed).",
+                "Search executes with default or controlled behavior; no unexpected errors.");
+
+        // Category: Tree view structure
+        writeRow(w, templateName, documentClass, "Tree view structure", "T-09",
+                "User runs a search that returns results and checks for the Tree View panel.",
+                "Tree View panel is visible when JSON grouping is configured.");
+        writeRow(w, templateName, documentClass, "Tree view structure", "T-10",
+                "User expands the tree and checks the label of the root node.",
+                "Root node displays the document class: " + documentClass + ".");
+        writeRow(w, templateName, documentClass, "Tree view structure", "T-11",
+                "User expands the root node and checks the first level of folders.",
+                level1 + " folders appear under the root node.");
+        if (level2 != null) {
+            writeRow(w, templateName, documentClass, "Tree view structure", "T-12",
+                    "User expands a " + level1 + " folder and checks the next level.",
+                    level2 + " folders appear under each " + level1 + " folder.");
+        } else {
+            writeRow(w, templateName, documentClass, "Tree view structure", "T-12",
+                    "User checks the tree structure; only one grouping level is configured.",
+                    "Only " + level1 + " level is configured; no Level-2 nodes.");
+        }
+
+        // Category: Tree view filtering
+        writeRow(w, templateName, documentClass, "Tree view filtering", "T-13",
+                "User clicks a " + level1 + " folder in the tree to filter the result set.",
+                "Only documents for the selected " + level1 + " value are displayed.");
+        if (level2 != null) {
+            writeRow(w, templateName, documentClass, "Tree view filtering", "T-14",
+                    "User clicks a " + level2 + " folder under " + level1 + " to filter further.",
+                    "Only documents for the selected " + level2 + " value are displayed.");
+        } else {
+            writeRow(w, templateName, documentClass, "Tree view filtering", "T-14",
+                    "User clicks a " + level1 + " folder in the tree to filter the result set.",
+                    "Only documents for the selected " + level1 + " value are displayed.");
+        }
+        writeRow(w, templateName, documentClass, "Tree view filtering", "T-15",
+                "User applies tree filters and compares the result count with the backend or expected count.",
+                "Displayed result count matches the filtered backend data.");
+
+        // Category: Preferences
+        writeRow(w, templateName, documentClass, "Preferences", "T-16",
+                "User opens the Preferences or options dialog from the search/results area.",
+                "Preferences popup opens successfully.");
+        writeRow(w, templateName, documentClass, "Preferences", "T-17",
+                "User changes the Max Records Per Results Page setting and runs a search.",
+                "Result limit changes based on the selected preference.");
+        writeRow(w, templateName, documentClass, "Preferences", "T-18",
+                "User turns off the Show Tree View option in preferences.",
+                "Tree View hides when the option is unchecked.");
+        writeRow(w, templateName, documentClass, "Preferences", "T-19",
+                "User sets the current search template as default and logs out and back in.",
+                "The selected template loads as the default search on next login.");
+
+        // Category: JSON & edge cases
+        writeRow(w, templateName, documentClass, "JSON & edge cases", "T-20",
+                "User uses a scenario where JSON config for tree view is missing or not loaded.",
+                "Tree View is not displayed; flat results are shown instead.");
+        writeRow(w, templateName, documentClass, "JSON & edge cases", "T-21",
+                "User triggers a scenario with invalid or malformed JSON config.",
+                "UI remains stable and any error is logged; no crash.");
+        writeRow(w, templateName, documentClass, "JSON & edge cases", "T-22",
+                "User runs a search that returns a large number of results.",
+                "Response time is acceptable and large result set is handled without timeout or failure.");
+    }
+
+    private static void writeRow(PrintWriter writer,
+                                String searchTemplate,
+                                String documentClass,
+                                String category,
+                                String testCaseType,
+                                String inputScenario,
+                                String expectedResult) {
+        writer.println(csv(
+                String.format("TC%05d", COUNTER.getAndIncrement()),
+                searchTemplate,
+                documentClass,
+                category,
+                testCaseType,
+                inputScenario,
+                expectedResult,
+                "",
+                "Not executed",
+                "",
+                ""
+        ));
+    }
+
+    private static String csv(String... values) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < values.length; i++) {
+            sb.append("\"")
+              .append(values[i] == null ? "" : values[i].replace("\"", "\"\""))
+              .append("\"");
+            if (i < values.length - 1) sb.append(",");
+        }
+        return sb.toString();
+    }
+}
