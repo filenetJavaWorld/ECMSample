@@ -1,1 +1,567 @@
-temp
+package com.wawa.extract;
+
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.wawa.extract.configuration.ExtractFileSplitterConfig;
+
+/**
+ * Splits large claim extract CSV files into smaller chunks.
+ * Each chunk contains a configurable number of claims (with all their document rows).
+ * Designed to handle files up to 500MB with streaming I/O.
+ */
+public class ExtractFileSplitterService {
+
+    private static final Logger logger = LogManager.getLogger(ExtractFileSplitterService.class);
+
+    private static final class ChunkStats {
+        final int chunkIndex;
+        final int rowCount;
+        final int claimCount;
+
+        ChunkStats(int chunkIndex, int rowCount, int claimCount) {
+            this.chunkIndex = chunkIndex;
+            this.rowCount = rowCount;
+            this.claimCount = claimCount;
+        }
+    }
+
+    public static void main(String[] args) {
+        logger.info("ExtractFileSplitter started");
+
+        try {
+            ExtractFileSplitterConfig config = ExtractFileSplitterConfig.getInstance();
+
+            Path inputDir = config.getInputDir();
+            if (!Files.exists(inputDir)) {
+                logger.warn("Input directory does not exist, creating: {}", inputDir);
+                Files.createDirectories(inputDir);
+            }
+
+            Path inprogressDir = config.getInprogressDir();
+            Path chunksDir = config.getChunksDir();
+            Path archiveDir = config.getArchiveDir();
+            ensureDirectories(inprogressDir, chunksDir, archiveDir);
+
+            int filesProcessed = 0;
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(inputDir, "*.csv")) {
+                for (Path inputFile : stream) {
+                    if (Files.isRegularFile(inputFile)) {
+                        processFile(inputFile, config);
+                        filesProcessed++;
+                    }
+                }
+            }
+
+            if (filesProcessed == 0) {
+                logger.info("No CSV files found in input directory: {}", inputDir);
+            } else {
+                logger.info("Completed. Processed {} file(s)", filesProcessed);
+            }
+
+        } catch (Exception e) {
+            logger.error("ExtractFileSplitter failed", e);
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static void ensureDirectories(Path... dirs) throws IOException {
+        for (Path dir : dirs) {
+            if (!Files.exists(dir)) {
+                Files.createDirectories(dir);
+                logger.info("Created directory: {}", dir);
+            }
+        }
+    }
+
+    private static void processFile(Path inputFile, ExtractFileSplitterConfig config) throws IOException {
+        String fileName = inputFile.getFileName().toString();
+        logger.info("Processing file: {}", fileName);
+
+        Path inprogressPath = config.getInprogressDir().resolve(fileName);
+        Files.move(inputFile, inprogressPath);
+        logger.info("Moved to inprogress: {}", inprogressPath);
+
+        try {
+            splitFile(inprogressPath, config);
+            Path archivePath = config.getArchiveDir().resolve(fileName);
+            Files.move(inprogressPath, archivePath);
+            logger.info("Moved to archive: {}", archivePath);
+        } catch (Exception e) {
+            logger.error("Failed to process file, moving back to input: {}", fileName, e);
+            Path backToInput = config.getInputDir().resolve(fileName);
+            Files.move(inprogressPath, backToInput);
+            throw new RuntimeException("Processing failed for " + fileName, e);
+        }
+    }
+
+    private static void splitFile(Path sourceFile, ExtractFileSplitterConfig config) throws IOException {
+        String delimiter = config.getCsvDelimiter();
+        String claimColumnName = config.getClaimColumnName();
+        int claimsPerFile = config.getClaimsPerFile();
+        int bufferSize = config.getReadBufferSize();
+        Path chunksDir = config.getChunksDir();
+
+        String baseName = getBaseName(sourceFile.getFileName().toString());
+        Path outputFolder = resolveOutputFolder(chunksDir, baseName);
+        Files.createDirectories(outputFolder);
+        String basePath = outputFolder.resolve(baseName).toString();
+
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(Files.newInputStream(sourceFile), StandardCharsets.UTF_8),
+                bufferSize)) {
+
+            String headerLine = reader.readLine();
+            if (headerLine == null) {
+                logger.warn("File is empty: {}", sourceFile);
+                return;
+            }
+
+            int claimColumnIndex = findClaimColumnIndex(headerLine, delimiter, claimColumnName);
+            if (claimColumnIndex < 0) {
+                throw new IllegalArgumentException("Claim column '" + claimColumnName + "' not found in header: " + headerLine);
+            }
+
+            Set<String> claimsInChunk = new HashSet<>();
+            Set<String> allParentClaims = new HashSet<>();
+            List<String> rowsInChunk = new ArrayList<>();
+            List<ChunkStats> chunkStatsList = new ArrayList<>();
+            int chunkIndex = 1;
+            long parentRowCount = 0;
+
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.trim().isEmpty()) {
+                    continue;
+                }
+
+                parentRowCount++;
+                String claimNumber = extractClaimNumber(line, delimiter, claimColumnIndex);
+                allParentClaims.add(claimNumber);
+                boolean isNewClaim = !claimsInChunk.contains(claimNumber);
+
+                if (isNewClaim && claimsInChunk.size() >= claimsPerFile) {
+                    int chunkClaims = claimsInChunk.size();
+                    int chunkRows = rowsInChunk.size();
+                    if (chunkClaims > claimsPerFile) {
+                        throw new IllegalStateException("Chunk " + chunkIndex + " exceeds configured limit: " + chunkClaims + " claims > " + claimsPerFile);
+                    }
+                    writeChunk(basePath, chunkIndex, headerLine, rowsInChunk, config);
+                    chunkStatsList.add(new ChunkStats(chunkIndex, chunkRows, chunkClaims));
+                    logger.info("Written chunk {} with {} claims, {} rows", chunkIndex, chunkClaims, chunkRows);
+
+                    claimsInChunk.clear();
+                    rowsInChunk.clear();
+                    chunkIndex++;
+                }
+
+                claimsInChunk.add(claimNumber);
+                rowsInChunk.add(line);
+            }
+
+            if (!rowsInChunk.isEmpty()) {
+                int chunkClaims = claimsInChunk.size();
+                int chunkRows = rowsInChunk.size();
+                if (chunkClaims > claimsPerFile) {
+                    throw new IllegalStateException("Chunk " + chunkIndex + " exceeds configured limit: " + chunkClaims + " claims > " + claimsPerFile);
+                }
+                writeChunk(basePath, chunkIndex, headerLine, rowsInChunk, config);
+                chunkStatsList.add(new ChunkStats(chunkIndex, chunkRows, chunkClaims));
+                logger.info("Written chunk {} with {} claims, {} rows", chunkIndex, chunkClaims, chunkRows);
+            }
+
+            int totalParentClaims = allParentClaims.size();
+            long totalChunkRows = chunkStatsList.stream().mapToLong(c -> c.rowCount).sum();
+            boolean rowCountMatch = (parentRowCount == totalChunkRows);
+
+            if (!rowCountMatch) {
+                throw new IllegalStateException(String.format("Row count mismatch: parent=%d, chunks total=%d", parentRowCount, totalChunkRows));
+            }
+
+            logAndPrintStatistics(sourceFile.getFileName().toString(), parentRowCount, totalParentClaims,
+                    chunkStatsList.size(), claimsPerFile, chunkStatsList, rowCountMatch, baseName, outputFolder.toString());
+        }
+    }
+
+    private static void logAndPrintStatistics(String fileName, long parentRowCount, int parentClaimCount,
+                                              int chunkFileCount, int claimsPerFile, List<ChunkStats> chunkStatsList,
+                                              boolean rowCountMatch, String baseName, String outputFolderPath) {
+        long totalChunkRows = chunkStatsList.stream().mapToLong(c -> c.rowCount).sum();
+        StringBuilder sb = new StringBuilder();
+        sb.append(System.lineSeparator());
+        sb.append("========== ExtractFileSplitter - Processing Statistics ==========").append(System.lineSeparator());
+        sb.append("Source File          : ").append(fileName).append(System.lineSeparator());
+        sb.append("Output Folder        : ").append(outputFolderPath).append(System.lineSeparator());
+        sb.append("Parent File Rows     : ").append(parentRowCount).append(" (excluding header)").append(System.lineSeparator());
+        sb.append("Parent File Claims   : ").append(parentClaimCount).append(System.lineSeparator());
+        sb.append("Chunk Files Created  : ").append(chunkFileCount).append(System.lineSeparator());
+        sb.append("Configured Max Claims: ").append(claimsPerFile).append(" per chunk").append(System.lineSeparator());
+        sb.append(System.lineSeparator()).append("Chunk Details:").append(System.lineSeparator());
+        for (ChunkStats cs : chunkStatsList) {
+            boolean withinLimit = cs.claimCount <= claimsPerFile;
+            sb.append("  ").append(baseName).append("_").append(cs.chunkIndex).append(".csv : ")
+                    .append(cs.rowCount).append(" rows, ").append(cs.claimCount).append(" claims")
+                    .append(withinLimit ? " [OK]" : " [EXCEEDED!]").append(System.lineSeparator());
+        }
+        sb.append(System.lineSeparator());
+        sb.append("Row Count Verification: Parent=").append(parentRowCount).append(", Chunks Sum=").append(totalChunkRows)
+                .append(" -> ").append(rowCountMatch ? "MATCH [OK]" : "MISMATCH [FAIL]").append(System.lineSeparator());
+        sb.append("=================================================================").append(System.lineSeparator());
+
+        String statsText = sb.toString();
+        logger.info(statsText);
+        System.out.println(statsText);
+    }
+
+    private static Path resolveOutputFolder(Path chunksDir, String baseName) {
+        Path targetFolder = chunksDir.resolve(baseName);
+        if (Files.exists(targetFolder) && Files.isDirectory(targetFolder)) {
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("MMddyyyy_HHmmss"));
+            String newFolderName = baseName + "_NEW_" + timestamp;
+            targetFolder = chunksDir.resolve(newFolderName);
+            logger.info("Folder {} already exists, using {}", baseName, newFolderName);
+        }
+        return targetFolder;
+    }
+
+    private static String getBaseName(String fileName) {
+        int lastDot = fileName.lastIndexOf('.');
+        return lastDot > 0 ? fileName.substring(0, lastDot) : fileName;
+    }
+
+    private static int findClaimColumnIndex(String headerLine, String delimiter, String claimColumnName) {
+        String[] headers = headerLine.split(Pattern.quote(delimiter), -1);
+        for (int i = 0; i < headers.length; i++) {
+            if (claimColumnName.equals(headers[i].trim())) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static String extractClaimNumber(String line, String delimiter, int claimColumnIndex) {
+        String[] parts = line.split(Pattern.quote(delimiter), -1);
+        if (claimColumnIndex < parts.length) {
+            return parts[claimColumnIndex].trim();
+        }
+        return "";
+    }
+
+    private static void writeChunk(String basePath, int chunkIndex, String headerLine,
+                                   List<String> rows, ExtractFileSplitterConfig config) throws IOException {
+        Path chunkPath = Paths.get(basePath + "_" + chunkIndex + ".csv");
+        try (BufferedWriter writer = Files.newBufferedWriter(chunkPath, StandardCharsets.UTF_8)) {
+            writer.write(headerLine);
+            writer.newLine();
+            for (String row : rows) {
+                writer.write(row);
+                writer.newLine();
+            }
+        }
+    }
+}
+
+package com.wawa.extract.configuration;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Properties;
+
+/**
+ * Loads and provides configuration for ExtractFileSplitter.
+ * Config file and log4j are expected under D:\Rameshwar\ExtractFileSplitter\config
+ */
+public class ExtractFileSplitterConfig {
+    private static ExtractFileSplitterConfig instance;
+    private final Properties properties;
+
+    private ExtractFileSplitterConfig() {
+        properties = new Properties();
+        String configPath = System.getProperty("config.file");
+
+        if (configPath == null) {
+            throw new RuntimeException("Missing system property: config.file. " +
+                "Example: -Dconfig.file=D:/Rameshwar/ExtractFileSplitter/config/ExtractFileSplitter.properties");
+        }
+
+        try (FileInputStream fis = new FileInputStream(configPath)) {
+            properties.load(fis);
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to load properties file: " + configPath, e);
+        }
+    }
+
+    public static ExtractFileSplitterConfig getInstance() {
+        if (instance == null) {
+            synchronized (ExtractFileSplitterConfig.class) {
+                if (instance == null) {
+                    instance = new ExtractFileSplitterConfig();
+                }
+            }
+        }
+        return instance;
+    }
+
+    public Path getInputDir() {
+        return Paths.get(properties.getProperty("splitter.input.dir", "D:/Rameshwar/ExtractFileSplitter/input"));
+    }
+
+    public Path getInprogressDir() {
+        return Paths.get(properties.getProperty("splitter.inprogress.dir", "D:/Rameshwar/ExtractFileSplitter/inprogress"));
+    }
+
+    public Path getChunksDir() {
+        return Paths.get(properties.getProperty("splitter.chunks.dir", "D:/Rameshwar/ExtractFileSplitter/chunks"));
+    }
+
+    public Path getArchiveDir() {
+        return Paths.get(properties.getProperty("splitter.archive.dir", "D:/Rameshwar/ExtractFileSplitter/archive"));
+    }
+
+    public int getClaimsPerFile() {
+        String val = properties.getProperty("splitter.claims.per.file", "1000");
+        return Integer.parseInt(val.trim());
+    }
+
+    public String getCsvDelimiter() {
+        return properties.getProperty("splitter.csv.delimiter", "|");
+    }
+
+    public String getClaimColumnName() {
+        return properties.getProperty("splitter.claim.column.name", "CLAIM_NUMBER");
+    }
+
+    public int getReadBufferSize() {
+        String val = properties.getProperty("splitter.read.buffer.size", "65536");
+        return Integer.parseInt(val.trim());
+    }
+}
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.wawa.extract</groupId>
+  <artifactId>ExtractFileSplitter</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+
+  <name>ExtractFileSplitter</name>
+  <!-- FIXME change it to the project's website -->
+  <url>http://www.example.com</url>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <maven.compiler.release>17</maven.compiler.release>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>5.11.0</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-api</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- Optionally: parameterized tests support -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-params</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-api</artifactId>
+      <version>2.20.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.logging.log4j</groupId>
+      <artifactId>log4j-core</artifactId>
+      <version>2.20.0</version>
+    </dependency>
+    <dependency>
+      <groupId>commons-io</groupId>
+      <artifactId>commons-io</artifactId>
+      <version>2.18.0</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <pluginManagement><!-- lock down plugins versions to avoid using Maven defaults (may be moved to parent pom) -->
+      <plugins>
+        <!-- clean lifecycle, see https://maven.apache.org/ref/current/maven-core/lifecycles.html#clean_Lifecycle -->
+        <plugin>
+          <artifactId>maven-clean-plugin</artifactId>
+          <version>3.4.0</version>
+        </plugin>
+        <!-- default lifecycle, jar packaging: see https://maven.apache.org/ref/current/maven-core/default-bindings.html#Plugin_bindings_for_jar_packaging -->
+        <plugin>
+          <artifactId>maven-resources-plugin</artifactId>
+          <version>3.3.1</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>3.13.0</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>3.3.0</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-jar-plugin</artifactId>
+          <version>3.4.2</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-install-plugin</artifactId>
+          <version>3.1.2</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-deploy-plugin</artifactId>
+          <version>3.1.2</version>
+        </plugin>
+        <!-- site lifecycle, see https://maven.apache.org/ref/current/maven-core/lifecycles.html#site_Lifecycle -->
+        <plugin>
+          <artifactId>maven-site-plugin</artifactId>
+          <version>3.12.1</version>
+        </plugin>
+        <plugin>
+          <artifactId>maven-project-info-reports-plugin</artifactId>
+          <version>3.6.1</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+    
+    <plugins>
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.1.0</version>
+        <configuration>
+          <mainClass>com.wawa.extract.ExtractFileSplitterService</mainClass>
+          <systemPropertyVariables>
+            <config.file>D:/Rameshwar/ExtractFileSplitter/config/ExtractFileSplitter.properties</config.file>
+            <log4j.configurationFile>file:///D:/Rameshwar/ExtractFileSplitter/config/log4j2.xml</log4j.configurationFile>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.2</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>com.wawa.extract.ExtractFileSplitterService</mainClass>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+
+
+
+
+# ===========================================================
+# ExtractFileSplitter - Configuration
+# ===========================================================
+# Purpose: Split large claim extract CSV files into smaller chunks
+# Each chunk contains a configurable number of claims (with all their documents)
+# ===========================================================
+
+# ===== DIRECTORY PATHS =====
+# Input directory - place source CSV files here
+splitter.input.dir=D:/Rameshwar/ExtractFileSplitter/content/input
+
+# In-progress directory - file is moved here when processing starts
+splitter.inprogress.dir=D:/Rameshwar/ExtractFileSplitter/content/inprogress
+
+# Chunks output directory - split chunk files are written here
+splitter.chunks.dir=D:/Rameshwar/ExtractFileSplitter/content/chunks
+
+# Archive directory - source file is moved here after successful processing
+splitter.archive.dir=D:/Rameshwar/ExtractFileSplitter/content/archive
+
+# ===== CHUNK CONFIGURATION =====
+# Number of claims per chunk file (each claim may have multiple document rows)
+splitter.claims.per.file=8
+
+# ===== CSV CONFIGURATION =====
+# Delimiter used in CSV (pipe character for ClaimCenter extract format)
+splitter.csv.delimiter=|
+
+# Column name that identifies the claim (for grouping documents)
+splitter.claim.column.name=CLAIM_NUMBER
+
+# ===== PERFORMANCE =====
+# Buffer size for reading (bytes) - larger for faster I/O on big files
+splitter.read.buffer.size=65536
+
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+    <Properties>
+        <Property name="LOG_DIR">D:/Rameshwar/ExtractFileSplitter/logs</Property>
+    </Properties>
+    <Appenders>
+        <!-- Console Appender -->
+        <Console name="ConsoleLogger" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{HH:mm:ss} [%t] %-5level %logger{36} - %msg%n"/>
+        </Console>
+        
+        <!-- Main Log File -->
+        <RollingFile name="FileLogger" fileName="${LOG_DIR}/ExtractFileSplitter.log"
+                     filePattern="${LOG_DIR}/ExtractFileSplitter-%d{yyyy-MM-dd}-%i.log">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss} [%t] %-5level %logger{36} - %msg%n"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1" modulate="true"/>
+                <SizeBasedTriggeringPolicy size="10 MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="10"/>
+        </RollingFile>
+    </Appenders>
+    
+    <Loggers>
+        <!-- Root logger -->
+        <Root level="info">
+            <AppenderRef ref="FileLogger"/>
+            <AppenderRef ref="ConsoleLogger"/>
+        </Root>
+    </Loggers>
+</Configuration>
+
+
