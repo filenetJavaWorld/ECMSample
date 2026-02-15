@@ -1,1 +1,167 @@
-test
+-- ============================================================================
+-- Stored Procedure: sp_IndexAndBatchClaimDocuments
+-- ============================================================================
+-- Purpose: Apply author-based batching logic and update documents for a single claim
+-- 
+-- Batching Logic: Group documents by author (alphabetical), max @setDocCount (25) per batch.
+--   - NULL/empty author treated as ''
+--   - Authors processed in alphabetical order (A-Z)
+--   - Each batch: one set, max 25 docs. If author has >25 docs, split into multiple batches
+--
+-- Input Parameters:
+--   @claimNumber: Claim number to process
+--   @ccExtractFileName: CC_Extract_file_Name to filter by
+--   @setDocCount: Maximum documents per batch (default: 25)
+--   @forceSingleSet: (Legacy - ignored) Author-based batching always uses multiple batches, one set each
+--   @batchIDPrefix: Prefix for batch ID (default: 'WW')
+--   @jobIDPrefix: Prefix for job ID (default: 'Migrate')
+--
+-- Output Parameters:
+--   @batchIDsCreated: Comma-separated list of batch IDs created
+--
+-- Filter Conditions (applied in stored procedure):
+--   - claimNumber = @claimNumber
+--   - CC_Extract_file_Name = @ccExtractFileName
+--   - claimID IS NOT NULL
+--   - gwDocumentID IS NOT NULL
+--   - isDataMerged = 1
+--   - contentFilePath IS NOT NULL
+--   - isIndexed = 0
+--   - isProcessed = 0
+--
+-- Example: Claim 1234 with 100 docs by author:
+--   20 docs testuser1 -> Batch1, 5 docs testuser2 -> Batch2, 20 docs testuser3 -> Batch3,
+--   20 docs testuser4 -> Batch4, 35 docs testuser5 -> Batch5 (20) + Batch6 (15)
+-- ============================================================================
+
+IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[sp_IndexAndBatchClaimDocuments]') AND type in (N'P', N'PC'))
+    DROP PROCEDURE [dbo].[sp_IndexAndBatchClaimDocuments]
+GO
+
+CREATE PROCEDURE [dbo].[sp_IndexAndBatchClaimDocuments]
+    @claimNumber NVARCHAR(100),
+    @ccExtractFileName NVARCHAR(500),
+    @setDocCount INT = 25,
+    @forceSingleSet BIT = 0,
+    @batchIDPrefix NVARCHAR(50) = 'WW',
+    @jobIDPrefix NVARCHAR(50) = 'Migrate',
+    @batchIDsCreated NVARCHAR(MAX) OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    DECLARE @batchID NVARCHAR(100);
+    DECLARE @jobID NVARCHAR(100);
+    DECLARE @batchNumber INT;
+    DECLARE @maxBatchNumber INT;
+    DECLARE @totalDocs INT;
+    
+    -- Temp table: documents with author-based batch assignment
+    CREATE TABLE #documents (
+        externalID NVARCHAR(100) PRIMARY KEY,
+        author NVARCHAR(500),
+        batchNumber INT,
+        batchDocCount INT,
+        setDocIndex INT,
+        batchID NVARCHAR(100),
+        jobID NVARCHAR(100)
+    );
+    
+    -- Step 1: Assign batch numbers using author-based grouping (alphabetical, max 25 per batch)
+    ;WITH source AS (
+        SELECT externalID, ISNULL(CAST(author AS NVARCHAR(500)), '') AS author
+        FROM CC_Extract_Staging
+        WHERE claimNumber = @claimNumber
+          AND CC_Extract_file_Name = @ccExtractFileName
+          AND claimID IS NOT NULL
+          AND gwDocumentID IS NOT NULL
+          AND isDataMerged = 1
+          AND contentFilePath IS NOT NULL
+          AND isIndexed = 0
+          AND isProcessed = 0
+    ),
+    ordered AS (
+        SELECT externalID, author,
+               ROW_NUMBER() OVER (PARTITION BY author ORDER BY externalID) AS rn_in_author
+        FROM source
+    ),
+    batched AS (
+        SELECT externalID, author,
+               CEILING(rn_in_author / CAST(@setDocCount AS FLOAT)) AS sub_batch
+        FROM ordered
+    ),
+    with_batch_meta AS (
+        SELECT externalID, author,
+               DENSE_RANK() OVER (ORDER BY author, sub_batch) AS batchNumber,
+               COUNT(*) OVER (PARTITION BY author, sub_batch) AS batchDocCount,
+               ROW_NUMBER() OVER (PARTITION BY author, sub_batch ORDER BY externalID) AS setDocIndex
+        FROM batched
+    )
+    INSERT INTO #documents (externalID, author, batchNumber, batchDocCount, setDocIndex)
+    SELECT externalID, author, batchNumber, batchDocCount, setDocIndex
+    FROM with_batch_meta;
+    
+    SELECT @totalDocs = COUNT(*) FROM #documents;
+    
+    IF @totalDocs = 0
+    BEGIN
+        SET @batchIDsCreated = '';
+        DROP TABLE #documents;
+        RETURN;
+    END
+    
+    -- Step 2: Generate unique batch IDs for each batch number
+    SELECT @maxBatchNumber = MAX(batchNumber) FROM #documents;
+    
+    DECLARE @batchIdsTable TABLE (batchNumber INT, batchID NVARCHAR(100), jobID NVARCHAR(100));
+    
+    SET @batchNumber = 1;
+    WHILE @batchNumber <= @maxBatchNumber
+    BEGIN
+        -- Single timestamp used for all batches; batch number suffix ensures uniqueness
+        SET @batchID = @batchIDPrefix + FORMAT(GETDATE(), 'yyyyMMddHHmmssfff') + RIGHT('000' + CAST(@batchNumber AS NVARCHAR(10)), 3);
+        SET @jobID = @jobIDPrefix + @batchID;
+        INSERT INTO @batchIdsTable VALUES (@batchNumber, @batchID, @jobID);
+        SET @batchNumber = @batchNumber + 1;
+    END
+    
+    -- Step 3: Update #documents with batchID and jobID
+    UPDATE d
+    SET d.batchID = b.batchID,
+        d.jobID = b.jobID
+    FROM #documents d
+    INNER JOIN @batchIdsTable b ON d.batchNumber = b.batchNumber;
+    
+    -- Step 4: Bulk UPDATE to actual table (setID = 1 for all, single set per batch)
+    UPDATE s
+    SET s.batchDocCount = d.batchDocCount,
+        s.batchID = d.batchID,
+        s.jobID = d.jobID,
+        s.setDocCount = d.batchDocCount,
+        s.setID = 1,
+        s.SetDocIndex = d.setDocIndex,
+        s.isIndexed = 1
+    FROM CC_Extract_Staging s
+    INNER JOIN #documents d ON s.externalID = d.externalID;
+    
+    -- Step 5: Return comma-separated batch IDs (in batch number order)
+    SELECT @batchIDsCreated = STRING_AGG(batchID, ',') WITHIN GROUP (ORDER BY batchNumber)
+    FROM @batchIdsTable;
+    
+    DROP TABLE #documents;
+    
+    RETURN @totalDocs;
+END
+GO
+
+-- ============================================================================
+-- Example Usage:
+-- ============================================================================
+-- DECLARE @batchIDs NVARCHAR(MAX);
+-- EXEC sp_IndexAndBatchClaimDocuments 
+--     @claimNumber = 'CLM-12345',
+--     @ccExtractFileName = 'Extract_File_001.csv',
+--     @setDocCount = 25,
+--     @batchIDsCreated = @batchIDs OUTPUT;
+-- SELECT @batchIDs AS BatchIDsCreated;
+-- ============================================================================
