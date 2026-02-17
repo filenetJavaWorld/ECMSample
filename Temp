@@ -1,1 +1,950 @@
-temp
+package com.wawanesa.ace.index;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Paths;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.wawanesa.ace.index.configuration.PropertiesConfigLoader;
+import com.wawanesa.ace.index.connection.ConnectionManager;
+import com.wawanesa.ace.index.constants.Constants;
+import com.wawanesa.ace.index.utils.GlobalProcessingReport;
+import com.wawanesa.ace.index.utils.Utils;
+
+/**
+ * CCDataIndexAndPackagingUtility - Packaging-Only Service
+ * 
+ * Purpose:
+ * - Fetch indexed, unprocessed documents from CC_Extract_Staging
+ * - Stream to packaging CSV files (pipe-delimited, max 50K rows per file)
+ * - Bulk update isProcessed = 1
+ * 
+ * Prerequisite: Indexing must be done externally (e.g. via sp_IndexAndBatchByExtractFiles)
+ * 
+ * Usage: java -jar CCDataIndexAndPackagingUtility.jar --packaging-only
+ */
+public class CCDataIndexPackagingService {
+
+    private static final Logger logger = LogManager.getLogger(CCDataIndexPackagingService.class);
+
+    public static void main(String[] args) {
+
+        logger.info("===== CCDataIndexAndPackagingUtility STARTED (Packaging-Only) =====");
+        
+        ConnectionManager connManager = null;
+        GlobalProcessingReport globalReport = new GlobalProcessingReport();
+
+        try {
+            // Load configuration
+            PropertiesConfigLoader config = PropertiesConfigLoader.getInstance();
+            
+            logger.info("=== CONFIGURATION ===");
+            logger.info("JRE Library Path: {}", System.getProperty("java.library.path"));
+            logger.info("Config File: {}", System.getProperty("config.file"));
+            logger.info("Log4j Config: {}", System.getProperty("log4j.configurationFile"));
+            
+            String basePath = config.getProperty("app.base_path");
+            logger.info("Base Path: {}", basePath);
+            
+            // STEP 1: Validate and create required folder structure
+            logger.info("=== STEP 1: Validating Folder Structure ===");
+            if (!validateAndCreateFolderStructure(basePath)) {
+                logger.error("Failed to validate/create folder structure. Exiting...");
+                return;
+            }
+            logger.info("Folder structure validated successfully");
+            
+            // Initialize connection manager
+            connManager = new ConnectionManager(config);
+            logger.info("Database connection pool initialized");
+            
+            // Initialize utility and run packaging
+            Utils utils = new Utils(config, connManager);
+            
+            logger.info("=== STEP 2: Packaging - Fetching Indexed Documents ===");
+            Utils.ProcessingResult result = utils.processPackagingOnly();
+            
+            globalReport.recordAllPendingResult(result);
+            
+            logger.info("=== PACKAGING COMPLETE ===");
+            logger.info("Total documents packaged: {}", result.totalDocuments);
+            logger.info("Total claims processed: {}", result.totalClaimNumbers);
+            logger.info("Total batches packaged: {}", result.batchIDsCreated.size());
+            logger.info("Packaging files created: {}", result.packagingFilesCreated);
+            logger.info("===== CCDataIndexAndPackagingUtility COMPLETED SUCCESSFULLY =====");
+
+        } catch (Exception e) {
+            logger.error("Critical error in CCDataIndexPackagingService", e);
+            e.printStackTrace();
+        } finally {
+            // Close connection pool
+            if (connManager != null) {
+                try {
+                    logger.info("Closing database connection pool...");
+                    connManager.close();
+                    logger.info("Database connection pool closed successfully");
+                } catch (Exception e) {
+                    logger.error("Error closing connection manager", e);
+                }
+            }
+            
+            // Write final summary report
+            try {
+                PropertiesConfigLoader config = PropertiesConfigLoader.getInstance();
+                String basePath = config.getProperty("app.base_path");
+                
+                logger.info("===== FINAL SUMMARY =====");
+                logger.info(globalReport.getSummary());
+                
+                File summaryReportsDir = new File(basePath, "SummaryReports");
+                if (!summaryReportsDir.exists()) {
+                    if (summaryReportsDir.mkdirs()) {
+                        logger.info("Created SummaryReports folder: {}", summaryReportsDir.getAbsolutePath());
+                    } else {
+                        logger.error("Failed to create SummaryReports folder: {}", summaryReportsDir.getAbsolutePath());
+                        throw new IOException("Cannot create SummaryReports folder");
+                    }
+                }
+                
+                globalReport.writeReportToFile(basePath);
+                logger.info("Summary report written to: {}", summaryReportsDir.getAbsolutePath());
+            } catch (Exception e) {
+                logger.error("Failed to write summary report", e);
+            }
+            
+            logger.info("Application terminated");
+        }
+    }
+
+    /**
+     * Validate and create required folder structure for packaging-only:
+     * - Packaging (output folder)
+     */
+    private static boolean validateAndCreateFolderStructure(String basePath) {
+        boolean success = true;
+        
+        String[] requiredFolders = {
+            Constants.PACKAGING_FOLDER
+        };
+        
+        for (String folderName : requiredFolders) {
+            File folder = new File(basePath, folderName);
+            
+            if (folder.exists() && folder.isDirectory()) {
+                logger.info("✓ Folder exists: {}", folder.getAbsolutePath());
+            } else {
+                if (folder.mkdirs()) {
+                    logger.info("✓ Folder created: {}", folder.getAbsolutePath());
+                } else {
+                    logger.error("✗ Failed to create folder: {}", folder.getAbsolutePath());
+                    success = false;
+                }
+            }
+        }
+        
+        return success;
+    }
+}
+
+
+
+package com.wawanesa.ace.index.constants;
+
+/**
+ * Constants for CCDataIndexAndPackagingUtility
+ * Defines folder structure and batch/set configuration
+ */
+public class Constants {
+
+    // ==================== FOLDER STRUCTURE ====================
+    // Root folders under base path (D:\Rameshwar\ClaimCenterDataMerge)
+    public static final String COMPLETED_SOURCE_FOLDER = "Completed";      // Source folder from CCDataMergeUtility
+    public static final String INDEXING_FOLDER         = "Indexing";       // Main indexing folder
+    public static final String PACKAGING_FOLDER        = "Packaging";      // Output folder for packaged CSV files
+    
+    // Sub-folders under Indexing folder
+    public static final String DATA_FOLDER             = "Data";           // CSV files being indexed
+    public static final String ARCHIVE_FOLDER          = "Archive";        // Archived CSV files after processing
+    public static final String COMPLETED_FOLDER        = "Completed";      // Success tracking files
+    public static final String FAILED_FOLDER           = "Failed";         // Failed tracking files
+    
+    // ==================== BATCH & SET CONFIGURATION ====================
+    // Maximum documents per set within a batch (configurable)
+    public static final int DEFAULT_SET_DOC_COUNT = 25;
+    
+    // Force single set per batch (configurable)
+    // true = Create multiple batches, each with 1 set (max 25 docs per batch)
+    // false = Create one batch per claim with multiple sets (max 25 docs per set)
+    public static final boolean DEFAULT_FORCE_SINGLE_SET = false;
+    
+    // Maximum rows per packaging CSV file (default when not in properties)
+    public static final int DEFAULT_MAX_PACKAGING_FILE_ROWS = 50000;
+    /** @deprecated Use app.packaging.max.rows.per.file in properties; alias for DEFAULT_MAX_PACKAGING_FILE_ROWS */
+    public static final int MAX_PACKAGING_FILE_ROWS = DEFAULT_MAX_PACKAGING_FILE_ROWS;
+    
+    // ==================== BATCH ID GENERATION ====================
+    // BatchID format: WW<yyyyMMddHHmmssfff> (e.g., WW20250119123456789)
+    // JobID format: Migrate<BatchID> (e.g., MigrateWW20250119123456789)
+    public static final String BATCH_ID_PREFIX = "WW";
+    
+    // JobID format: Migrate + BatchID (e.g., MigrateWW20250119123456789)
+    public static final String JOB_ID_PREFIX = "Migrate";
+    
+    // Packaging file name format: wawa_migration_docs_<yyyyMMddHHmmssSSSSS>.csv
+    public static final String PACKAGING_FILE_PREFIX = "wawa_migration_docs_";
+    public static final String PACKAGING_FILE_EXTENSION = ".csv";
+    
+    // ==================== FILE NAMING CONVENTIONS ====================
+    public static final String INDEX_SUCCESS_SUFFIX = "_INDEX_SUCCESS.csv";
+    public static final String INDEX_FAILED_SUFFIX  = "_INDEX_FAILED.csv";
+    
+    // ==================== CSV DELIMITERS ====================
+    public static final String PIPE_DELIMITER = "|";
+    
+}
+
+
+package com.wawanesa.ace.index.utils;
+
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.Duration;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+/**
+ * Global processing report for packaging-only mode
+ * Thread-safe implementation using atomic counters
+ */
+public class GlobalProcessingReport {
+    
+    private static final Logger logger = LogManager.getLogger(GlobalProcessingReport.class);
+    
+    // Claim-level counters
+    private final AtomicInteger totalClaimsProcessed = new AtomicInteger(0);
+    
+    // Document-level counters
+    private final AtomicLong totalDocumentsProcessed = new AtomicLong(0);
+    private final AtomicLong totalDocumentsIndexed = new AtomicLong(0);
+    private final AtomicLong totalDocumentsIndexFailed = new AtomicLong(0);
+    private final AtomicLong totalDocumentsPackaged = new AtomicLong(0);
+    
+    // Batch counters
+    private final AtomicInteger totalBatchesCreated = new AtomicInteger(0);
+    private final AtomicInteger totalPackagingFilesCreated = new AtomicInteger(0);
+    
+    
+    // Timing
+    private final LocalDateTime startTime;
+    private LocalDateTime endTime;
+    
+    public GlobalProcessingReport() {
+        this.startTime = LocalDateTime.now();
+    }
+    
+    /**
+     * Record result from packaging-only processing
+     */
+    public void recordAllPendingResult(Utils.ProcessingResult result) {
+        // In "all pending" mode, there's no CSV file input
+        // We just record the document/claim-level statistics
+        totalClaimsProcessed.addAndGet(result.totalClaimNumbers);
+        totalDocumentsProcessed.addAndGet(result.totalDocuments);
+        totalDocumentsIndexed.addAndGet(result.indexedSuccessCount);
+        totalDocumentsIndexFailed.addAndGet(result.indexedFailureCount);
+        totalBatchesCreated.addAndGet(result.batchIDsCreated.size());
+        totalPackagingFilesCreated.addAndGet(result.packagingFilesCreated);
+        
+        logger.info("Packaging completed | Claims={}, Docs={}, Batches={}, PkgFiles={}", 
+                   result.totalClaimNumbers, result.totalDocuments, 
+                   result.batchIDsCreated.size(), result.packagingFilesCreated);
+    }
+    
+    /**
+     * Log current progress
+     */
+    public void logProgress() {
+        Duration elapsed = Duration.between(startTime, LocalDateTime.now());
+        long elapsedMinutes = elapsed.toMinutes();
+        long elapsedSeconds = elapsed.getSeconds() % 60;
+        
+        logger.info("========== PROGRESS REPORT ==========");
+        logger.info("Elapsed Time: {} min {} sec", elapsedMinutes, elapsedSeconds);
+        logger.info("Claims: Processed={}", totalClaimsProcessed.get());
+        logger.info("Documents: Processed={}, Indexed={}, Failed={}", 
+                   totalDocumentsProcessed.get(), totalDocumentsIndexed.get(), totalDocumentsIndexFailed.get());
+        logger.info("Batches: Created={}, Packaging Files={}", 
+                   totalBatchesCreated.get(), totalPackagingFilesCreated.get());
+        
+        // Log memory statistics
+        MemoryMonitor.logMemoryStats();
+        
+        logger.info("=====================================");
+    }
+    
+    /**
+     * Get summary as string
+     */
+    public String getSummary() {
+        markCompleted();
+        
+        Duration totalDuration = Duration.between(startTime, endTime);
+        long minutes = totalDuration.toMinutes();
+        long seconds = totalDuration.getSeconds() % 60;
+        
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n========== FINAL SUMMARY ==========\n");
+        sb.append(String.format("Start Time: %s\n", startTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))));
+        sb.append(String.format("End Time: %s\n", endTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))));
+        sb.append(String.format("Total Duration: %d min %d sec\n", minutes, seconds));
+        sb.append("\n--- Claim Statistics ---\n");
+        sb.append(String.format("Total Claims Processed: %d\n", totalClaimsProcessed.get()));
+        sb.append("\n--- Document Statistics ---\n");
+        sb.append(String.format("Total Documents Processed: %d\n", totalDocumentsProcessed.get()));
+        sb.append(String.format("Total Documents Indexed: %d\n", totalDocumentsIndexed.get()));
+        sb.append(String.format("Total Documents Index Failed: %d\n", totalDocumentsIndexFailed.get()));
+        sb.append("\n--- Batch & Packaging Statistics ---\n");
+        sb.append(String.format("Total Batches Created: %d\n", totalBatchesCreated.get()));
+        sb.append(String.format("Total Packaging Files Created: %d\n", totalPackagingFilesCreated.get()));
+        
+        // Calculate throughput
+        if (totalDuration.getSeconds() > 0) {
+            long docsPerSecond = totalDocumentsProcessed.get() / totalDuration.getSeconds();
+            long docsPerMinute = totalDocumentsProcessed.get() / Math.max(1, totalDuration.toMinutes());
+            sb.append("\n--- Performance ---\n");
+            sb.append(String.format("Throughput: %d docs/sec, %d docs/min\n", docsPerSecond, docsPerMinute));
+        }
+        
+        sb.append("===================================\n");
+        return sb.toString();
+    }
+    
+    /**
+     * Mark processing as completed
+     */
+    public void markCompleted() {
+        if (this.endTime == null) {
+            this.endTime = LocalDateTime.now();
+        }
+    }
+    
+    /**
+     * Write final report to CSV file
+     */
+    public void writeReportToFile(String basePath) throws IOException {
+        markCompleted();
+        
+        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        String fileName = String.format("CCDataIndexPackaging_Summary_Report_%s.csv", timestamp);
+        Path reportPath = Paths.get(basePath, "SummaryReports", fileName);
+        
+        try (BufferedWriter writer = new BufferedWriter(new FileWriter(reportPath.toFile()))) {
+            // Write header
+            writer.write("Metric,Value");
+            writer.newLine();
+            
+            // Write timing information
+            writer.write(String.format("Start Time,%s", startTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))));
+            writer.newLine();
+            writer.write(String.format("End Time,%s", endTime.format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))));
+            writer.newLine();
+            
+            Duration totalDuration = Duration.between(startTime, endTime);
+            writer.write(String.format("Total Duration (minutes),%d", totalDuration.toMinutes()));
+            writer.newLine();
+            writer.write(String.format("Total Duration (seconds),%d", totalDuration.getSeconds()));
+            writer.newLine();
+            
+            // Write claim statistics
+            writer.newLine();
+            writer.write("--- Claim Statistics ---,");
+            writer.newLine();
+            writer.write(String.format("Total Claims Processed,%d", totalClaimsProcessed.get()));
+            writer.newLine();
+            
+            // Write document statistics
+            writer.newLine();
+            writer.write("--- Document Statistics ---,");
+            writer.newLine();
+            writer.write(String.format("Total Documents Processed,%d", totalDocumentsProcessed.get()));
+            writer.newLine();
+            writer.write(String.format("Total Documents Indexed,%d", totalDocumentsIndexed.get()));
+            writer.newLine();
+            writer.write(String.format("Total Documents Index Failed,%d", totalDocumentsIndexFailed.get()));
+            writer.newLine();
+            
+            // Write batch statistics
+            writer.newLine();
+            writer.write("--- Batch & Packaging Statistics ---,");
+            writer.newLine();
+            writer.write(String.format("Total Batches Created,%d", totalBatchesCreated.get()));
+            writer.newLine();
+            writer.write(String.format("Total Packaging Files Created,%d", totalPackagingFilesCreated.get()));
+            writer.newLine();
+            
+            // Write performance metrics
+            if (totalDuration.getSeconds() > 0) {
+                long docsPerSecond = totalDocumentsProcessed.get() / totalDuration.getSeconds();
+                long docsPerMinute = totalDocumentsProcessed.get() / Math.max(1, totalDuration.toMinutes());
+                
+                writer.newLine();
+                writer.write("--- Performance Metrics ---,");
+                writer.newLine();
+                writer.write(String.format("Documents Per Second,%d", docsPerSecond));
+                writer.newLine();
+                writer.write(String.format("Documents Per Minute,%d", docsPerMinute));
+                writer.newLine();
+            }
+            
+            logger.info("Summary report written to: {}", reportPath);
+        }
+    }
+    
+}
+
+package com.wawanesa.ace.index.utils;
+
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.wawanesa.ace.index.configuration.PropertiesConfigLoader;
+import com.wawanesa.ace.index.connection.ConnectionManager;
+import com.wawanesa.ace.index.constants.Constants;
+import com.wawanesa.ace.index.model.ClaimCenterDocumentDTO;
+
+/**
+ * Utility class for CCDataIndexAndPackagingUtility (Packaging-Only Mode)
+ * 
+ * Fetches indexed, unprocessed documents from CC_Extract_Staging, streams to CSV files,
+ * and bulk updates isProcessed = 1.
+ */
+public class Utils {
+    
+    private static final Logger logger = LogManager.getLogger(Utils.class);
+    
+    private final PropertiesConfigLoader config;
+    private final ConnectionManager connectionManager;
+    private final String basePath;
+    private final String dbTableName;
+    private final boolean canSetDocTitleAsContentFileNameIfNull;
+    private final boolean setGwDocumentIDAsEmpty;
+    private final int maxRowsPerPackagingFile;
+    
+    private final String selectPackagingBulkQuery;
+    
+    /**
+     * Constructor
+     */
+    public Utils(PropertiesConfigLoader config, ConnectionManager connectionManager) {
+        this.config = config;
+        this.connectionManager = connectionManager;
+        this.basePath = config.getProperty("app.base_path");
+        this.dbTableName = config.getProperty("db.staging.claimcenterdbtable");
+        
+        String canSetDocTitleStr = config.getProperty("app.canSetDocTitleAsContentFileNameIfNULL");
+        this.canSetDocTitleAsContentFileNameIfNull = (canSetDocTitleStr != null) ? 
+            Boolean.parseBoolean(canSetDocTitleStr) : false;
+        
+        String setGwDocIdEmptyStr = config.getProperty("app.setgwDocumentIDAsEmpty");
+        this.setGwDocumentIDAsEmpty = (setGwDocIdEmptyStr != null) ? 
+            Boolean.parseBoolean(setGwDocIdEmptyStr) : false;
+        
+        String maxRowsStr = config.getProperty("app.packaging.max.rows.per.file");
+        this.maxRowsPerPackagingFile = (maxRowsStr != null) ? 
+            Integer.parseInt(maxRowsStr) : Constants.DEFAULT_MAX_PACKAGING_FILE_ROWS;
+        
+        String queryTemplate = config.getProperty("db.query.select.packaging.bulk");
+        String extractFilesFilter = buildExtractFilesFilter(config.getProperty("app.extract.file.names"));
+        if (queryTemplate != null) {
+            this.selectPackagingBulkQuery = queryTemplate
+                .replace("%TABLE_NAME%", dbTableName)
+                .replace("%EXTRACT_FILES_FILTER%", extractFilesFilter);
+        } else {
+            this.selectPackagingBulkQuery = buildDefaultPackagingBulkQuery(extractFilesFilter);
+        }
+        
+        logger.info("Utils initialized (packaging-only) | canSetDocTitleAsContentFileNameIfNull={}, setGwDocumentIDAsEmpty={}, maxRowsPerFile={}, extractFiles={}", 
+            canSetDocTitleAsContentFileNameIfNull, setGwDocumentIDAsEmpty, maxRowsPerPackagingFile,
+            config.getProperty("app.extract.file.names"));
+    }
+    
+    /**
+     * Build extract files filter for WHERE clause.
+     * When app.extract.file.names is set (comma-separated), returns: AND CC_Extract_file_Name IN ('f1.csv','f2.csv')
+     * When empty/not set, returns empty string (no filter - process all).
+     */
+    private String buildExtractFilesFilter(String extractFileNamesProp) {
+        if (extractFileNamesProp == null || extractFileNamesProp.trim().isEmpty()) {
+            return "";
+        }
+        List<String> files = Arrays.stream(extractFileNamesProp.split(","))
+            .map(String::trim)
+            .filter(s -> !s.isEmpty())
+            .collect(Collectors.toList());
+        if (files.isEmpty()) {
+            return "";
+        }
+        String inList = files.stream()
+            .map(f -> "'" + f.replace("'", "''") + "'")
+            .collect(Collectors.joining(","));
+        return "AND CC_Extract_file_Name IN (" + inList + ")";
+    }
+    
+    /**
+     * Fallback: Build packaging bulk query when not in properties
+     */
+    private String buildDefaultPackagingBulkQuery(String extractFilesFilter) {
+        return "SELECT externalID, claimNumber, CAST(claimID AS VARCHAR(50)) AS claimID, gwDocumentID, gwDocExternalID," +
+            " Name AS documentTitle, documentType, documentSubtype, author, documentDescription, policyNumber," +
+            " doNotCreateActivity, inputMethod, mimeType, OrigDateCreated, sensitive, contentFilePath," +
+            " contentRetrievalName, contentType, batchDocCount, batchID, jobID, setDocCount, setID, SetDocIndex," +
+            " CC_Extract_file_Name FROM " + dbTableName +
+            " WHERE claimID IS NOT NULL AND gwDocumentID IS NOT NULL AND isDataMerged = 1 AND contentFilePath IS NOT NULL" +
+            " AND isIndexed = 1 AND isProcessed = 0 " + extractFilesFilter +
+            " ORDER BY claimNumber, CC_Extract_file_Name, batchID, setID, SetDocIndex";
+    }
+    
+    /**
+     * Inner class to track processing results
+     */
+    public static class ProcessingResult {
+        public int totalClaimNumbers = 0;
+        public int totalDocuments = 0;
+        public int indexedSuccessCount = 0;
+        public int indexedFailureCount = 0;
+        public int packagingFilesCreated = 0;
+        public Set<String> batchIDsCreated = new LinkedHashSet<>();
+    }
+    
+    /**
+     * PACKAGING-ONLY: Single bulk query + stream-to-file. No per-claim/per-batch round-trips.
+     * Assumes indexing has already been done externally (e.g. sp_IndexAndBatchByExtractFiles).
+     */
+    public ProcessingResult processPackagingOnly() throws SQLException, IOException {
+        ProcessingResult result = new ProcessingResult();
+        
+        logger.info("===== PACKAGING-ONLY MODE (Bulk Fetch + Stream) =====");
+        logger.info("Executing bulk packaging query (isIndexed=1, isProcessed=0)...");
+        
+        Set<String> packagedBatchIDs = new LinkedHashSet<>();
+        Set<String> claimKeys = new LinkedHashSet<>();
+        int docCount = 0;
+        int fileCount = 0;
+        
+        Path packagingDir = Paths.get(basePath, Constants.PACKAGING_FOLDER);
+        BufferedWriter writer = null;
+        int rowCount = 0;
+        String currentFileName = null;
+        
+        try (Connection conn = connectionManager.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(selectPackagingBulkQuery)) {
+            pstmt.setFetchSize(10000);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    if (writer == null || rowCount >= maxRowsPerPackagingFile) {
+                        if (writer != null) {
+                            writer.close();
+                            logger.info("Completed package file {} ({}): wrote {} documents (total: {} docs, {} claims, {} batches)",
+                                fileCount, currentFileName, rowCount, docCount, claimKeys.size(), packagedBatchIDs.size());
+                        }
+                        fileCount++;
+                        rowCount = 0;
+                        currentFileName = Constants.PACKAGING_FILE_PREFIX + generateTimestamp() + 
+                            Constants.PACKAGING_FILE_EXTENSION;
+                        Path filePath = packagingDir.resolve(currentFileName);
+                        writer = new BufferedWriter(new FileWriter(filePath.toFile()));
+                        writer.write(ClaimCenterDocumentDTO.getPackagingCSVHeader());
+                        writer.newLine();
+                        logger.info("Writing package file {}: {}", fileCount, currentFileName);
+                    }
+                
+                    ClaimCenterDocumentDTO dto = mapResultSetToPackagingDTO(rs);
+                    
+                    // Apply config overrides before writing
+                    if (setGwDocumentIDAsEmpty) {
+                        dto.setGwDocumentID("");
+                    }
+                    if (canSetDocTitleAsContentFileNameIfNull && 
+                        (dto.getDocumentTitle() == null || dto.getDocumentTitle().trim().isEmpty())) {
+                        String contentFileName = dto.getContentRetrievalName();
+                        if (contentFileName != null && !contentFileName.trim().isEmpty()) {
+                            dto.setDocumentTitle(removeFileExtension(contentFileName));
+                        }
+                    }
+                    
+                    writer.write(dto.toPackagingCSVLine());
+                    writer.newLine();
+                    rowCount++;
+                    docCount++;
+                    
+                    String cn = dto.getClaimNumber();
+                    String fn = dto.getCcExtractFileName();
+                    if (cn != null && fn != null) {
+                        claimKeys.add(cn + "|" + fn);
+                    }
+                
+                    String batchID = dto.getBatchID();
+                    if (batchID != null && !batchID.isEmpty()) {
+                        packagedBatchIDs.add(batchID);
+                        result.batchIDsCreated.add(batchID);
+                    }
+                
+                    if (docCount % 100000 == 0) {
+                        logger.info("Progress: fetched and wrote {} documents | {} claims | {} batches | file {}/in progress",
+                            docCount, claimKeys.size(), packagedBatchIDs.size(), fileCount);
+                    }
+                }
+            }
+        } finally {
+            if (writer != null) {
+                writer.close();
+                logger.info("Completed package file {} ({}): wrote {} documents (total: {} docs, {} claims, {} batches)",
+                    fileCount, currentFileName, rowCount, docCount, claimKeys.size(), packagedBatchIDs.size());
+            }
+        }
+        
+        result.totalDocuments = docCount;
+        result.packagingFilesCreated = fileCount;
+        result.totalClaimNumbers = claimKeys.size();
+        
+        logger.info("===== PACKAGING COMPLETE =====");
+        logger.info("Fetched and wrote: {} documents from {} claims across {} batches into {} package file(s)", 
+            docCount, claimKeys.size(), packagedBatchIDs.size(), fileCount);
+        if (!packagedBatchIDs.isEmpty()) {
+            logger.info("Updating isProcessed=1 for {} batches...", packagedBatchIDs.size());
+            bulkUpdateProcessedFlag(new ArrayList<>(packagedBatchIDs));
+        } else {
+            logger.info("No batches to update (no documents processed)");
+        }
+        
+        return result;
+    }
+    
+    /** Map ResultSet row to ClaimCenterDocumentDTO for packaging */
+    private ClaimCenterDocumentDTO mapResultSetToPackagingDTO(ResultSet rs) throws SQLException {
+        ClaimCenterDocumentDTO dto = new ClaimCenterDocumentDTO();
+        dto.setExternalID(rs.getString("externalID"));
+        dto.setClaimNumber(rs.getString("claimNumber"));
+        dto.setClaimID(rs.getString("claimID"));
+        dto.setGwDocumentID(rs.getString("gwDocumentID"));
+        dto.setGwDocExternalID(rs.getString("gwDocExternalID"));
+        dto.setCcExtractFileName(rs.getString("CC_Extract_file_Name"));
+        dto.setBatchDocCount(rs.getInt("batchDocCount"));
+        dto.setBatchID(rs.getString("batchID"));
+        dto.setJobID(rs.getString("jobID"));
+        dto.setSetDocCount(rs.getInt("setDocCount"));
+        dto.setSetID(rs.getInt("setID"));
+        dto.setSetDocIndex(rs.getInt("SetDocIndex"));
+        dto.setDocumentTitle(rs.getString("documentTitle"));
+        dto.setDocumentType(rs.getString("documentType"));
+        dto.setDocumentSubtype(rs.getString("documentSubtype"));
+        dto.setAuthor(rs.getString("author"));
+        dto.setDocumentDescription(rs.getString("documentDescription"));
+        dto.setPolicyNumber(rs.getString("policyNumber"));
+        dto.setDoNotCreateActivity(rs.getBoolean("doNotCreateActivity") ? "true" : "false");
+        dto.setInputMethod(rs.getString("inputMethod"));
+        dto.setMimeType(rs.getString("mimeType"));
+        dto.setOrigDateCreated(rs.getString("OrigDateCreated"));
+        dto.setSensitive(rs.getBoolean("sensitive") ? "true" : "false");
+        dto.setContentFilePath(rs.getString("contentFilePath"));
+        dto.setContentRetrievalName(rs.getString("contentRetrievalName"));
+        dto.setContentType(rs.getString("contentType"));
+        dto.setAmount("");
+        dto.setClaimant("");
+        dto.setCoverage("");
+        dto.setCustomerID("");
+        dto.setDuplicate("");
+        dto.setExposureID("");
+        dto.setHidden("");
+        dto.setInsuredName("");
+        dto.setPrimaryMembershipNumber("");
+        dto.setReviewed("");
+        return dto;
+    }
+    
+    /**
+     * Bulk update isProcessed=1 for all packaged batchIDs. Logs progress.
+     */
+    private void bulkUpdateProcessedFlag(List<String> batchIDs) throws SQLException {
+        if (batchIDs == null || batchIDs.isEmpty()) return;
+        
+        logger.info("Bulk update: marking isProcessed=1 for {} batch IDs (chunked by 1000)...", batchIDs.size());
+        
+        Date currentDate = new Date();
+        java.sql.Timestamp timestamp = new java.sql.Timestamp(currentDate.getTime());
+        
+        final int CHUNK_SIZE = 1000;
+        int totalChunks = (batchIDs.size() + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        int totalUpdated = 0;
+        
+        try (Connection conn = connectionManager.getConnection()) {
+            for (int chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+                int from = chunkIndex * CHUNK_SIZE;
+                int to = Math.min(from + CHUNK_SIZE, batchIDs.size());
+                List<String> chunk = batchIDs.subList(from, to);
+                
+                StringBuilder placeholders = new StringBuilder();
+                for (int i = 0; i < chunk.size(); i++) {
+                    if (i > 0) placeholders.append(",");
+                    placeholders.append("?");
+                }
+                
+                String updateSql = "UPDATE " + dbTableName + " SET isProcessed = 1, DateProcessed = ? " +
+                    "WHERE batchID IN (" + placeholders + ") AND isIndexed = 1";
+                
+                try (PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
+                    pstmt.setTimestamp(1, timestamp);
+                    for (int i = 0; i < chunk.size(); i++) {
+                        pstmt.setString(i + 2, chunk.get(i));
+                    }
+                    int updated = pstmt.executeUpdate();
+                    totalUpdated += updated;
+                }
+                
+                conn.commit();
+                
+                int chunkNum = chunkIndex + 1;
+                if (chunkNum % 10 == 0 || chunkNum == totalChunks) {
+                    logger.info("Bulk update: {}/{} chunks ({} rows)", chunkNum, totalChunks, totalUpdated);
+                }
+            }
+        }
+        
+        logger.info("Bulk update complete: {} documents across {} batches",
+            totalUpdated, batchIDs.size());
+    }
+    
+    private String generateTimestamp() {
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMddHHmmssSSSSS");
+        return sdf.format(new Date());
+    }
+    
+    private String removeFileExtension(String fileName) {
+        if (fileName == null || fileName.isEmpty()) return fileName;
+        int lastDotIndex = fileName.lastIndexOf('.');
+        if (lastDotIndex > 0) return fileName.substring(0, lastDotIndex);
+        return fileName;
+    }
+}
+
+
+
+-- ============================================================================
+-- Stored Procedure: sp_IndexAndBatchByExtractFiles
+-- ============================================================================
+-- Purpose: Index and batch all pending documents for claims from specified extract files.
+--          Calls sp_IndexAndBatchClaimDocuments for each claim (author-based batching).
+--
+-- Input Parameters:
+--   @extractFileNames: Comma-separated list of CC_Extract_file_Name values
+--                      Example: 'file1.csv,file2.csv,file3.csv'
+--   @setDocCount: Maximum documents per batch (default: 25)
+--   @batchIDPrefix: Prefix for batch ID (default: 'WW')
+--   @jobIDPrefix: Prefix for job ID (default: 'Migrate')
+--
+-- Output Parameters:
+--   @claimsProcessed: Total number of claim groups processed
+--   @batchesCreated: Total number of batches created
+--   @documentsProcessed: Total number of documents indexed
+--
+-- Usage:
+--   EXEC sp_IndexAndBatchByExtractFiles 
+--       @extractFileNames = 'extract1.csv,extract2.csv',
+--       @claimsProcessed = @claims OUTPUT,
+--       @batchesCreated = @batches OUTPUT,
+--       @documentsProcessed = @docs OUTPUT;
+-- ============================================================================
+
+IF EXISTS (SELECT * FROM sys.objects WHERE object_id = OBJECT_ID(N'[dbo].[sp_IndexAndBatchByExtractFiles]') AND type in (N'P', N'PC'))
+    DROP PROCEDURE [dbo].[sp_IndexAndBatchByExtractFiles]
+GO
+
+CREATE PROCEDURE [dbo].[sp_IndexAndBatchByExtractFiles]
+    @extractFileNames NVARCHAR(MAX),
+    @setDocCount INT = 25,
+    @batchIDPrefix NVARCHAR(50) = 'WW',
+    @jobIDPrefix NVARCHAR(50) = 'Migrate',
+    @claimsProcessed INT = 0 OUTPUT,
+    @batchesCreated INT = 0 OUTPUT,
+    @documentsProcessed INT = 0 OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    
+    SET @claimsProcessed = 0;
+    SET @batchesCreated = 0;
+    SET @documentsProcessed = 0;
+    
+    -- Parse comma-separated extract file names into table (trim whitespace)
+    DECLARE @extractFiles TABLE (fileName NVARCHAR(500) PRIMARY KEY);
+    INSERT INTO @extractFiles (fileName)
+    SELECT LTRIM(RTRIM(value))
+    FROM STRING_SPLIT(@extractFileNames, ',')
+    WHERE LTRIM(RTRIM(value)) <> '';
+    
+    IF NOT EXISTS (SELECT 1 FROM @extractFiles)
+    BEGIN
+        RETURN;
+    END
+    
+    -- Get distinct claim groups (claimNumber, CC_Extract_file_Name) to process
+    DECLARE @claimGroups TABLE (
+        claimNumber NVARCHAR(100),
+        ccExtractFileName NVARCHAR(500),
+        rowNum INT IDENTITY(1,1)
+    );
+    
+    INSERT INTO @claimGroups (claimNumber, ccExtractFileName)
+    SELECT DISTINCT s.claimNumber, s.CC_Extract_file_Name
+    FROM CC_Extract_Staging s
+    INNER JOIN @extractFiles f ON s.CC_Extract_file_Name = f.fileName
+    WHERE s.claimID IS NOT NULL
+      AND s.gwDocumentID IS NOT NULL
+      AND s.isDataMerged = 1
+      AND s.contentFilePath IS NOT NULL
+      AND s.isIndexed = 0
+      AND s.isProcessed = 0
+    ORDER BY s.CC_Extract_file_Name, s.claimNumber;
+    
+    DECLARE @totalClaims INT = (SELECT COUNT(*) FROM @claimGroups);
+    
+    IF @totalClaims = 0
+    BEGIN
+        RETURN;
+    END
+    
+    -- Process each claim by calling sp_IndexAndBatchClaimDocuments
+    DECLARE @claimNumber NVARCHAR(100);
+    DECLARE @ccExtractFileName NVARCHAR(500);
+    DECLARE @batchIDsCreated NVARCHAR(MAX);
+    DECLARE @docsForClaim INT;
+    DECLARE @batchCount INT;
+    DECLARE @i INT = 1;
+    
+    WHILE @i <= @totalClaims
+    BEGIN
+        SELECT @claimNumber = claimNumber, @ccExtractFileName = ccExtractFileName
+        FROM @claimGroups WHERE rowNum = @i;
+        
+        SET @batchIDsCreated = NULL;
+        
+        EXEC @docsForClaim = sp_IndexAndBatchClaimDocuments
+            @claimNumber = @claimNumber,
+            @ccExtractFileName = @ccExtractFileName,
+            @setDocCount = @setDocCount,
+            @forceSingleSet = 0,
+            @batchIDPrefix = @batchIDPrefix,
+            @jobIDPrefix = @jobIDPrefix,
+            @batchIDsCreated = @batchIDsCreated OUTPUT;
+        
+        -- Count batches from comma-separated list
+        SET @batchCount = CASE 
+            WHEN @batchIDsCreated IS NULL OR LTRIM(RTRIM(@batchIDsCreated)) = '' THEN 0
+            ELSE LEN(@batchIDsCreated) - LEN(REPLACE(@batchIDsCreated, ',', '')) + 1
+        END;
+        
+        SET @claimsProcessed = @claimsProcessed + 1;
+        SET @batchesCreated = @batchesCreated + @batchCount;
+        SET @documentsProcessed = @documentsProcessed + ISNULL(@docsForClaim, 0);
+        
+        SET @i = @i + 1;
+    END
+END
+GO
+
+-- ============================================================================
+-- Example Usage:
+-- ============================================================================
+-- DECLARE @claims INT, @batches INT, @docs INT;
+-- EXEC sp_IndexAndBatchByExtractFiles 
+--     @extractFileNames = 'extract_001.csv,extract_002.csv',
+--     @setDocCount = 25,
+--     @claimsProcessed = @claims OUTPUT,
+--     @batchesCreated = @batches OUTPUT,
+--     @documentsProcessed = @docs OUTPUT;
+-- SELECT @claims AS ClaimsProcessed, @batches AS BatchesCreated, @docs AS DocumentsProcessed;
+-- ============================================================================
+
+
+
+
+
+
+
+
+
+
+
+# ===========================================================
+# CCDataIndexAndPackagingUtility - Packaging-Only Configuration
+# ===========================================================
+# Last Updated: 2025-02-14
+# Packaging-only mode: Single-threaded bulk fetch + stream to CSV + bulk update
+# ===========================================================
+
+# ===== APPLICATION SETTINGS =====
+# Base path for output folders (Packaging, SummaryReports)
+app.base_path=D:/Rameshwar/ClaimCenterDataMerge/
+
+# ===== DOCUMENT OUTPUT CONFIGURATION =====
+# If documentTitle (Name) is null/empty, set it from contentRetrievalName (without extension)
+app.canSetDocTitleAsContentFileNameIfNULL=false
+
+# Set gwDocumentID as empty during packaging (if needed)
+app.setgwDocumentIDAsEmpty=false
+
+# ===== DATABASE SETTINGS =====
+db.serverName=RAMESHWAR\SQLEXPRESS
+db.port=1433
+db.dbName=Wawa_DMS_Conversion_UAT
+
+# Database connection pool size
+# Packaging-only uses 1-2 connections; 5-10 is sufficient
+db.pool.size=10
+
+# Target table for packaging operations
+db.staging.claimcenterdbtable=Wawa_DMS_Conversion_UAT.[dbo].[CC_Extract_Staging]
+
+# ===== PACKAGING FILE CONFIGURATION =====
+# Maximum rows per packaging CSV file (max 50K recommended for migration)
+app.packaging.max.rows.per.file=50000
+
+# Extract file names - Comma-separated list of CC_Extract_file_Name values
+# Must match the extract files used when running sp_IndexAndBatchByExtractFiles
+# Example: extract1.csv,extract2.csv,extract3.csv
+# Leave empty to package all indexed/unprocessed documents
+app.extract.file.names=extract1.csv,extract2.csv
+
+# ===== PACKAGING BULK QUERY =====
+# Fetches all indexed, unprocessed documents for packaging
+# Placeholders: %TABLE_NAME% = db.staging.claimcenterdbtable
+#              %EXTRACT_FILES_FILTER% = AND CC_Extract_file_Name IN ('f1.csv','f2.csv') when app.extract.file.names is set
+db.query.select.packaging.bulk=SELECT externalID, claimNumber, CAST(claimID AS VARCHAR(50)) AS claimID, gwDocumentID, gwDocExternalID, Name AS documentTitle, documentType, documentSubtype, author, documentDescription, policyNumber, doNotCreateActivity, inputMethod, mimeType, OrigDateCreated, sensitive, contentFilePath, contentRetrievalName, contentType, batchDocCount, batchID, jobID, setDocCount, setID, SetDocIndex, CC_Extract_file_Name FROM %TABLE_NAME% WHERE claimID IS NOT NULL AND gwDocumentID IS NOT NULL AND isDataMerged = 1 AND contentFilePath IS NOT NULL AND isIndexed = 1 AND isProcessed = 0 %EXTRACT_FILES_FILTER% ORDER BY claimNumber, CC_Extract_file_Name, batchID, setID, SetDocIndex
