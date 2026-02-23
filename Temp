@@ -1,8 +1,1 @@
-CREATE NONCLUSTERED INDEX IX_CC_Extract_Staging_BatchUpdate
-ON CC_Extract_Staging
-(
-    batchID,
-    claimNumber,
-    CC_Extract_file_Name
-)
-INCLUDE (isProcessed, DateProcessed);
+temp
