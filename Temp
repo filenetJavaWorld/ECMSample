@@ -1,1 +1,106 @@
-temp
+package com.cnb.search.filter;
+
+import javax.servlet.http.HttpServletRequest;
+
+import com.ibm.json.java.JSONArray;
+import com.ibm.json.java.JSONObject;
+import com.ibm.ecm.extension.PluginResponseFilter;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+
+/**
+ * Response filter for the P8 ListFavorites service that hides the 'Repository'
+ * column from the response. The column is hidden via CSS (display: none) rather
+ * than removed, preserving the data for any client logic that may need it.
+ */
+public class ListFavoritesRepositoryColumnFilter extends PluginResponseFilter {
+
+    /** Column field name in the response (repositoryName with name "Repository") */
+    private static final String REPOSITORY_FIELD = "repositoryName";
+
+    /** CSS style to hide the column */
+    private static final String HIDDEN_STYLE = "display: none;";
+
+    @Override
+    public String[] getFilteredServices() {
+        return new String[] { "/p8/listFavorites" };
+    }
+
+    @Override
+    public void filter(String serverType, PluginServiceCallbacks callbacks,
+            HttpServletRequest request, JSONObject jsonResponse) throws Exception {
+        if (jsonResponse == null) {
+            return;
+        }
+
+        // Only filter for p8 server type
+        if (serverType == null || !serverType.contains("p8")) {
+            return;
+        }
+
+        // Hide Repository column in columns.cells (Details view)
+        hideColumnInColumns(jsonResponse);
+
+        // Hide Repository column in magazineColumns (Magazine view)
+        hideColumnInMagazineColumns(jsonResponse);
+    }
+
+    /**
+     * Hides the Repository column in columns.cells by setting display:none and width:0.
+     */
+    private void hideColumnInColumns(JSONObject jsonResponse) {
+        try {
+            JSONObject columns = (JSONObject) jsonResponse.get("columns");
+            if (columns == null) {
+                return;
+            }
+
+            JSONArray cells = (JSONArray) columns.get("cells");
+            if (cells == null || cells.size() == 0) {
+                return;
+            }
+
+            for (int i = 0; i < cells.size(); i++) {
+                Object cellItem = cells.get(i);
+                if (cellItem instanceof JSONArray) {
+                    hideRepositoryColumnInArray((JSONArray) cellItem);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[ListFavoritesRepositoryColumnFilter] Error hiding column in columns: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Hides the Repository column in magazineColumns.
+     */
+    private void hideColumnInMagazineColumns(JSONObject jsonResponse) {
+        try {
+            JSONArray magazineColumns = (JSONArray) jsonResponse.get("magazineColumns");
+            if (magazineColumns == null || magazineColumns.size() == 0) {
+                return;
+            }
+
+            hideRepositoryColumnInArray(magazineColumns);
+        } catch (Exception e) {
+            System.err.println("[ListFavoritesRepositoryColumnFilter] Error hiding column in magazineColumns: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Applies hide styling to the Repository column in a column definition array.
+     */
+    private void hideRepositoryColumnInArray(JSONArray columnArray) {
+        for (int i = 0; i < columnArray.size(); i++) {
+            Object col = columnArray.get(i);
+            if (col instanceof JSONObject) {
+                JSONObject column = (JSONObject) col;
+                String field = (String) column.get("field");
+                if (REPOSITORY_FIELD.equals(field)) {
+                    column.put("style", HIDDEN_STYLE);
+                    column.put("width", "0");
+                    break;
+                }
+            }
+        }
+    }
+}
