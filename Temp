@@ -1,1 +1,20 @@
-
+setParams: function(params) {
+			this.logEntry("setParams", params);
+			if (params) {
+				this.setRepository(params.repository);
+				this.loadContent();
+				if (params.searchTemplate && this.openTab) {
+					var self = this;
+					var openParams = lang.mixin({}, params);
+					setTimeout(function() {
+						if (self.searchTabContainer && self.repository) {
+							self.searchTabContainer.setRepository(self.repository);
+						}
+						self.openTab(openParams);
+					}, 100);
+				} else {
+					this.openTab(params);
+				}
+			}
+			this.logExit("setParams");
+		}
