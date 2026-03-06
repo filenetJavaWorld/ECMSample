@@ -1,1 +1,173 @@
-temp
+/**
+ * CNB Multi-Repository Search Plugin
+ * 
+ * This plugin provides a unified search interface across multiple P8 object stores.
+ * It allows users to search documents across different repositories using a single
+ * query, with results aggregated and displayed in a unified grid.
+ * 
+ * Features:
+ * - Dynamic search fields configurable via JSON
+ * - Multi-repository parallel search execution
+ * - Aggregated results with repository identification
+ * - Infinite scroll pagination
+ * - Repository-specific field mapping
+ * - Limits recent searches to max 3 items in the search template tree
+ * - Removes Repository column from Favorites grid
+ */
+
+require([
+	"dojo/_base/declare",
+	"dojo/_base/lang",
+	"dojo/_base/array",
+	"dojo/aspect",
+	"ecm/model/SearchTemplateTreeModel",
+	"ecm/widget/listView/ContentList",
+	"ecm/model/FavoritesResultSet",
+	"ecm/widget/layout/NavigatorMainLayout"
+], function(declare, lang, array, aspect, SearchTemplateTreeModel, ContentList, FavoritesResultSet, NavigatorMainLayout) {
+	
+	// Plugin initialization
+	console.log("CNB Multi-Repository Search Plugin loaded");
+
+	// Override SearchTemplateTreeModel.getChildren to limit recent searches to max 3 childItems
+	aspect.around(SearchTemplateTreeModel.prototype, "getChildren", function(originalGetChildren) {
+		return function(parentItem, onComplete) {
+			var self = this;
+			var wrappedOnComplete = onComplete;
+			if (parentItem === this.recentNode) {
+				wrappedOnComplete = function(childItems) {
+					if (childItems && childItems.length > 3) {
+						childItems = childItems.slice(0, 3);
+					}
+					onComplete(childItems);
+				};
+			}
+			return originalGetChildren.call(this, parentItem, wrappedOnComplete);
+		};
+	});
+	
+	/**
+	 * Utility function to format dates consistently
+	 */
+	window.cnbFormatDate = function(dateValue) {
+		if (!dateValue) return "";
+		
+		try {
+			var date = new Date(dateValue);
+			if (isNaN(date.getTime())) return dateValue;
+			
+			return date.toLocaleDateString() + " " + date.toLocaleTimeString();
+		} catch (e) {
+			return dateValue;
+		}
+	};
+	
+	/**
+	 * Utility function to truncate long text
+	 */
+	window.cnbTruncateText = function(text, maxLength) {
+		if (!text) return "";
+		if (text.length <= maxLength) return text;
+		return text.substring(0, maxLength - 3) + "...";
+	};
+
+	// Redirect search template opens from Favorites to custom search feature pane
+	// CONFIG: Set this to match your layout's search feature ID (visible in layout buttons, e.g. "tree-Search-Feature" or "CNBCustomSearchFeature")
+	var CUSTOM_SEARCH_FEATURE_ID = "tree-Search-Feature";
+
+	/**
+	 * Finds the launch bar button/menuItem for the given feature ID.
+	 * Uses multiple fallbacks for ICN 3.0/3.2 compatibility (getButtonByID may return null in 3.2 dropdown layout).
+	 */
+	function findSearchFeatureButton(launchBar, featureId) {
+		if (!launchBar) return null;
+		// 1. Direct lookup (ICN 3.0 toolbar style)
+		var button = launchBar.getButtonByID && launchBar.getButtonByID(featureId);
+		if (button) return button;
+		// 2. Dropdown layout - getMenuItemByID (ICN 3.2)
+		if (launchBar.getMenuItemByID) {
+			var menuItem = launchBar.getMenuItemByID(featureId);
+			if (menuItem && menuItem.feature) return menuItem;
+		}
+		// 3. Iterate _launchBarButtons - find by feature.id (structure may differ in 3.2)
+		var buttons = launchBar.getButtons ? launchBar.getButtons() : (launchBar._launchBarButtons || {});
+		for (var id in buttons) {
+			var b = buttons[id];
+			if (b && b.feature && b.feature.id === featureId) return b;
+		}
+		// 3b. Iterate dropdown menuItem.buttons (ICN 3.2 secondary panes)
+		if (launchBar._featureDropDownMenu) {
+			var menuItems = launchBar._featureDropDownMenu.getChildren && launchBar._featureDropDownMenu.getChildren();
+			if (menuItems) {
+				for (var m = 0; m < menuItems.length; m++) {
+					var menuItem = menuItems[m];
+					if (menuItem && menuItem.feature && menuItem.feature.id === featureId) return menuItem;
+					if (menuItem && menuItem.buttons) {
+						for (var i = 0; i < menuItem.buttons.length; i++) {
+							var btn = menuItem.buttons[i];
+							if (btn && btn.feature && btn.feature.id === featureId) return btn;
+						}
+					}
+				}
+			}
+		}
+		// 4. Check _panels - if pane exists, use direct selection (ICN 3.2)
+		var panels = launchBar._panels || (launchBar.getChildPanes ? launchBar.getChildPanes() : {});
+		if (panels && panels[featureId]) {
+			return { _paneExists: true, _uuid: featureId };
+		}
+		// Debug: log available IDs when not found (set CNB_DEBUG_SEARCH_REDIRECT=true in console to enable)
+		if (typeof window !== "undefined" && window.CNB_DEBUG_SEARCH_REDIRECT) {
+			var ids = panels ? Object.keys(panels) : [];
+			var btnIds = buttons ? Object.keys(buttons) : [];
+			console.log("CNB Search Redirect: feature '" + featureId + "' not found. Available panel IDs:", ids, "Button IDs:", btnIds);
+		}
+		return null;
+	}
+
+	aspect.around(NavigatorMainLayout.prototype, "openSearch", function(originalOpenSearch) {
+		return function(item, data) {
+			data = data || {};
+			var launchBar = this.launchBarContainer;
+			var button = findSearchFeatureButton(launchBar, CUSTOM_SEARCH_FEATURE_ID);
+			if (button && button._paneExists) {
+				// Pane exists, try direct selection (ICN 3.2 fallback)
+				var page = launchBar.getContentPaneByID && launchBar.getContentPaneByID(button._uuid);
+				if (page && page.setParams) {
+					var searchTemplate = item.item ? item.item : item;
+					launchBar.launchBarContentArea && launchBar.launchBarContentArea.selectChild(page);
+					page.setParams({
+						tabType: data.tabType || "search",
+						repository: searchTemplate.repository,
+						teamspace: null,
+						selected: true,
+						closable: true,
+						openNewTab: data.openNewTab === true,
+						UUID: data.UUID || null,
+						version: data.version != null ? data.version : null,
+						"searchTemplate": searchTemplate
+					});
+					return;
+				}
+				button = null;
+			}
+			if (button && !button._paneExists) {
+				var searchTemplate = item.item ? item.item : item;
+				launchBar.selectContentPane(button, CUSTOM_SEARCH_FEATURE_ID, {
+					tabType: data.tabType || "search",
+					repository: searchTemplate.repository,
+					teamspace: null,
+					selected: true,
+					closable: true,
+					openNewTab: data.openNewTab === true,
+					UUID: data.UUID || null,
+					version: data.version != null ? data.version : null,
+					"searchTemplate": searchTemplate
+				});
+				return;
+			}
+			return originalOpenSearch.apply(this, arguments);
+		};
+	});
+	console.log("CNB Multi-Repository Search Plugin: Favorites search redirect to '" + CUSTOM_SEARCH_FEATURE_ID + "' enabled");
+});
