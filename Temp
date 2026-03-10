@@ -1,1 +1,691 @@
-temp
+define([
+	"dojo/_base/declare",
+	"dojo/_base/lang",
+	"dojo/dom-class",
+	"dojo/dom-style",
+	"ecm/widget/layout/SearchPane",
+	"ecm/model/Desktop",
+	"./CNBMultiRepoSearchSelector",
+	"dojo/text!./templates/CNBCustomSearchFeature.html"
+],
+function(declare, lang, domClass, domStyle, SearchPane, Desktop, CNBMultiRepoSearchSelector, template) {
+	/**
+	 * @name cNBMultiRepoSearchPluginDojo.CNBCustomSearchFeature
+	 * @class Custom search feature pane that loads all search templates from all repositories
+	 *        at once. The repository selector is hidden; templates are grouped by repository in the left pane.
+	 * @augments ecm.widget.layout.SearchPane
+	 */
+	return declare("cNBMultiRepoSearchPluginDojo.CNBCustomSearchFeature", [
+		SearchPane
+	], {
+		/** @lends cNBMultiRepoSearchPluginDojo.CNBCustomSearchFeature.prototype */
+
+		templateString: template,
+		widgetsInTemplate: true,
+
+		postCreate: function() {
+			this.logEntry("postCreate");
+			this.inherited(arguments);
+			// Hide repository selector - we show all repos' templates in the tree
+			if (this.repositorySelectorArea && this.repositorySelectorArea.domNode) {
+				domStyle.set(this.repositorySelectorArea.domNode, "display", "none");
+			}
+			// Ensure layout uses full height for search selector (no top bar)
+			domClass.add(this.domNode, "hideNavContainerTop");
+			this.logExit("postCreate");
+		},
+
+		/**
+		 * Override loadContent to skip repositorySelector._dropdown (hidden in multi-repo mode).
+		 */
+		loadContent: function() {
+			this.logEntry("loadContent");
+			this.setPaneDefaultLayoutRepository();
+
+			if (this.repositorySelector.getNumRepositories() === 1 && this.repository && this.repository.type === "od") {
+				domClass.add(this.repositorySelectorArea.domNode, "title");
+				this.repositorySelectorArea.domNode.innerHTML = this.repository.name;
+			} else if (this.repositorySelector.getNumRepositories() === 1) {
+				domClass.add(this.domNode, "hideNavContainerTop");
+				this.searchSelectionArea.resize();
+			}
+
+			if (this.repository && this.repository.connected && (!this.searchSelector || !this.isLoaded)) {
+				if (this.repositorySelector._dropdown) {
+					this.repositorySelector._dropdown.set("value", this.repository.id);
+				}
+				if (!this.searchSelector)
+					this._createSearchSelector(false);
+
+				if (this.searchSelector) {
+					this._doSearchSelectorConnections();
+					this.searchSelectorArea.domNode.appendChild(this.searchSelector.domNode);
+
+					if (this.searchTabContainer)
+						this.searchTabContainer.setRepository(this.repository);
+
+					if (!this._hasBeenLoaded && this._defaultSearch) {
+						var self = this;
+						this.repository.retrieveSearchTemplate(this._defaultSearch, null, "released", function(searchTemplate) {
+							if (self._defaultSearchOnly) {
+								declare.safeMixin(searchTemplate, {
+									hasPrivilege: function(privilege) {
+										return privilege !== "privCheckInOutDoc" && this.inherited(arguments);
+									}
+								});
+							}
+							self.openTab({
+								tabType: "search",
+								repository: self.repository,
+								selected: true,
+								closable: !self._defaultSearchOnly,
+								searchTemplate: searchTemplate
+							});
+						});
+					}
+				}
+				this.isLoaded = true;
+				this._hasBeenLoaded = true;
+				this._onShow();
+			}
+			this.logExit("loadContent");
+		},
+
+		/**
+		 * Override: create multi-repo search selector that loads templates from all repositories.
+		 */
+		_createSearchSelector: function(showOpenedSearches) {
+			this.logEntry("_createSearchSelector");
+			this._destroySearchSelector();
+
+			var repos = this.repositorySelector && this.repositorySelector.getRepositories ? this.repositorySelector.getRepositories() : [];
+			repos = repos.filter(function(r) { return r && r.connected && r.getPrivilege && r.getPrivilege("search"); });
+			var hasSearchPriv = repos.length > 0;
+
+			if (hasSearchPriv) {
+				this.searchSelector = new CNBMultiRepoSearchSelector({
+					showOpenedSearches: showOpenedSearches,
+					repositorySelector: this.repositorySelector
+				});
+				this.searchSelector.startup();
+				this.searchSelector.setRepositories(repos);
+				this.searchSelector.addToActionParameterMap("widget", this);
+			}
+			this.logExit("_createSearchSelector");
+		},
+
+		/**
+		 * Override: use template's repository when opening tab (multi-repo).
+		 */
+		_doSearchSelectorConnections: function() {
+			var self = this;
+			this.searchSelector.connect(this.searchSelector, "onSearchTemplateSelected", function(searchTemplate) {
+				var tabType = "search";
+				if (searchTemplate.isInstanceOf && searchTemplate.isInstanceOf(ecm.model.UnifiedSearchTemplate) && searchTemplate.isNew())
+					tabType = "unifiedsearchbuilder";
+				else if (searchTemplate.isNew())
+					tabType = "searchbuilder";
+
+				var repo = (searchTemplate.repository) ? searchTemplate.repository : self.repository;
+				self.openTab({
+					UUID: searchTemplate.UUID,
+					tabType: tabType,
+					repository: repo,
+					selected: true,
+					closable: true,
+					"searchTemplate": searchTemplate
+				});
+			});
+
+			this.searchSelector.connect(this.searchSelector, "onNewSearchButtonClick", function() {
+				if (self.searchSelector)
+					self.searchSelector.clearSelection();
+				self.openTab({
+					tabType: "searchbuilder",
+					repository: self.repository,
+					selected: true,
+					closable: true
+				});
+			});
+
+			this.searchSelector.connect(this.searchSelector, "onNewUnifiedSearchButtonClick", function() {
+				if (self.searchSelector)
+					self.searchSelector.clearSelection();
+				self.openTab({
+					tabType: "unifiedsearchbuilder",
+					repository: self.repository,
+					selected: true,
+					closable: true
+				});
+			});
+		},
+
+		/**
+		 * Gets a pane that has openTab (SearchPane or SearchTabPane). Tries this first, then layout panes.
+		 */
+		_getSearchPaneWithOpenTab: function() {
+			if (this.openTab && lang.isFunction(this.openTab)) {
+				return this;
+			}
+			var layout = Desktop.getLayout && Desktop.getLayout();
+			if (layout && layout.launchBarContainer) {
+				var launchBar = layout.launchBarContainer;
+				var paneIds = ["tree-Search-Feature", "CNBCustomSearchFeature", "searchPane"];
+				for (var i = 0; i < paneIds.length; i++) {
+					var pane = launchBar.getContentPaneByID && launchBar.getContentPaneByID(paneIds[i]);
+					if (pane && pane.openTab && lang.isFunction(pane.openTab)) {
+						return pane;
+					}
+				}
+			}
+			return null;
+		},
+
+		/**
+		 * Override setParams to ensure searchTemplate opens. Uses SearchPane with openTab when this pane doesn't have it.
+		 */
+		setParams: function(params) {
+			this.logEntry("setParams", params);
+			if (params) {
+				this.setRepository(params.repository);
+				this.loadContent();
+				if (params.searchTemplate) {
+					var searchPane = this._getSearchPaneWithOpenTab();
+					var openParams = lang.mixin({}, params);
+					if (searchPane) {
+						var self = this;
+						setTimeout(function() {
+							if (searchPane !== self && openParams.repository) {
+								searchPane.setRepository(openParams.repository);
+								var layout = Desktop.getLayout && Desktop.getLayout();
+								var contentArea = layout && layout.launchBarContainer && layout.launchBarContainer.launchBarContentArea;
+								if (contentArea && searchPane.UUID) {
+									contentArea.selectChild(searchPane);
+								}
+							}
+							if (searchPane.searchTabContainer && searchPane.repository) {
+								searchPane.searchTabContainer.setRepository(searchPane.repository);
+							}
+							searchPane.openTab(openParams);
+						}, 100);
+					}
+				} else if (this.openTab && lang.isFunction(this.openTab)) {
+					this.openTab(params);
+				}
+			}
+			this.logExit("setParams");
+		}
+	});
+});
+
+
+
+
+
+
+
+
+/**
+ * CNB Multi-Repository Search Selector
+ *
+ * Extends SearchSelector to display search templates from all repositories
+ * in a single tree, grouped by repository.
+ */
+
+define([
+	"dojo/_base/declare",
+	"dojo/_base/lang",
+	"dojo/dom-style",
+	"ecm/widget/search/SearchSelector",
+	"ecm/model/SearchConfiguration",
+	"./CNBMultiRepoSearchTemplateTreeModel"
+], function(declare, lang, domStyle, SearchSelector, SearchConfiguration, CNBMultiRepoSearchTemplateTreeModel) {
+
+	return declare("cNBMultiRepoSearchPluginDojo.CNBMultiRepoSearchSelector", [SearchSelector], {
+
+		/**
+		 * Array of repositories to show templates from. Set via setRepositories.
+		 */
+		repositories: null,
+
+		constructor: function(params) {
+			this.repositories = params && params.repositories ? params.repositories : [];
+		},
+
+		/**
+		 * Sets multiple repositories and builds the tree from all of them.
+		 * @param {ecm.model.Repository[]} repositories
+		 */
+		setRepositories: function(repositories) {
+			if (!repositories || repositories.length === 0) {
+				this.repository = null;
+				this.repositories = [];
+				this._clearTreeModel();
+				if (this._tree) {
+					this._tree.destroy();
+					this._tree = null;
+				}
+				return;
+			}
+
+			this.repositories = repositories;
+			this.repository = repositories[0];
+			this.teamspace = null;
+
+			this._clearTreeModel();
+			this._searchConfig = new SearchConfiguration({
+				repository: this.repository,
+				teamspace: null
+			});
+
+			this._createRendering();
+		},
+
+		/**
+		 * Override: use multi-repo model when repositories are set.
+		 */
+		createTreeModel: function() {
+			var repos = this.repositories && this.repositories.length > 0 ? this.repositories : (this.repository ? [this.repository] : []);
+			var model = new CNBMultiRepoSearchTemplateTreeModel(repos);
+			model.showCrossRepositorySearches = this.showCrossRepositorySearches;
+			model.showOpenedSearches = this.showOpenedSearches;
+			model.showRecents = this.showRecents !== false;
+			return model;
+		},
+
+		/**
+		 * Override setRepository: when used in multi-repo mode, delegate to setRepositories
+		 * with all repos from repositorySelector if available.
+		 */
+		setRepository: function(repository, teamspace) {
+			if (this.repositorySelector && lang.isFunction(this.repositorySelector.getRepositories)) {
+				var repos = this.repositorySelector.getRepositories();
+				if (repos && repos.length > 0) {
+					this.setRepositories(repos);
+					return;
+				}
+			}
+			if (repository) {
+				this.setRepositories([repository]);
+			} else {
+				this.setRepositories([]);
+			}
+		},
+
+		/**
+		 * Override _createRendering to support multi-repo (no single repository check).
+		 */
+		_createRendering: function() {
+			var hasSearchSupport = false;
+			var repos = this.repositories || (this.repository ? [this.repository] : []);
+			for (var i = 0; i < repos.length; i++) {
+				if (repos[i] && repos[i].isSearchTemplateSupported && repos[i].isSearchTemplateSupported()) {
+					hasSearchSupport = true;
+					break;
+				}
+			}
+
+			if (this.toolbarEnabled) {
+				this._createToolbar();
+			} else if (this._toolbarNode) {
+				domStyle.set(this._toolbarNode, "display", "none");
+			}
+
+			if (hasSearchSupport && repos.length > 0) {
+				if (this.selectorStyle === "tree") {
+					this._createTree();
+				} else if (this.selectorStyle === "dropdown") {
+					this._createDropDown();
+				}
+			} else {
+				if (this._dropdown) {
+					this._dropdown.destroy();
+					this._dropdown = null;
+				}
+				this._clearTreeModel();
+				if (this._tree) {
+					this._tree.destroy();
+					this._tree = null;
+				}
+			}
+
+			this.resize();
+		}
+	});
+});
+
+
+
+
+
+
+
+
+
+
+
+/**
+ * CNB Multi-Repository Search Template Tree Model
+ *
+ * Flat structure: Root -> [Recent Searches, All Searches]
+ * - Recent Searches: aggregated recent searches from all repositories
+ * - All Searches: all search templates from all repositories in one list
+ *
+ * This structure enables the "Name contains" filter to work correctly
+ * since all templates are in a single expandable node.
+ */
+
+define([
+	"dojo/_base/declare",
+	"dojo/_base/lang",
+	"dojo/_base/array",
+	"dojo/data/util/filter",
+	"ecm/model/_ModelObject",
+	"ecm/model/Item",
+	"ecm/model/SearchTemplateFolder"
+], function(declare, lang, array, dojoFilter, _ModelObject, Item, SearchTemplateFolder) {
+
+	/**
+	 * Creates a global Recent Searches node (aggregated from all repos).
+	 */
+	function createRecentNode() {
+		return {
+			id: "recent_all",
+			name: ecm.messages.recent_searches,
+			isRecentNode: true
+		};
+	}
+
+	/**
+	 * Creates a global All Searches node (aggregated from all repos).
+	 */
+	function createAllSearchesNode() {
+		return {
+			id: "all_searches",
+			name: ecm.messages.all_search_templates || "All Searches",
+			isAllSearchesNode: true
+		};
+	}
+
+	return declare("cNBMultiRepoSearchPluginDojo.CNBMultiRepoSearchTemplateTreeModel", [
+		_ModelObject
+	], {
+
+		showRecents: true,
+		showOpenedSearches: false,
+		showCrossRepositorySearches: true,
+		maxRecents: 10,
+		filter: null,
+		itemsPerPage: 100,
+		numPages: 1,
+
+		/**
+		 * @param {ecm.model.Repository[]} repositories - Array of repositories to aggregate
+		 */
+		constructor: function(repositories) {
+			this.repositories = repositories || [];
+			this._rootNode = new _ModelObject("templatesRoot", "");
+			this._recentNode = createRecentNode();
+			this._allSearchesNode = createAllSearchesNode();
+		},
+
+		destroy: function() {
+			this.repositories = null;
+			this._rootNode = null;
+			this._recentNode = null;
+			this._allSearchesNode = null;
+		},
+
+		applyFilter: function(filter) {
+			if (filter && filter.length > 0) {
+				this.filter = dojoFilter.patternToRegExp(filter, true);
+			} else {
+				this.filter = null;
+			}
+			this.numPages = 1;
+			this.reload();
+			// Also reload child nodes so filter applies to their contents
+			this.reloadNode(this._recentNode);
+			this.reloadNode(this._allSearchesNode);
+		},
+
+		reload: function() {
+			this.getChildren(this._rootNode, lang.hitch(this, function(newChildren) {
+				this.onChildrenChange(this._rootNode, newChildren);
+				for (var i in newChildren) {
+					this.onChange(newChildren[i]);
+				}
+			}));
+		},
+
+		reloadNode: function(item) {
+			if (item) {
+				var self = this;
+				this.getChildren(item, function(newChildren) {
+					self.onChildrenChange(item, newChildren);
+				});
+			}
+		},
+
+		getRoot: function(onItem) {
+			onItem(this._rootNode);
+		},
+
+		mayHaveChildren: function(item) {
+			if (item === this._rootNode) return true;
+			if (item && item.isRecentNode) return true;
+			if (item && item.isAllSearchesNode) return true;
+			if (item && item.isInstanceOf && item.isInstanceOf(SearchTemplateFolder)) return true;
+			if (item && item.isInstanceOf && item.isInstanceOf(ecm.model._SearchTemplateBase)) return false;
+			return false;
+		},
+
+		getChildren: function(parentItem, onComplete) {
+			var self = this;
+
+			// Root: only Recent Searches and All Searches (no repo folders)
+			if (parentItem === this._rootNode) {
+				var childItems = [];
+				if (this.showRecents) {
+					childItems.push(this._recentNode);
+				}
+				childItems.push(this._allSearchesNode);
+				onComplete(childItems);
+				return;
+			}
+
+			// Recent Searches: aggregate from all repos
+			if (parentItem && parentItem.isRecentNode) {
+				this.onProcessingStarted(parentItem);
+				this._aggregateRecentSearches(function(childItems) {
+					onComplete(childItems);
+					self.onRecentSearchesLoad(childItems);
+					self.onProcessingComplete(parentItem);
+				});
+				return;
+			}
+
+			// All Searches: aggregate ALL templates from ALL repos
+			if (parentItem && parentItem.isAllSearchesNode) {
+				this.onProcessingStarted(parentItem);
+				this._aggregateAllSearchTemplates(function(childItems) {
+					onComplete(childItems);
+					self.onProcessingComplete(parentItem);
+				});
+				return;
+			}
+
+			if (parentItem && parentItem.isInstanceOf && parentItem.isInstanceOf(SearchTemplateFolder)) {
+				var containerRepo = parentItem;
+				this.onProcessingStarted(parentItem);
+				containerRepo.retrieveSearchTemplates(function(searchTemplates) {
+					var maxItems = self.itemsPerPage * self.numPages;
+					var childItems = [];
+					for (var n = 0; n < searchTemplates.length; n++) {
+						var st = searchTemplates[n];
+						if (self.filter && !self._isFilterMatched(st)) continue;
+						if (childItems.length === maxItems) {
+							childItems.push(self._getMoreLinkItem());
+							break;
+						}
+						self.onChange(st);
+						if (!st.isInstanceOf(ecm.model.UnifiedSearchTemplate))
+							childItems.push(st);
+						else if (self.showCrossRepositorySearches)
+							childItems.push(st);
+					}
+					onComplete(childItems);
+					self.onProcessingComplete(parentItem);
+				});
+				return;
+			}
+
+			onComplete([]);
+		},
+
+		/**
+		 * Aggregates recent searches from all repositories.
+		 */
+		_aggregateRecentSearches: function(onComplete) {
+			var self = this;
+			var repos = this.repositories || [];
+			var allRecent = [];
+			var pending = repos.length;
+			if (pending === 0) {
+				onComplete(allRecent);
+				return;
+			}
+			function checkDone() {
+				pending--;
+				if (pending <= 0) {
+					allRecent.sort(function(a, b) { return 0; });
+					onComplete(allRecent);
+				}
+			}
+			array.forEach(repos, function(repo) {
+				if (!repo || !repo.retrieveRecentSearches) {
+					checkDone();
+					return;
+				}
+				repo.retrieveRecentSearches(function(recentSearches) {
+					if (recentSearches && recentSearches.length > 0) {
+						for (var k = recentSearches.length - 1; k >= 0; k--) {
+							if (recentSearches[k] && recentSearches[k].isInstanceOf && recentSearches[k].isInstanceOf(ecm.model.UnifiedSearchTemplate) && !self.showCrossRepositorySearches)
+								continue;
+							if (!self.filter || self._isFilterMatched(recentSearches[k]))
+								allRecent.push(recentSearches[k]);
+						}
+					}
+					checkDone();
+				});
+			});
+		},
+
+		/**
+		 * Aggregates ALL search templates from ALL repositories into one flat list.
+		 */
+		_aggregateAllSearchTemplates: function(onComplete) {
+			var self = this;
+			var repos = this.repositories || [];
+			var allTemplates = [];
+			var pending = repos.length;
+			var maxItems = this.itemsPerPage * this.numPages;
+
+			if (pending === 0) {
+				onComplete(allTemplates);
+				return;
+			}
+
+			function checkDone() {
+				pending--;
+				if (pending <= 0) {
+					var result = [];
+					for (var i = 0; i < allTemplates.length; i++) {
+						var st = allTemplates[i];
+						if (self.filter && !self._isFilterMatched(st)) continue;
+						if (result.length === maxItems) {
+							result.push(self._getMoreLinkItem());
+							break;
+						}
+						self.onChange(st);
+						if (!st.isInstanceOf(ecm.model.UnifiedSearchTemplate))
+							result.push(st);
+						else if (self.showCrossRepositorySearches)
+							result.push(st);
+					}
+					onComplete(result);
+				}
+			}
+
+			array.forEach(repos, function(repo) {
+				if (!repo || !repo.retrieveSearchTemplates) {
+					checkDone();
+					return;
+				}
+				repo.retrieveSearchTemplates(function(searchTemplates) {
+					if (searchTemplates && searchTemplates.length > 0) {
+						array.forEach(searchTemplates, function(st) {
+							allTemplates.push(st);
+						});
+					}
+					checkDone();
+				});
+			});
+		},
+
+		_isFilterMatched: function(searchTemplate) {
+			if (!this.filter) return true;
+			if (searchTemplate.name && searchTemplate.name.match(this.filter)) return true;
+			if (searchTemplate.repository && searchTemplate.repository.type === "od" && searchTemplate.description && searchTemplate.description.match(this.filter))
+				return true;
+			return false;
+		},
+
+		isItem: function(something) {
+			if (something === this._rootNode) return true;
+			if (something && (something.isRecentNode || something.isAllSearchesNode)) return true;
+			if (something && something.isInstanceOf && (something.isInstanceOf(SearchTemplateFolder) || something.isInstanceOf(ecm.model._SearchTemplateBase)))
+				return true;
+			return false;
+		},
+
+		getIdentity: function(item) {
+			if (item && item.isInstanceOf && item.isInstanceOf(ecm.model._SearchTemplateBase)) {
+				if (item.UUID) return item.UUID;
+				return item.generateUUID ? item.generateUUID() : (item.id + "_" + (item.repository ? item.repository.id : ""));
+			}
+			return item.id || ("item_" + Math.random());
+		},
+
+		getLabel: function(item) {
+			if (item && item.repository && item.repository.type === "od" && item.isInstanceOf && item.isInstanceOf(ecm.model._SearchTemplateBase)) {
+				var label = item.name;
+				if (item.description) label += " - " + item.description;
+				return label;
+			}
+			return item.name || "";
+		},
+
+		onChange: function(item) {},
+		onChildrenChange: function(parent, newChildren) {},
+		onProcessingStarted: function(item) {},
+		onProcessingComplete: function(item) {},
+		onRecentSearchesLoad: function(recentSearches) {},
+
+		loadMore: function() {
+			this.numPages++;
+			this.reload();
+		},
+
+		_getMoreLinkItem: function() {
+			if (!this._moreLinkItem) {
+				this._moreLinkItem = new Item("moreLink" + new Date().getTime(), ecm.messages.more_paging_link);
+				this._moreLinkItem.isMoreLink = true;
+			}
+			return this._moreLinkItem;
+		}
+	});
+});
+
+
+
