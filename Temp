@@ -1,1 +1,121 @@
-temp
+import com.filenet.api.core.*;
+import com.filenet.api.admin.*;
+import com.filenet.api.collection.*;
+import com.filenet.api.query.*;
+import com.filenet.api.security.*;
+import com.filenet.api.util.UserContext;
+
+import javax.security.auth.Subject;
+import java.util.*;
+
+public class SearchTemplateSecurityComparator {
+
+    public static void main(String[] args) {
+
+        String uri = "http://CE_SERVER:9080/wsi/FNCEWS40MTOM/";
+        String username = "user";
+        String password = "password";
+        String stanza = "FileNetP8WSI";
+        String objectStoreName = "OS1";
+
+        try {
+
+            Connection conn = Factory.Connection.getConnection(uri);
+
+            Subject subject = UserContext.createSubject(conn, username, password, stanza);
+            UserContext.get().pushSubject(subject);
+
+            Domain domain = Factory.Domain.fetchInstance(conn, null, null);
+            ObjectStore os = Factory.ObjectStore.fetchInstance(domain, objectStoreName, null);
+
+            fetchSearchTemplates(os);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    private static void fetchSearchTemplates(ObjectStore os) {
+
+        String sql =
+                "SELECT This, Id, Name, TargetClass " +
+                "FROM SearchTemplate";
+
+        SearchSQL searchSQL = new SearchSQL(sql);
+        SearchScope scope = new SearchScope(os);
+
+        IndependentObjectSet set =
+                scope.fetchObjects(searchSQL, null, null, Boolean.TRUE);
+
+        Iterator<?> iterator = set.iterator();
+
+        while (iterator.hasNext()) {
+
+            SearchTemplate template = (SearchTemplate) iterator.next();
+
+            String templateName = template.get_Name();
+
+            ClassDefinition targetClass =
+                    template.get_TargetClass();
+
+            if (targetClass == null)
+                continue;
+
+            String className = targetClass.get_SymbolicName();
+
+            System.out.println("\n=================================================");
+            System.out.println("Search Template : " + templateName);
+            System.out.println("Associated Class: " + className);
+
+            Set<String> templateGroups =
+                    extractSecurity(template.get_Permissions());
+
+            Set<String> classGroups =
+                    extractSecurity(targetClass.get_DefaultInstancePermissions());
+
+            compareSecurity(templateGroups, classGroups);
+        }
+    }
+
+    private static Set<String> extractSecurity(AccessPermissionList perms) {
+
+        Set<String> groups = new HashSet<>();
+
+        Iterator<?> it = perms.iterator();
+
+        while (it.hasNext()) {
+
+            AccessPermission ap = (AccessPermission) it.next();
+
+            Grantee grantee = ap.get_Grantee();
+
+            if (grantee != null) {
+                groups.add(grantee.get_Name());
+            }
+        }
+
+        return groups;
+    }
+
+    private static void compareSecurity(Set<String> templateGroups,
+                                        Set<String> classGroups) {
+
+        Set<String> matched = new HashSet<>(templateGroups);
+        matched.retainAll(classGroups);
+
+        Set<String> onlyTemplate = new HashSet<>(templateGroups);
+        onlyTemplate.removeAll(classGroups);
+
+        Set<String> onlyClass = new HashSet<>(classGroups);
+        onlyClass.removeAll(templateGroups);
+
+        System.out.println("\nMatched Groups:");
+        matched.forEach(System.out::println);
+
+        System.out.println("\nOnly in Search Template:");
+        onlyTemplate.forEach(System.out::println);
+
+        System.out.println("\nOnly in Document Class:");
+        onlyClass.forEach(System.out::println);
+    }
+}
