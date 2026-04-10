@@ -1,1 +1,22 @@
-Hi, How are you?
+_bindResultGridScrollWhenReady: function() {
+            var self = this;
+            setTimeout(function() {
+                self._attachHorizontalWheelSupport();
+            }, 500);
+        },
+
+        _attachHorizontalWheelSupport: function() {
+            var scrollNode = query(".yourResultGridScrollableNode", this.domNode)[0];
+            if (!scrollNode || scrollNode._wheelBound) {
+                return;
+            }
+
+            scrollNode._wheelBound = true;
+
+            on(scrollNode, "wheel", function(evt) {
+                if (evt.shiftKey) {
+                    evt.preventDefault();
+                    scrollNode.scrollLeft += evt.deltaY;
+                }
+            });
+        }
