@@ -1,1 +1,1307 @@
-temp
+define([
+	"dojo/_base/declare",
+	"dojo/_base/lang",
+	"dojo/aspect",
+	"dojo/dom-construct",
+	"dojo/dom-class",
+	"dojo/dom-style",
+	"dojo/store/Memory",
+	"dijit/tree/ObjectStoreModel",
+	"dijit/Tree",
+	"dijit/form/Button",
+	"idx/layout/BorderContainer",
+	"dijit/layout/ContentPane",
+	"ecm/widget/layout/SearchPane",
+	"ecm/model/Desktop",
+	"./CNBMultiRepoSearchSelector",
+	"./SearchResultGroupingConfig",
+	"./SearchResultHierarchyBuilder",
+	"./SearchResultFilterUtil",
+	"dojo/text!./templates/CNBCustomSearchFeature.html"
+],
+function(declare, lang, aspect, domConstruct, domClass, domStyle, Memory, ObjectStoreModel, Tree, Button, BorderContainer, ContentPane, SearchPane, Desktop, CNBMultiRepoSearchSelector, SearchResultGroupingConfig, SearchResultHierarchyBuilder, SearchResultFilterUtil, template) {
+	/**
+	 * @name cNBMultiRepoSearchPluginDojo.CNBCustomSearchFeature
+	 * @class Custom search feature pane that loads all search templates from all repositories
+	 *        at once. The repository selector is hidden; templates are grouped by repository in the left pane.
+	 * @augments ecm.widget.layout.SearchPane
+	 */
+	return declare("cNBMultiRepoSearchPluginDojo.CNBCustomSearchFeature", [
+		SearchPane
+	], {
+		/** @lends cNBMultiRepoSearchPluginDojo.CNBCustomSearchFeature.prototype */
+
+		templateString: template,
+		widgetsInTemplate: true,
+		_groupingStateByTab: null,
+		_tabRefByKey: null,
+		_debugEnabled: true,
+
+		_logDebug: function(message, payload) {
+			if (!this._debugEnabled || !console || !console.log) {
+				return;
+			}
+			if (payload !== undefined) {
+				console.log("[CNBGroupingDebug] " + message, payload);
+			} else {
+				console.log("[CNBGroupingDebug] " + message);
+			}
+		},
+
+		postCreate: function() {
+			this.logEntry("postCreate");
+			this.inherited(arguments);
+			this._groupingStateByTab = {};
+			this._tabRefByKey = {};
+			this._logDebug("postCreate started");
+			// Hide repository selector - we show all repos' templates in the tree
+			if (this.repositorySelectorArea && this.repositorySelectorArea.domNode) {
+				domStyle.set(this.repositorySelectorArea.domNode, "display", "none");
+			}
+			// Ensure layout uses full height for search selector (no top bar)
+			domClass.add(this.domNode, "hideNavContainerTop");
+			this._installResultGroupingHooks();
+			this._logDebug("postCreate completed, hooks installed");
+			this.logExit("postCreate");
+		},
+
+		/**
+		 * Override loadContent to skip repositorySelector._dropdown (hidden in multi-repo mode).
+		 */
+		loadContent: function() {
+			this.logEntry("loadContent");
+			this.setPaneDefaultLayoutRepository();
+
+			if (this.repositorySelector.getNumRepositories() === 1 && this.repository && this.repository.type === "od") {
+				domClass.add(this.repositorySelectorArea.domNode, "title");
+				this.repositorySelectorArea.domNode.innerHTML = this.repository.name;
+			} else if (this.repositorySelector.getNumRepositories() === 1) {
+				domClass.add(this.domNode, "hideNavContainerTop");
+				this.searchSelectionArea.resize();
+			}
+
+			if (this.repository && this.repository.connected && (!this.searchSelector || !this.isLoaded)) {
+				if (this.repositorySelector._dropdown) {
+					this.repositorySelector._dropdown.set("value", this.repository.id);
+				}
+				if (!this.searchSelector)
+					this._createSearchSelector(false);
+
+				if (this.searchSelector) {
+					this._doSearchSelectorConnections();
+					this.searchSelectorArea.domNode.appendChild(this.searchSelector.domNode);
+
+					if (this.searchTabContainer)
+						this.searchTabContainer.setRepository(this.repository);
+
+					if (!this._hasBeenLoaded && this._defaultSearch) {
+						var self = this;
+						this.repository.retrieveSearchTemplate(this._defaultSearch, null, "released", function(searchTemplate) {
+							if (self._defaultSearchOnly) {
+								declare.safeMixin(searchTemplate, {
+									hasPrivilege: function(privilege) {
+										return privilege !== "privCheckInOutDoc" && this.inherited(arguments);
+									}
+								});
+							}
+							self.openTab({
+								tabType: "search",
+								repository: self.repository,
+								selected: true,
+								closable: !self._defaultSearchOnly,
+								searchTemplate: searchTemplate
+							});
+						});
+					}
+				}
+				this.isLoaded = true;
+				this._hasBeenLoaded = true;
+				this._onShow();
+			}
+			this.logExit("loadContent");
+		},
+
+		/**
+		 * Override: create multi-repo search selector that loads templates from all repositories.
+		 */
+		_createSearchSelector: function(showOpenedSearches) {
+			this.logEntry("_createSearchSelector");
+			this._destroySearchSelector();
+
+			var repos = this.repositorySelector && this.repositorySelector.getRepositories ? this.repositorySelector.getRepositories() : [];
+			repos = repos.filter(function(r) { return r && r.connected && r.getPrivilege && r.getPrivilege("search"); });
+			var hasSearchPriv = repos.length > 0;
+
+			if (hasSearchPriv) {
+				this.searchSelector = new CNBMultiRepoSearchSelector({
+					showOpenedSearches: showOpenedSearches,
+					repositorySelector: this.repositorySelector
+				});
+				this.searchSelector.startup();
+				this.searchSelector.setRepositories(repos);
+				this.searchSelector.addToActionParameterMap("widget", this);
+			}
+			this.logExit("_createSearchSelector");
+		},
+
+		/**
+		 * Override: use template's repository when opening tab (multi-repo).
+		 */
+		_doSearchSelectorConnections: function() {
+			var self = this;
+			this.searchSelector.connect(this.searchSelector, "onSearchTemplateSelected", function(searchTemplate) {
+				var tabType = "search";
+				if (searchTemplate.isInstanceOf && searchTemplate.isInstanceOf(ecm.model.UnifiedSearchTemplate) && searchTemplate.isNew())
+					tabType = "unifiedsearchbuilder";
+				else if (searchTemplate.isNew())
+					tabType = "searchbuilder";
+
+				var repo = (searchTemplate.repository) ? searchTemplate.repository : self.repository;
+				self.openTab({
+					UUID: searchTemplate.UUID,
+					tabType: tabType,
+					repository: repo,
+					selected: true,
+					closable: true,
+					"searchTemplate": searchTemplate
+				});
+			});
+
+			this.searchSelector.connect(this.searchSelector, "onNewSearchButtonClick", function() {
+				if (self.searchSelector)
+					self.searchSelector.clearSelection();
+				self.openTab({
+					tabType: "searchbuilder",
+					repository: self.repository,
+					selected: true,
+					closable: true
+				});
+			});
+
+			this.searchSelector.connect(this.searchSelector, "onNewUnifiedSearchButtonClick", function() {
+				if (self.searchSelector)
+					self.searchSelector.clearSelection();
+				self.openTab({
+					tabType: "unifiedsearchbuilder",
+					repository: self.repository,
+					selected: true,
+					closable: true
+				});
+			});
+		},
+
+		/**
+		 * Gets a pane that has openTab (SearchPane or SearchTabPane). Tries this first, then layout panes.
+		 */
+		_getSearchPaneWithOpenTab: function() {
+			if (this.openTab && lang.isFunction(this.openTab)) {
+				return this;
+			}
+			var layout = Desktop.getLayout && Desktop.getLayout();
+			if (layout && layout.launchBarContainer) {
+				var launchBar = layout.launchBarContainer;
+				var paneIds = ["tree-Search-Feature", "CNBCustomSearchFeature", "searchPane"];
+				for (var i = 0; i < paneIds.length; i++) {
+					var pane = launchBar.getContentPaneByID && launchBar.getContentPaneByID(paneIds[i]);
+					if (pane && pane.openTab && lang.isFunction(pane.openTab)) {
+						return pane;
+					}
+				}
+			}
+			return null;
+		},
+
+		/**
+		 * Override setParams to ensure searchTemplate opens. Uses SearchPane with openTab when this pane doesn't have it.
+		 */
+		setParams: function(params) {
+			this.logEntry("setParams", params);
+			if (params) {
+				this.setRepository(params.repository);
+				this.loadContent();
+				if (params.searchTemplate) {
+					var searchPane = this._getSearchPaneWithOpenTab();
+					var openParams = lang.mixin({}, params);
+					if (searchPane) {
+						var self = this;
+						setTimeout(function() {
+							if (searchPane !== self && openParams.repository) {
+								searchPane.setRepository(openParams.repository);
+								var layout = Desktop.getLayout && Desktop.getLayout();
+								var contentArea = layout && layout.launchBarContainer && layout.launchBarContainer.launchBarContentArea;
+								if (contentArea && searchPane.UUID) {
+									contentArea.selectChild(searchPane);
+								}
+							}
+							if (searchPane.searchTabContainer && searchPane.repository) {
+								searchPane.searchTabContainer.setRepository(searchPane.repository);
+							}
+							searchPane.openTab(openParams);
+						}, 100);
+					}
+				} else if (this.openTab && lang.isFunction(this.openTab)) {
+					this.openTab(params);
+				}
+			}
+			this.logExit("setParams");
+		},
+
+		_installResultGroupingHooks: function() {
+			var self = this;
+			if (this._resultGroupingHooksInstalled) {
+				this._logDebug("Grouping hooks already installed, skipping");
+				return;
+			}
+			this._resultGroupingHooksInstalled = true;
+			this._logDebug("Installing grouping hooks on openTab/selectChild");
+
+			aspect.after(this, "openTab", function() {
+				self._logDebug("openTab intercepted, scheduling grouping wire");
+				setTimeout(function() {
+					self._wireGroupingOnSelectedTab();
+				}, 200);
+			}, true);
+
+			aspect.after(this.searchTabContainer, "selectChild", function() {
+				self._logDebug("searchTabContainer.selectChild intercepted, scheduling grouping wire");
+				setTimeout(function() {
+					self._wireGroupingOnSelectedTab();
+				}, 150);
+			}, true);
+		},
+
+		_wireGroupingOnSelectedTab: function() {
+			var tab = this.searchTabContainer && this.searchTabContainer.selectedChildWidget;
+			if (!tab) {
+				this._logDebug("No selected tab found in searchTabContainer");
+				return;
+			}
+			this._logDebug("Selected tab detected", {
+				tabId: tab.id || null,
+				tabUUID: tab.UUID || null,
+				tabTitle: tab.title || null,
+				declaredClass: tab.declaredClass || null
+			});
+			this._wireSearchTabHooks(tab);
+			var tabKey = this._getTabKey(tab);
+			this._tabRefByKey[tabKey] = tab;
+			var contentList = this._findContentListWidget(tab);
+			var state = this._groupingStateByTab[tabKey] || { tab: tab, contentList: null };
+			state.tab = tab;
+			if (contentList) {
+				this._logDebug("ContentList found for selected tab", {
+					tabKey: tabKey,
+					contentListClass: contentList.declaredClass || null
+				});
+				state.contentList = contentList;
+			} else {
+				this._logDebug("ContentList not found yet for selected tab; will retry on search completion", { tabKey: tabKey });
+			}
+			this._groupingStateByTab[tabKey] = state;
+
+			if (contentList && !contentList._cnbGroupingHooked) {
+				var self = this;
+				contentList._cnbGroupingHooked = true;
+				this._logDebug("Hooking contentList.setResultSet", { tabKey: tabKey });
+				aspect.after(contentList, "setResultSet", function(resultSet) {
+					self._logDebug("contentList.setResultSet intercepted", {
+						tabKey: tabKey,
+						hasResultSet: !!resultSet,
+						itemCount: resultSet && resultSet.items ? resultSet.items.length : 0,
+						isFiltered: !!(resultSet && resultSet._cnbIsFilteredResultSet)
+					});
+					self._onResultSetSet(tabKey, resultSet);
+				}, true);
+			}
+
+			if (contentList && contentList.resultSet) {
+				this._logDebug("Selected tab already has resultSet, processing immediately", {
+					tabKey: tabKey,
+					itemCount: contentList.resultSet.items ? contentList.resultSet.items.length : 0
+				});
+				this._onResultSetSet(tabKey, contentList.resultSet);
+			}
+		},
+
+		_wireSearchTabHooks: function(tab) {
+			if (!tab || tab._cnbGroupingSearchTabHooked || !tab.searchForm) {
+				this._logDebug("Skipping SearchTab hook", {
+					hasTab: !!tab,
+					alreadyHooked: !!(tab && tab._cnbGroupingSearchTabHooked),
+					hasSearchForm: !!(tab && tab.searchForm)
+				});
+				return;
+			}
+			tab._cnbGroupingSearchTabHooked = true;
+			var self = this;
+			var tabKey = this._getTabKey(tab);
+			this._tabRefByKey[tabKey] = tab;
+			this._logDebug("Hooking SearchTab.searchForm.onSearchCompleted", { tabKey: tabKey });
+
+			// Primary integration point aligned with ICN SearchTab lifecycle:
+			// SearchTab.searchForm.onSearchCompleted -> searchResults.setResultSet(resultSet)
+			aspect.after(tab.searchForm, "onSearchCompleted", function(resultSet) {
+				self._ensureStateForTabKey(tabKey, tab, resultSet);
+				self._logDebug("SearchTab.onSearchCompleted intercepted", {
+					tabKey: tabKey,
+					hasResultSet: !!resultSet,
+					itemCount: resultSet && resultSet.items ? resultSet.items.length : 0
+				});
+				self._onResultSetSet(tabKey, resultSet);
+			}, true);
+		},
+
+		_onResultSetSet: function(tabKey, resultSet) {
+			var state = this._groupingStateByTab[tabKey];
+			if (!state) {
+				this._ensureStateForTabKey(tabKey, this._tabRefByKey[tabKey], resultSet);
+				state = this._groupingStateByTab[tabKey];
+			}
+			this._logDebug("_onResultSetSet called", {
+				tabKey: tabKey,
+				hasState: !!state,
+				hasResultSet: !!resultSet
+			});
+			if (!state || !resultSet) {
+				this._logDebug("Aborting _onResultSetSet due to missing state/resultSet", {
+					tabKey: tabKey
+				});
+				return;
+			}
+			if (state.isApplyingFilter || resultSet._cnbIsFilteredResultSet) {
+				this._logDebug("Skipping _onResultSetSet for internal filtered result", {
+					tabKey: tabKey,
+					isApplyingFilter: !!state.isApplyingFilter,
+					isFilteredResultSet: !!resultSet._cnbIsFilteredResultSet
+				});
+				return;
+			}
+
+			var items = resultSet.items || [];
+			state.originalResultSet = resultSet;
+			state.originalItems = items.slice(0);
+			this._logDebug("Captured original result items", {
+				tabKey: tabKey,
+				itemCount: state.originalItems.length
+			});
+
+			var searchContext = this._resolveSearchContext(state.tab, resultSet);
+			this._logDebug("Resolved search context", { tabKey: tabKey, searchContext: searchContext });
+			var levels = SearchResultGroupingConfig.getConfigForContext(searchContext);
+			state.levels = levels;
+			this._logDebug("Grouping config resolved", {
+				tabKey: tabKey,
+				levelCount: levels ? levels.length : 0,
+				levels: levels
+			});
+			if (!levels || !levels.length) {
+				this._logDebug("No levels configured for this search context", {
+					tabKey: tabKey,
+					searchContext: searchContext
+				});
+				this._hideGroupingPane(state, "No grouping config for search.");
+				return;
+			}
+
+			this._ensureGroupingLayout(state);
+			var hierarchy = SearchResultHierarchyBuilder.buildHierarchy(state.originalItems, levels);
+			this._logDebug("Hierarchy built", {
+				tabKey: tabKey,
+				rootCount: hierarchy && hierarchy.root ? hierarchy.root.count : null,
+				childCount: hierarchy && hierarchy.root && hierarchy.root.children ? hierarchy.root.children.length : 0
+			});
+			this._renderGroupingTree(state, hierarchy);
+		},
+
+		_ensureStateForTabKey: function(tabKey, tab, resultSet) {
+			if (!tabKey) {
+				return;
+			}
+			var state = this._groupingStateByTab[tabKey] || { tab: tab || null, contentList: null };
+			if (tab) {
+				state.tab = tab;
+			}
+
+			if (!state.contentList) {
+				var resolved = null;
+				if (tab && tab.searchResults && tab.searchResults.domNode) {
+					resolved = tab.searchResults;
+					this._logDebug("Resolved contentList from tab.searchResults", { tabKey: tabKey });
+				}
+				if (!resolved && tab) {
+					resolved = this._findContentListWidget(tab);
+					if (resolved) {
+						this._logDebug("Resolved contentList from recursive tab traversal", { tabKey: tabKey });
+					}
+				}
+				if (!resolved && this.searchTabContainer && this.searchTabContainer.selectedChildWidget) {
+					var selectedTab = this.searchTabContainer.selectedChildWidget;
+					resolved = this._findContentListWidget(selectedTab);
+					if (resolved) {
+						state.tab = selectedTab;
+						this._logDebug("Resolved contentList from selected tab fallback", { tabKey: tabKey });
+					}
+				}
+				state.contentList = resolved || null;
+			}
+
+			this._groupingStateByTab[tabKey] = state;
+			this._logDebug("State ensured for tabKey", {
+				tabKey: tabKey,
+				hasTab: !!state.tab,
+				hasContentList: !!state.contentList,
+				hasResultSetArg: !!resultSet
+			});
+		},
+
+		_resolveSearchContext: function(tab, resultSet) {
+			if (tab && tab.searchTemplate && tab.searchTemplate.name) {
+				return tab.searchTemplate.name;
+			}
+			if (resultSet && resultSet.name) {
+				return resultSet.name;
+			}
+			if (tab && tab.title) {
+				return tab.title;
+			}
+			return "";
+		},
+
+		_ensureGroupingLayout: function(state) {
+			if (state.layoutReady) {
+				this._logDebug("Grouping layout already ready");
+				return;
+			}
+
+			var contentNode = state.contentList && state.contentList.domNode;
+			var parentNode = contentNode && contentNode.parentNode;
+			if (!contentNode || !parentNode) {
+				this._logDebug("Cannot create grouping layout, missing content node/parent");
+				return;
+			}
+
+			var wrapperNode = domConstruct.create("div", {
+				"class": "cnb-grouping-layout-wrapper"
+			}, parentNode);
+			parentNode.replaceChild(wrapperNode, contentNode);
+
+			var borderContainer = new BorderContainer({
+				design: "sidebar",
+				gutters: false,
+				liveSplitters: true,
+				style: "width:100%;height:100%;"
+			}, wrapperNode);
+
+			var treePane = new ContentPane({
+				region: "leading",
+				splitter: true,
+				style: "width:280px;",
+				"class": "cnb-grouping-tree-pane"
+			});
+
+			var resultPane = new ContentPane({
+				region: "center",
+				"class": "cnb-grouping-results-pane"
+			});
+
+			borderContainer.addChild(treePane);
+			borderContainer.addChild(resultPane);
+			resultPane.domNode.appendChild(contentNode);
+			borderContainer.startup();
+			this._logDebug("Grouping layout created successfully");
+
+			state.layoutReady = true;
+			state.borderContainer = borderContainer;
+			state.treePane = treePane;
+		},
+
+		_renderGroupingTree: function(state, hierarchy) {
+			if (!state.treePane) {
+				this._logDebug("Cannot render tree, treePane missing");
+				return;
+			}
+			domConstruct.empty(state.treePane.domNode);
+			this._logDebug("Rendering grouping tree", {
+				rootLabel: hierarchy && hierarchy.root ? hierarchy.root.label : null,
+				rootCount: hierarchy && hierarchy.root ? hierarchy.root.count : null
+			});
+
+			var toolbarNode = domConstruct.create("div", {
+				"class": "cnb-grouping-tree-toolbar"
+			}, state.treePane.domNode);
+
+			var titleNode = domConstruct.create("div", {
+				"class": "cnb-grouping-tree-title",
+				innerHTML: "Result Groups"
+			}, toolbarNode);
+
+			var clearButtonNode = domConstruct.create("div", {
+				"class": "cnb-grouping-clear-button"
+			}, toolbarNode);
+
+			var self = this;
+			var clearButton = new Button({
+				label: "Clear Filter",
+				onClick: function() {
+					self._applyTreeFilter(state, hierarchy.root);
+				}
+			}, clearButtonNode);
+			clearButton.startup();
+			state.clearButton = clearButton;
+			titleNode.innerHTML = hierarchy.root.label + " (" + hierarchy.root.count + ")";
+
+			var treeNode = domConstruct.create("div", {
+				"class": "cnb-grouping-tree"
+			}, state.treePane.domNode);
+
+			var flatNodes = [];
+			this._flattenHierarchy(hierarchy.root, null, flatNodes);
+			this._logDebug("Flattened tree nodes", {
+				nodeCount: flatNodes.length,
+				preview: flatNodes.slice(0, 10)
+			});
+
+			var store = new Memory({
+				data: flatNodes,
+				getChildren: function(object) {
+					return this.query({ parent: object.id });
+				}
+			});
+
+			var model = new ObjectStoreModel({
+				store: store,
+				query: { id: "root" },
+				mayHaveChildren: function(item) {
+					return item.hasChildren;
+				},
+				labelAttr: "label"
+			});
+
+			state.tree = new Tree({
+				model: model,
+				showRoot: true,
+				onClick: function(item) {
+					self._logDebug("Tree node clicked", {
+						label: item && item.label ? item.label : null,
+						nodeId: item && item.id ? item.id : null
+					});
+					self._applyTreeFilter(state, item.nodeRef);
+				}
+			}, treeNode);
+			state.tree.startup();
+			this._logDebug("Tree startup complete");
+		},
+
+		_flattenHierarchy: function(node, parentId, output) {
+			output.push({
+				id: node.id,
+				parent: parentId,
+				label: node.label,
+				hasChildren: !!(node.children && node.children.length),
+				nodeRef: node
+			});
+			if (!node.children) {
+				return;
+			}
+			for (var i = 0; i < node.children.length; i++) {
+				this._flattenHierarchy(node.children[i], node.id, output);
+			}
+		},
+
+		_applyTreeFilter: function(state, clickedNode) {
+			if (!state || !state.contentList || !state.originalResultSet) {
+				this._logDebug("Cannot apply tree filter due to missing state/contentList/originalResultSet");
+				return;
+			}
+			var criteria = (clickedNode && clickedNode.criteria) ? clickedNode.criteria : [];
+			var filteredItems = SearchResultFilterUtil.filterItems(state.originalItems, criteria);
+			this._logDebug("Applying tree filter", {
+				criteria: criteria,
+				originalCount: state.originalItems ? state.originalItems.length : 0,
+				filteredCount: filteredItems.length
+			});
+			var resultSetToShow = criteria.length
+				? SearchResultFilterUtil.createFilteredResultSet(state.originalResultSet, filteredItems)
+				: state.originalResultSet;
+
+			state.isApplyingFilter = true;
+			try {
+				state.contentList.setResultSet(resultSetToShow);
+			} finally {
+				state.isApplyingFilter = false;
+			}
+			this._logDebug("Filter applied to ContentList");
+		},
+
+		_hideGroupingPane: function(state, message) {
+			if (!state || !state.treePane) {
+				return;
+			}
+			this._logDebug("Hiding grouping pane", { message: message });
+			domConstruct.empty(state.treePane.domNode);
+			domConstruct.create("div", {
+				"class": "cnb-grouping-empty",
+				innerHTML: message || "No groups available."
+			}, state.treePane.domNode);
+		},
+
+		_getTabKey: function(tab) {
+			if (tab && tab.id) {
+				return tab.id;
+			}
+			if (tab && tab.UUID) {
+				return tab.UUID;
+			}
+			return "tab_" + new Date().getTime();
+		},
+
+		_findContentListWidget: function(widget) {
+			if (!widget) {
+				return null;
+			}
+			// ICN SearchTab keeps the primary ContentList in searchResults.
+			if (widget.searchResults && widget.searchResults.setResultSet && widget.searchResults.domNode) {
+				return widget.searchResults;
+			}
+			if (widget.declaredClass && widget.declaredClass.indexOf("ecm.widget.listView.ContentList") > -1) {
+				return widget;
+			}
+			if (widget.contentList && widget.contentList.setResultSet && widget.contentList.domNode) {
+				return widget.contentList;
+			}
+			if (!widget.getChildren) {
+				return null;
+			}
+			var children = widget.getChildren();
+			for (var i = 0; i < children.length; i++) {
+				var found = this._findContentListWidget(children[i]);
+				if (found) {
+					return found;
+				}
+			}
+			return null;
+		}
+	});
+});
+
+
+
+define(["dojo/_base/lang", "./SearchResultHierarchyBuilder"], function(lang, SearchResultHierarchyBuilder) {
+	"use strict";
+
+	function _normalize(value) {
+		if (value === null || value === undefined) {
+			return "";
+		}
+		return String(value);
+	}
+
+	function _itemMatchesCriteria(item, criteria) {
+		if (!criteria || !criteria.length) {
+			return true;
+		}
+
+		for (var i = 0; i < criteria.length; i++) {
+			var current = criteria[i];
+			var candidateValue = SearchResultHierarchyBuilder.extractProperty(item, current.colSymName, current.displayType);
+			if (_normalize(candidateValue) !== _normalize(current.value)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	return {
+		filterItems: function(items, criteria) {
+			var source = items || [];
+			return source.filter(function(item) {
+				return _itemMatchesCriteria(item, criteria);
+			});
+		},
+
+		createFilteredResultSet: function(originalResultSet, filteredItems) {
+			var resultSet = lang.delegate(originalResultSet);
+			resultSet.items = filteredItems.slice(0);
+			resultSet.parentFolder = originalResultSet.parentFolder || null;
+			resultSet.resultSetCount = resultSet.items.length;
+			resultSet.totalCount = resultSet.items.length;
+			resultSet.continuationData = null;
+			resultSet._cnbIsFilteredResultSet = true;
+			resultSet._cnbSourceResultSet = originalResultSet;
+			return resultSet;
+		}
+	};
+});
+
+
+
+
+define([], function() {
+	"use strict";
+
+	function _logDebug(message, payload) {
+		if (!console || !console.log) {
+			return;
+		}
+		if (payload !== undefined) {
+			console.log("[CNBGroupingConfig] " + message, payload);
+		} else {
+			console.log("[CNBGroupingConfig] " + message);
+		}
+	}
+
+	var _configBySearchName = {
+		"SBC Flood": [
+			{ colSymName: "RMApprovalDept", displayType: "value", sort: "asc", hidden: "false" }
+		],
+		"Deposit Statement Search": [
+			{ colSymName: "DocType", displayType: "value", sort: "asc", hidden: "false" }
+		],
+		"Loan Statements Search": [
+			{ colSymName: "DocType", displayType: "value", sort: "asc", hidden: "false" }
+		],
+		"CBS": [
+			{ colSymName: "DocType", displayType: "value", sort: "asc", hidden: "false" },
+			{ colSymName: "DocumentName", displayType: "value", sort: "asc", hidden: "false" }
+		],
+		"CNB Accounts - Core Banking": [
+			{ colSymName: "DocType", displayType: "value", sort: "asc", hidden: "false" }
+		]
+	};
+
+	function _normalizeKey(value) {
+		return value ? String(value).trim() : "";
+	}
+
+	function _toBooleanStringSafe(value) {
+		return String(value).toLowerCase() === "true";
+	}
+
+	function _normalizeLevel(level) {
+		return {
+			colSymName: level.colSymName,
+			displayType: (level.displayType || "value").toLowerCase() === "displayvalue" ? "displayValue" : "value",
+			sort: (level.sort || "asc").toLowerCase() === "desc" ? "desc" : "asc",
+			hidden: _toBooleanStringSafe(level.hidden)
+		};
+	}
+
+	function _normalizeLevels(levels) {
+		var normalized = [];
+		for (var i = 0; i < levels.length; i++) {
+			var current = levels[i];
+			if (current && current.colSymName) {
+				normalized.push(_normalizeLevel(current));
+			}
+		}
+		return normalized;
+	}
+
+	function _getConfigByNormalizedKey(searchContext) {
+		var normalizedKey = _normalizeKey(searchContext).toLowerCase();
+		if (!normalizedKey) {
+			return null;
+		}
+
+		var keys = Object.keys(_configBySearchName || {});
+		for (var i = 0; i < keys.length; i++) {
+			var currentKey = keys[i];
+			if (_normalizeKey(currentKey).toLowerCase() === normalizedKey) {
+				return _configBySearchName[currentKey];
+			}
+		}
+		return null;
+	}
+
+	return {
+		getConfigForContext: function(searchContext) {
+			_logDebug("Looking up config for search context", { searchContext: searchContext });
+			var levels = _getConfigByNormalizedKey(searchContext);
+			if (!levels) {
+				_logDebug("No config found for context", { searchContext: searchContext });
+				return [];
+			}
+			var normalized = _normalizeLevels(levels);
+			_logDebug("Config found and normalized", {
+				searchContext: searchContext,
+				levelCount: normalized.length,
+				levels: normalized
+			});
+			return normalized;
+		},
+
+		setConfigMap: function(newConfigMap) {
+			_configBySearchName = newConfigMap || {};
+			_logDebug("Config map replaced", {
+				searchKeys: Object.keys(_configBySearchName)
+			});
+		}
+	};
+});
+
+
+
+define([], function() {
+	"use strict";
+
+	var BLANK_LABEL = "(Blank)";
+	var DEBUG = true;
+
+	function _logDebug(message, payload) {
+		if (!DEBUG || !console || !console.log) {
+			return;
+		}
+		if (payload !== undefined) {
+			console.log("[CNBGroupingHierarchy] " + message, payload);
+		} else {
+			console.log("[CNBGroupingHierarchy] " + message);
+		}
+	}
+
+	function _normalize(value) {
+		if (value === null || value === undefined) {
+			return "";
+		}
+		return String(value);
+	}
+
+	function _isBlank(value) {
+		return _normalize(value).trim() === "";
+	}
+
+	function _safeNodeKey(value) {
+		var normalized = _normalize(value);
+		return normalized === "" ? "__blank__" : normalized;
+	}
+
+	function _extractProperty(item, colSymName, displayType) {
+		if (!item || !colSymName) {
+			return "";
+		}
+
+		var source = item.attributes || item;
+		var raw = source[colSymName];
+		var chosen = raw;
+
+		if (raw && typeof raw === "object") {
+			if (displayType === "displayValue" && raw.displayValue !== undefined) {
+				chosen = raw.displayValue;
+			} else if (raw.value !== undefined) {
+				chosen = raw.value;
+			}
+		}
+
+		if ((chosen === null || chosen === undefined || chosen === "") && item.getValue) {
+			try {
+				chosen = item.getValue(colSymName);
+			} catch (ignore) {}
+		}
+
+		if (Array.isArray(chosen)) {
+			chosen = chosen.length ? chosen[0] : "";
+		}
+
+		return _isBlank(chosen) ? BLANK_LABEL : _normalize(chosen);
+	}
+
+	function _compareByDirection(left, right, direction) {
+		var l = _normalize(left).toLowerCase();
+		var r = _normalize(right).toLowerCase();
+		if (l === r) {
+			return 0;
+		}
+		if (direction === "desc") {
+			return l > r ? -1 : 1;
+		}
+		return l < r ? -1 : 1;
+	}
+
+	function _sortTree(node, levels, depth) {
+		if (!node.children || !node.children.length) {
+			return;
+		}
+		var levelConfig = levels[Math.min(depth, levels.length - 1)] || {};
+		var direction = levelConfig.sort || "asc";
+		node.children.sort(function(a, b) {
+			return _compareByDirection(a.valueLabel, b.valueLabel, direction);
+		});
+		for (var i = 0; i < node.children.length; i++) {
+			_sortTree(node.children[i], levels, depth + 1);
+		}
+	}
+
+	return {
+		BLANK_LABEL: BLANK_LABEL,
+
+		extractProperty: _extractProperty,
+
+		buildHierarchy: function(items, levels) {
+			var safeItems = items || [];
+			var configuredLevels = (levels || []).filter(function(level) {
+				return level && !level.hidden && !!level.colSymName;
+			});
+			_logDebug("Building hierarchy", {
+				itemCount: safeItems.length,
+				inputLevels: levels,
+				activeLevels: configuredLevels
+			});
+
+			var root = {
+				id: "root",
+				label: "All Documents",
+				valueLabel: "All Documents",
+				count: safeItems.length,
+				depth: -1,
+				criteria: [],
+				children: []
+			};
+
+			if (!configuredLevels.length || !safeItems.length) {
+				_logDebug("Returning root-only hierarchy", {
+					hasLevels: configuredLevels.length > 0,
+					hasItems: safeItems.length > 0
+				});
+				return {
+					root: root,
+					levels: configuredLevels
+				};
+			}
+
+			var idCounter = 0;
+			var levelMaps = {};
+
+			for (var i = 0; i < safeItems.length; i++) {
+				var item = safeItems[i];
+				var currentNode = root;
+				var currentPath = [];
+
+				for (var depth = 0; depth < configuredLevels.length; depth++) {
+					var level = configuredLevels[depth];
+					var valueLabel = _extractProperty(item, level.colSymName, level.displayType);
+					currentPath.push(level.colSymName + "=" + _safeNodeKey(valueLabel));
+					var mapKey = depth + "::" + currentPath.join("|");
+
+					if (!levelMaps[mapKey]) {
+						var criteria = currentNode.criteria.slice(0);
+						criteria.push({
+							colSymName: level.colSymName,
+							value: valueLabel,
+							displayType: level.displayType
+						});
+
+						levelMaps[mapKey] = {
+							id: "groupNode_" + (++idCounter),
+							label: valueLabel + " (0)",
+							valueLabel: valueLabel,
+							count: 0,
+							depth: depth,
+							colSymName: level.colSymName,
+							criteria: criteria,
+							children: []
+						};
+						currentNode.children.push(levelMaps[mapKey]);
+					}
+
+					levelMaps[mapKey].count++;
+					levelMaps[mapKey].label = levelMaps[mapKey].valueLabel + " (" + levelMaps[mapKey].count + ")";
+					currentNode = levelMaps[mapKey];
+				}
+			}
+
+			_sortTree(root, configuredLevels, 0);
+			_logDebug("Hierarchy build complete", {
+				rootCount: root.count,
+				level1Count: root.children.length
+			});
+
+			return {
+				root: root,
+				levels: configuredLevels
+			};
+		}
+	};
+});
+
+
+{
+  "SBC Flood": [
+    {
+      "colSymName": "RMApprovalDept",
+      "displayType": "value",
+      "sort": "asc",
+      "hidden": "false"
+    }
+  ],
+  "Loan Statements Search": [
+    {
+      "colSymName": "DocType",
+      "displayType": "value",
+      "sort": "asc",
+      "hidden": "false"
+    }
+  ],
+  "CBS": [
+    {
+      "colSymName": "DocType",
+      "displayType": "value",
+      "sort": "asc",
+      "hidden": "false"
+    },
+    {
+      "colSymName": "DocumentName",
+      "displayType": "value",
+      "sort": "asc",
+      "hidden": "false"
+    }
+  ],
+  "CNB Accounts - Core Banking": [
+    {
+      "colSymName": "DocType",
+      "displayType": "value",
+      "sort": "asc",
+      "hidden": "false"
+    }
+  ]
+}
+
+
+
+
+
+
+
+/* ============================================
+   CNB Multi-Repository Search Plugin Styles
+   ============================================ */
+
+/* Feature Icon for Launch Bar */
+.CNBMultiRepoSearchPluginLaunchIcon {
+    width: 32px;
+	height: 32px;
+	background: url('images/MultiSearchFeatureIcon.svg') no-repeat;
+	background-position: -16px -16px;
+}
+
+
+.ecmLaunchBarContainer .launchBarButton.dijitToggleButtonHover .CNBMultiRepoSearchPluginLaunchIcon,
+.launchBarButton.dijitChecked .CNBMultiRepoSearchPluginLaunchIcon, 
+.launchBarButton.dijitFocused .CNBMultiRepoSearchPluginLaunchIcon { 
+	background-position: -16px -80px;
+}
+
+/* Main Container - remove all spacing */
+.cnb-multi-repo-search-feature {
+    width: 100%;
+    height: 100%;
+    margin: 0 !important;
+    padding: 0 !important;
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+}
+
+.cnb-multi-repo-search-feature .idxBorderContainer,
+.cnb-multi-repo-search-feature .dijitBorderContainer {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* Override LaunchBarPane default styling */
+.cNBMultiRepoSearchPluginDojo_MultiRepoSearchFeature.ecmLaunchBarPane {
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+.cNBMultiRepoSearchPluginDojo_MultiRepoSearchFeature .ecmCenterPane,
+.cNBMultiRepoSearchPluginDojo_MultiRepoSearchFeature > div {
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+/* Left Panel */
+.cnb-search-panel {
+    background: #fff;
+    border-right: 1px solid #ccc;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+.cnb-search-panel .dijitContentPane {
+    padding: 0 !important;
+}
+
+/* Header */
+.cnb-search-header {
+    padding: 8px 10px;
+    border-bottom: 1px solid #ccc;
+    background: #f5f5f5;
+    margin: 0;
+}
+
+.cnb-search-title {
+    font-size: 12px;
+    font-weight: bold;
+    color: #333;
+    margin: 0;
+}
+
+.cnb-repo-info {
+    font-size: 10px;
+    color: #666;
+    margin-top: 3px;
+}
+
+/* Search Fields */
+.cnb-search-fields-container {
+    padding: 10px;
+}
+
+.cnb-search-field-row {
+    margin-bottom: 10px;
+}
+
+.cnb-search-label {
+    font-size: 11px;
+    color: #333;
+    margin-bottom: 3px;
+    display: block;
+}
+
+.cnb-search-input {
+    width: 100%;
+}
+
+/* Buttons */
+.cnb-search-actions {
+    padding: 10px;
+    border-top: 1px solid #ccc;
+}
+
+/* Loading */
+.cnb-loading-indicator {
+    padding: 15px 10px;
+    text-align: center;
+    font-size: 11px;
+    color: #666;
+}
+
+.cnb-spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid #ccc;
+    border-top-color: #333;
+    border-radius: 50%;
+    animation: cnb-spin 0.8s linear infinite;
+    margin: 0 auto 5px;
+}
+
+@keyframes cnb-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Right Panel */
+.cnb-results-panel {
+    background: #fff;
+    padding: 0 !important;
+    margin: 0 !important;
+}
+
+.cnb-results-panel .dijitContentPane {
+    padding: 0 !important;
+}
+
+.cnb-results-header {
+    padding: 6px 10px;
+    background: #f5f5f5;
+    border-bottom: 1px solid #ccc;
+    font-size: 11px;
+    color: #333;
+}
+
+/* Messages - only show when content exists */
+.cnb-message {
+    padding: 8px 10px;
+    margin: 10px;
+    font-size: 11px;
+    border: 1px solid;
+}
+
+.cnb-error-message {
+    background: #fee;
+    border-color: #c00;
+    color: #900;
+}
+
+.cnb-warning-message {
+    background: #ffe;
+    border-color: #cc0;
+    color: #660;
+}
+
+.cnb-info-message {
+    background: #eef;
+    border-color: #00c;
+    color: #006;
+}
+
+/* Results Grid */
+.cnb-search-results {
+    width: 100%;
+    height: 100%;
+}
+
+.cnb-search-results .ecmContentList {
+    height: 100%;
+}
+
+.CNBMultiRepoSearchPluginLaunchIcon {
+	width: 32px;
+	height: 32px;
+	background: url('images/ChatAssistanceFeatureIcon.svg') no-repeat;
+	background-position: -16px -16px;
+}
+
+/* CNBCustomSearchFeature result grouping tree */
+.cnb-grouping-layout-wrapper {
+	width: 100%;
+	height: 100%;
+}
+
+.cnb-grouping-tree-pane {
+	border-right: 1px solid #d9d9d9;
+	background: #fff;
+	overflow: hidden;
+}
+
+.cnb-grouping-tree-toolbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px;
+	border-bottom: 1px solid #d9d9d9;
+	background: #f8f8f8;
+}
+
+.cnb-grouping-tree-title {
+	font-size: 12px;
+	font-weight: 600;
+	color: #333;
+}
+
+.cnb-grouping-clear-button .dijitButtonNode {
+	font-size: 11px;
+}
+
+.cnb-grouping-tree {
+	height: calc(100% - 42px);
+	overflow: auto;
+	padding: 6px;
+}
+
+.cnb-grouping-empty {
+	padding: 10px;
+	font-size: 12px;
+	color: #666;
+}
