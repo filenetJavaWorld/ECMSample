@@ -1,1 +1,30 @@
-temp
+// STEP 7: Update scan user ID and scan date values if the properties exist
+var scanUserIdProperty = "ScanUserID";   // TODO: replace with actual symbolic name
+var scanDateProperty = "ScanDate";       // TODO: replace with actual symbolic name
+
+var currentUserId = ecm.model.desktop.userId;
+var todayDate = new Date();
+
+attributeDefinitions.forEach(function(attr) {
+    var propertyName = attr.id || attr.name;
+
+    if (propertyName === scanUserIdProperty) {
+        console.log("[CNBPropertyEditorEDSPlugin] Set scan user ID for: " + propertyName + " = " + currentUserId);
+
+        attr.value = currentUserId;
+
+        if (attr.propertyEditor) {
+            attr.propertyEditor.set("value", currentUserId);
+        }
+    }
+
+    if (propertyName === scanDateProperty) {
+        console.log("[CNBPropertyEditorEDSPlugin] Set scan date for: " + propertyName + " = " + todayDate);
+
+        attr.value = todayDate;
+
+        if (attr.propertyEditor) {
+            attr.propertyEditor.set("value", todayDate);
+        }
+    }
+});
