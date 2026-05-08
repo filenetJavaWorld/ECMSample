@@ -1,1 +1,79 @@
-temp
+{
+  "DC_DDA_Documents": {
+    "desktops": ["cnb"],
+    "DDA Statements": {},
+    "properties": {}
+  },
+
+  "DC_Deposit_Statements": {
+    "desktops": ["cnb"],
+    "Deposit Statements": {},
+    "properties": {}
+  },
+
+  "DC_ICS_Documents": {
+    "desktops": ["cnb"],
+    "ICS Documents": {},
+    "properties": {}
+  },
+
+  "DC_IER_Reports": {
+    "desktops": ["cnb"],
+    "IER Entry Template": {},
+    "properties": {}
+  },
+
+  "DC_Legal_Documents": {
+    "desktops": ["cnb"],
+    "Legal Entry Template": {},
+    "properties": {}
+  },
+
+  "DC_Notary_Documents": {
+    "desktops": ["cnb"],
+    "Notary Services Repository": {},
+    "properties": {}
+  },
+
+  "DC_PBBImaging_Documents": {
+    "desktops": ["cnb"],
+    "PBB Imaging Entry Template": {},
+    "properties": {}
+  },
+
+  "DC_PDCTR_Documents": {
+    "desktops": ["cnb"],
+    "PDCTR Document Entry Template": {},
+    "properties": {}
+  },
+
+  "DC_TreasurySrvcs_Credit": {
+    "desktops": ["cnb"],
+    "TreasurySrvcs Credit": {},
+    "properties": {}
+  },
+
+  "DC_TrustCN_Documents": {
+    "desktops": ["cnb"],
+    "Trust CN Documents": {},
+    "properties": {}
+  },
+
+  "DC_TrustRE_Documents": {
+    "desktops": ["cnb"],
+    "Trust Real Estate": {},
+    "properties": {}
+  },
+
+  "DC_VESA_Documents": {
+    "desktops": ["cnb"],
+    "VESA Document Entry Template": {},
+    "properties": {}
+  },
+
+  "DC_WealthManagement_Documents": {
+    "desktops": ["cnb"],
+    "WealthManagement Entry Template": {},
+    "properties": {}
+  }
+}
