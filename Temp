@@ -1,1 +1,2468 @@
-temp
+package com.cnb.reports.mail;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.regex.Pattern;
+
+/**
+ * Validates and normalizes email addresses for report notifications.
+ */
+public final class EmailValidator {
+
+	private static final Pattern EMAIL_PATTERN = Pattern.compile(
+			"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$");
+
+	private EmailValidator() {
+	}
+
+	public static boolean isValid(String email) {
+		if (email == null) {
+			return false;
+		}
+		String trimmed = email.trim();
+		return trimmed.length() > 0 && EMAIL_PATTERN.matcher(trimmed).matches();
+	}
+
+	public static List<String> normalizeList(List<String> rawEmails) {
+		Set<String> unique = new LinkedHashSet<String>();
+		if (rawEmails == null) {
+			return new ArrayList<String>();
+		}
+		for (String raw : rawEmails) {
+			if (raw == null) {
+				continue;
+			}
+			String trimmed = raw.trim();
+			if (trimmed.length() == 0) {
+				continue;
+			}
+			if (isValid(trimmed)) {
+				unique.add(trimmed);
+			}
+		}
+		return new ArrayList<String>(unique);
+	}
+
+	public static List<String> parseSemicolonSeparated(String value) {
+		List<String> emails = new ArrayList<String>();
+		if (value == null) {
+			return emails;
+		}
+		String text = value.trim();
+		if (text.length() == 0) {
+			return emails;
+		}
+		String[] parts = text.split(";");
+		for (int i = 0; i < parts.length; i++) {
+			String part = parts[i];
+			if (part != null) {
+				String trimmed = part.trim();
+				if (trimmed.length() > 0) {
+					emails.add(trimmed);
+				}
+			}
+		}
+		return normalizeList(emails);
+	}
+
+	public static String firstInvalid(List<String> emails) {
+		if (emails == null) {
+			return null;
+		}
+		for (String email : emails) {
+			if (email != null) {
+				String trimmed = email.trim();
+				if (trimmed.length() > 0 && !isValid(trimmed)) {
+					return trimmed;
+				}
+			}
+		}
+		return null;
+	}
+}
+
+
+
+package com.cnb.reports.mail;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.util.Properties;
+
+/**
+ * Loads SMTP and template settings shared with the Report Execution Tool.
+ */
+public final class MailConfig {
+
+	public static final String DEFAULT_CONFIG_FILE =
+			"D:/Rameshwar/ReportsExecutionTool/config/ReportsExecutionTool.properties";
+
+	private final Properties properties;
+	private final boolean mailEnabled;
+	private final String mailSmtpHost;
+	private final int mailSmtpPort;
+	private final boolean mailSmtpAuth;
+	private final boolean mailSmtpStartTlsEnable;
+	private final String mailSmtpUsername;
+	private final String mailSmtpPassword;
+	private final String mailFromAddress;
+	private final String mailFromName;
+	private final File acknowledgementTemplateFile;
+
+	public MailConfig() throws IOException {
+		this(resolveConfigFilePath());
+	}
+
+	public MailConfig(String configFilePath) throws IOException {
+		properties = new Properties();
+		FileInputStream in = null;
+		try {
+			in = new FileInputStream(configFilePath);
+			properties.load(in);
+		} finally {
+			if (in != null) {
+				try {
+					in.close();
+				} catch (IOException e) {
+					// ignore
+				}
+			}
+		}
+
+		mailEnabled = getBoolean("mail.enabled", false);
+		mailSmtpHost = getString("mail.smtp.host", "");
+		mailSmtpPort = getInt("mail.smtp.port", 587);
+		mailSmtpAuth = getBoolean("mail.smtp.auth", true);
+		mailSmtpStartTlsEnable = getBoolean("mail.smtp.starttls.enable", true);
+		mailSmtpUsername = getString("mail.smtp.username", "");
+		mailSmtpPassword = getString("mail.smtp.password", "");
+		mailFromAddress = getString("mail.from.address", "");
+		mailFromName = getString("mail.from.name", "Reports Notification");
+
+		String configDir = getString("app.config.path", "D:/Rameshwar/ReportsExecutionTool/config/");
+		acknowledgementTemplateFile = new File(configDir, "email-templates/acknowledgement.html");
+	}
+
+	public static String resolveConfigFilePath() {
+		String configured = System.getProperty("reports.mail.config.file");
+		if (configured != null && configured.trim().length() > 0) {
+			return configured.trim();
+		}
+		configured = System.getProperty("config.file");
+		if (configured != null && configured.trim().length() > 0) {
+			return configured.trim();
+		}
+		return DEFAULT_CONFIG_FILE;
+	}
+
+	public boolean isMailEnabled() {
+		return mailEnabled;
+	}
+
+	public String getMailSmtpHost() {
+		return mailSmtpHost;
+	}
+
+	public int getMailSmtpPort() {
+		return mailSmtpPort;
+	}
+
+	public boolean isMailSmtpAuth() {
+		return mailSmtpAuth;
+	}
+
+	public boolean isMailSmtpStartTlsEnable() {
+		return mailSmtpStartTlsEnable;
+	}
+
+	public String getMailSmtpUsername() {
+		return mailSmtpUsername;
+	}
+
+	public String getMailSmtpPassword() {
+		return mailSmtpPassword;
+	}
+
+	public String getMailFromAddress() {
+		return mailFromAddress;
+	}
+
+	public String getMailFromName() {
+		return mailFromName;
+	}
+
+	public File getAcknowledgementTemplateFile() {
+		return acknowledgementTemplateFile;
+	}
+
+	private String getString(String key, String defaultValue) {
+		String value = properties.getProperty(key);
+		return value != null ? value.trim() : defaultValue;
+	}
+
+	private int getInt(String key, int defaultValue) {
+		String value = properties.getProperty(key);
+		if (value == null || value.trim().length() == 0) {
+			return defaultValue;
+		}
+		try {
+			return Integer.parseInt(value.trim());
+		} catch (NumberFormatException e) {
+			return defaultValue;
+		}
+	}
+
+	private boolean getBoolean(String key, boolean defaultValue) {
+		String value = properties.getProperty(key);
+		if (value == null || value.trim().length() == 0) {
+			return defaultValue;
+		}
+		return "true".equalsIgnoreCase(value.trim()) || "yes".equalsIgnoreCase(value.trim())
+				|| "1".equals(value.trim());
+	}
+}
+
+
+
+
+package com.cnb.reports.mail;
+
+import com.ibm.json.java.JSONArray;
+import com.ibm.json.java.JSONObject;
+
+/**
+ * Validates and normalizes email fields on report request payloads.
+ */
+public final class ReportEmailPayloadUtil {
+
+	private ReportEmailPayloadUtil() {
+	}
+
+	public static String validatePayloadEmails(JSONObject payload) {
+		String invalid = firstInvalidField(payload, "sendEmailTo");
+		if (invalid != null) {
+			return invalid;
+		}
+		invalid = firstInvalidField(payload, "sendEmailCC");
+		if (invalid != null) {
+			return invalid;
+		}
+		invalid = firstInvalidField(payload, "sendEmailCc");
+		return invalid;
+	}
+
+	public static void normalizePayloadEmails(JSONObject payload) {
+		putNormalizedArray(payload, "sendEmailTo", readRawEmails(payload, "sendEmailTo"));
+		java.util.List<String> cc = readRawEmails(payload, "sendEmailCC");
+		if (cc.isEmpty()) {
+			cc = readRawEmails(payload, "sendEmailCc");
+		}
+		putNormalizedArray(payload, "sendEmailCC", cc);
+		payload.remove("sendEmailCc");
+	}
+
+	private static String firstInvalidField(JSONObject payload, String key) {
+		java.util.List<String> emails = readRawEmails(payload, key);
+		return EmailValidator.firstInvalid(emails);
+	}
+
+	private static java.util.List<String> readRawEmails(JSONObject payload, String key) {
+		java.util.List<String> emails = new java.util.ArrayList<String>();
+		Object raw = payload.get(key);
+		if (raw instanceof JSONArray) {
+			JSONArray arr = (JSONArray) raw;
+			for (int i = 0; i < arr.size(); i++) {
+				Object value = arr.get(i);
+				if (value != null) {
+					emails.add(String.valueOf(value));
+				}
+			}
+		} else if (raw instanceof String) {
+			emails.addAll(EmailValidator.parseSemicolonSeparated((String) raw));
+		}
+		return emails;
+	}
+
+	private static void putNormalizedArray(JSONObject payload, String key, java.util.List<String> rawEmails) {
+		java.util.List<String> normalized = EmailValidator.normalizeList(rawEmails);
+		JSONArray arr = new JSONArray();
+		for (int i = 0; i < normalized.size(); i++) {
+			arr.add(normalized.get(i));
+		}
+		payload.put(key, arr);
+	}
+}
+
+
+
+package com.cnb.reports.mail;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+public final class ReportRequestEmailContext {
+
+	private String reportName;
+	private String targetDocumentClass;
+	private String repositoryName;
+	private String status;
+	private String submittedOn;
+	private List<String> sendEmailTo = new ArrayList<String>();
+	private List<String> sendEmailCc = new ArrayList<String>();
+
+	public String getReportName() {
+		return reportName;
+	}
+
+	public void setReportName(String reportName) {
+		this.reportName = reportName;
+	}
+
+	public String getTargetDocumentClass() {
+		return targetDocumentClass;
+	}
+
+	public void setTargetDocumentClass(String targetDocumentClass) {
+		this.targetDocumentClass = targetDocumentClass;
+	}
+
+	public String getRepositoryName() {
+		return repositoryName;
+	}
+
+	public void setRepositoryName(String repositoryName) {
+		this.repositoryName = repositoryName;
+	}
+
+	public String getStatus() {
+		return status;
+	}
+
+	public void setStatus(String status) {
+		this.status = status;
+	}
+
+	public String getSubmittedOn() {
+		return submittedOn;
+	}
+
+	public void setSubmittedOn(String submittedOn) {
+		this.submittedOn = submittedOn;
+	}
+
+	public List<String> getSendEmailTo() {
+		return Collections.unmodifiableList(sendEmailTo);
+	}
+
+	public void setSendEmailTo(List<String> sendEmailTo) {
+		this.sendEmailTo = sendEmailTo != null ? new ArrayList<String>(sendEmailTo) : new ArrayList<String>();
+	}
+
+	public List<String> getSendEmailCc() {
+		return Collections.unmodifiableList(sendEmailCc);
+	}
+
+	public void setSendEmailCc(List<String> sendEmailCc) {
+		this.sendEmailCc = sendEmailCc != null ? new ArrayList<String>(sendEmailCc) : new ArrayList<String>();
+	}
+}
+
+
+
+
+package com.cnb.reports.mail;
+
+import java.util.List;
+import java.util.Properties;
+
+import javax.mail.Message;
+import javax.mail.Session;
+import javax.mail.Transport;
+import javax.mail.internet.InternetAddress;
+import javax.mail.internet.MimeMessage;
+
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+
+public final class SmtpEmailSender {
+
+	private final MailConfig config;
+	private final PluginServiceCallbacks callbacks;
+
+	public SmtpEmailSender(MailConfig config, PluginServiceCallbacks callbacks) {
+		this.config = config;
+		this.callbacks = callbacks;
+	}
+
+	public void send(String subject, String body, List<String> toRecipients, List<String> ccRecipients)
+			throws Exception {
+		if (!config.isMailEnabled()) {
+			logInfo("Mail disabled. Skipping email with subject '" + subject + "'.");
+			return;
+		}
+
+		List<String> to = EmailValidator.normalizeList(toRecipients);
+		if (to.isEmpty()) {
+			logInfo("No valid SendEmailTo recipients. Skipping email with subject '" + subject + "'.");
+			return;
+		}
+
+		Session session = Session.getInstance(buildMailProperties(), null);
+		MimeMessage message = new MimeMessage(session);
+		message.setFrom(new InternetAddress(config.getMailFromAddress(), config.getMailFromName()));
+		for (int i = 0; i < to.size(); i++) {
+			message.addRecipient(Message.RecipientType.TO, new InternetAddress(to.get(i)));
+		}
+		List<String> cc = EmailValidator.normalizeList(ccRecipients);
+		for (int i = 0; i < cc.size(); i++) {
+			message.addRecipient(Message.RecipientType.CC, new InternetAddress(cc.get(i)));
+		}
+		message.setSubject(subject, "UTF-8");
+		message.setText(body, "UTF-8");
+
+		Transport transport = session.getTransport("smtp");
+		try {
+			if (config.isMailSmtpAuth()) {
+				transport.connect(config.getMailSmtpHost(), config.getMailSmtpPort(),
+						config.getMailSmtpUsername(), config.getMailSmtpPassword());
+			} else {
+				transport.connect();
+			}
+			transport.sendMessage(message, message.getAllRecipients());
+			logInfo("Sent email '" + subject + "' to " + to);
+		} finally {
+			transport.close();
+		}
+	}
+
+	private Properties buildMailProperties() {
+		Properties props = new Properties();
+		props.put("mail.smtp.host", config.getMailSmtpHost());
+		props.put("mail.smtp.port", String.valueOf(config.getMailSmtpPort()));
+		props.put("mail.smtp.auth", String.valueOf(config.isMailSmtpAuth()));
+		props.put("mail.smtp.starttls.enable", String.valueOf(config.isMailSmtpStartTlsEnable()));
+		return props;
+	}
+
+	private void logInfo(String message) {
+		if (callbacks != null && callbacks.getLogger() != null) {
+			callbacks.getLogger().logInfo(this, "send", null, message);
+		}
+	}
+}
+
+
+
+package com.cnb.reports.p8;
+
+import javax.security.auth.Subject;
+
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.util.UserContext;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+
+
+public final class P8ContextUtil {
+
+	private P8ContextUtil() {
+	}
+
+	/**
+	 * Pushes the ICN user's P8 {@link Subject}, runs {@code work}, then pops the subject in a {@code finally} block.
+	 */
+	public static <T> T runWithP8Context(PluginServiceCallbacks callbacks, String repositoryId, P8Callback<T> work)
+			throws Exception {
+		if (repositoryId == null || repositoryId.trim().isEmpty()) {
+			throw new IllegalArgumentException("repositoryId is required.");
+		}
+		Subject subject = callbacks.getP8Subject(repositoryId);
+		ObjectStore objectStore = callbacks.getP8ObjectStore(repositoryId);
+		if (subject == null || objectStore == null) {
+			throw new IllegalStateException(
+					"Cannot access repository '" + repositoryId + "'. Verify the desktop includes this P8 connection and you are logged in.");
+		}
+		UserContext.get().pushSubject(subject);
+		try {
+			return work.run(objectStore);
+		} finally {
+			UserContext.get().popSubject();
+		}
+	}
+
+	public interface P8Callback<T> {
+		T run(ObjectStore objectStore) throws Exception;
+	}
+}
+
+
+
+
+package com.cnb.reports.p8;
+
+import java.io.ByteArrayInputStream;
+import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
+
+import com.cnb.reports.constants.ReportPluginConstants;
+import com.cnb.reports.mail.EmailValidator;
+import com.filenet.api.collection.ContentElementList;
+import com.filenet.api.collection.StringList;
+import com.filenet.api.collection.IndependentObjectSet;
+import com.filenet.api.collection.PageIterator;
+import com.filenet.api.constants.AutoClassify;
+import com.filenet.api.constants.CheckinType;
+import com.filenet.api.constants.PropertyNames;
+import com.filenet.api.constants.RefreshMode;
+import com.filenet.api.core.ContentTransfer;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.Properties;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import com.filenet.api.util.Id;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.json.java.JSON;
+import com.ibm.json.java.JSONArray;
+import com.ibm.json.java.JSONObject;
+
+public final class ReportRequestDocumentHelper {
+
+	private static final Charset UTF8 = Charset.forName("UTF-8");
+
+	private ReportRequestDocumentHelper() {
+	}
+
+	public static JSONObject createReportRequestDocument(ObjectStore os, JSONObject payloadJson) throws Exception {
+		String reportName = trim(payloadJson.get("reportName"));
+		String reportRequestId = trim(payloadJson.get("reportRequestId"));
+		if (reportRequestId == null || reportRequestId.length() == 0) {
+			reportRequestId = UUID.randomUUID().toString();
+			payloadJson.put("reportRequestId", reportRequestId);
+		}
+
+		String jsonText = payloadJson.serialize(true);
+		byte[] bytes = jsonText.getBytes(UTF8);
+
+		String retrievalName = ReportPluginConstants.JSON_FILENAME_PREFIX + reportRequestId
+				+ ReportPluginConstants.JSON_FILENAME_SUFFIX;
+
+		Document doc = Factory.Document.createInstance(os, ReportPluginConstants.REPORT_REQUEST_CLASS);
+		Properties props = doc.getProperties();
+		props.putValue("DocumentTitle", reportName);
+		applyReportRequestMetadata(props, payloadJson);
+
+		ContentTransfer ct = Factory.ContentTransfer.createInstance();
+		ct.setCaptureSource(new ByteArrayInputStream(bytes));
+		ct.set_RetrievalName(retrievalName);
+		ct.set_ContentType(ReportPluginConstants.JSON_MIME_TYPE);
+
+		ContentElementList cel = Factory.ContentElement.createList();
+		cel.add(ct);
+		doc.set_ContentElements(cel);
+		doc.set_MimeType(ReportPluginConstants.JSON_MIME_TYPE);
+
+		saveAsMajorVersion(doc);
+
+		JSONObject out = new JSONObject();
+		out.put("documentId", doc.get_Id().toString());
+		out.put("reportRequestId", reportRequestId);
+		return out;
+	}
+
+	private static JSONArray queryMyReportRequests(ObjectStore os, PluginServiceCallbacks callbacks, int maxResults)
+			throws Exception {
+		if (callbacks == null) {
+			throw new IllegalArgumentException("callbacks is required.");
+		}
+		if (maxResults < 1) {
+			maxResults = 1;
+		}
+
+		String sql = ReportPluginConstants.REPORT_REQUEST_LIST_SQL;
+
+		PropertyFilter pf = newReportRequestListPropertyFilter();
+		return fetchReportRequestRows(os, sql, maxResults, pf);
+	}
+
+	private static PropertyFilter newReportRequestListPropertyFilter() {
+		PropertyFilter pf = new PropertyFilter();
+		pf.addIncludeProperty(0, null, null, "This", null);
+		pf.addIncludeProperty(0, null, null, PropertyNames.ID, null);
+		pf.addIncludeProperty(0, null, null, "DocumentTitle", null);
+		pf.addIncludeProperty(0, null, null, PropertyNames.CREATOR, null);
+		pf.addIncludeProperty(0, null, null, "DateCreated", null);
+		pf.addIncludeProperty(0, null, null, "DateLastModified", null);
+		pf.addIncludeProperty(0, null, null, ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS, null);
+		pf.addIncludeProperty(0, null, null, "MimeType", null);
+		return pf;
+	}
+
+	private static JSONArray fetchReportRequestRows(ObjectStore os, String sql, int maxRows, PropertyFilter pf)
+			throws Exception {
+		SearchSQL searchSQL = new SearchSQL(sql);
+		SearchScope scope = new SearchScope(os);
+		IndependentObjectSet set = scope.fetchObjects(searchSQL, maxRows, pf, Boolean.TRUE);
+		JSONArray rows = new JSONArray();
+		PageIterator pi = set.pageIterator();
+		while (pi.nextPage()) {
+			Object[] page = pi.getCurrentPage();
+			if (page == null) {
+				continue;
+			}
+			for (Object o : page) {
+				if (!(o instanceof Document)) {
+					continue;
+				}
+				rows.add(toListRow((Document) o));
+			}
+		}
+		return rows;
+	}
+
+	private static JSONObject toListRow(Document d) {
+		Properties p = d.getProperties();
+		JSONObject row = new JSONObject();
+		row.put("documentId", d.get_Id().toString());
+		row.put("documentTitle", P8PropertyValues.asString(p, "DocumentTitle"));
+		row.put("creator", P8PropertyValues.asString(p, PropertyNames.CREATOR));
+		row.put("dateCreated", P8PropertyValues.asDateTimeIsoUtc(p, "DateCreated"));
+		row.put("dateLastModified", P8PropertyValues.asDateTimeIsoUtc(p, "DateLastModified"));
+		row.put("status", P8PropertyValues.asString(p, ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS));
+		row.put("contentType", ReportPluginConstants.JSON_MIME_TYPE);
+		return row;
+	}
+
+	public static JSONObject loadDocumentJson(ObjectStore os, String documentId) throws Exception {
+		PropertyFilter pf = new PropertyFilter();
+		pf.addIncludeProperty(0, null, null, PropertyNames.ID, null);
+		pf.addIncludeProperty(0, null, null, "DocumentTitle", null);
+		pf.addIncludeProperty(0, null, null, PropertyNames.CREATOR, null);
+		pf.addIncludeProperty(0, null, null, "DateCreated", null);
+		pf.addIncludeProperty(0, null, null, "DateLastModified", null);
+		pf.addIncludeProperty(0, null, null, ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS, null);
+		pf.addIncludeProperty(0, null, null, PropertyNames.CONTENT_ELEMENTS, null);
+
+		Document doc = Factory.Document.fetchInstance(os, new Id(documentId), pf);
+		JSONObject meta = new JSONObject();
+		Properties mp = doc.getProperties();
+		meta.put("documentId", doc.get_Id().toString());
+		meta.put("documentTitle", P8PropertyValues.asString(mp, "DocumentTitle"));
+		meta.put("creator", P8PropertyValues.asString(mp, PropertyNames.CREATOR));
+		meta.put("dateCreated", P8PropertyValues.asDateTimeIsoUtc(mp, "DateCreated"));
+		meta.put("dateLastModified", P8PropertyValues.asDateTimeIsoUtc(mp, "DateLastModified"));
+		meta.put("status", P8PropertyValues.asString(mp, ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS));
+
+		JSONObject content = readFirstContentJson(doc);
+
+		JSONObject out = new JSONObject();
+		out.put("metadata", meta);
+		out.put("reportRequest", content);
+		return out;
+	}
+
+	public static JSONObject loadDocumentJsonByReportRequestId(ObjectStore os, PluginServiceCallbacks callbacks,
+			String reportRequestId, int maxCandidates) throws Exception {
+		JSONArray candidates = queryMyReportRequests(os, callbacks, maxCandidates);
+		for (int i = 0; i < candidates.size(); i++) {
+			JSONObject row = (JSONObject) candidates.get(i);
+			String docId = trim(row.get("documentId"));
+			if (docId == null) {
+				continue;
+			}
+			try {
+				JSONObject details = loadDocumentJson(os, docId);
+				JSONObject rr = (JSONObject) details.get("reportRequest");
+				if (rr != null && reportRequestId.equals(trim(rr.get("reportRequestId")))) {
+					return details;
+				}
+			} catch (Exception e) {
+				// skip unreadable rows
+			}
+		}
+		return null;
+	}
+
+	private static JSONObject readFirstContentJson(Document doc) throws Exception {
+		com.filenet.api.collection.ContentElementList cel = doc.get_ContentElements();
+		if (cel == null || cel.size() == 0) {
+			throw new IllegalStateException("Report request document has no content.");
+		}
+		Object first = cel.get(0);
+		if (!(first instanceof ContentTransfer)) {
+			throw new IllegalStateException("Unexpected content element type.");
+		}
+		ContentTransfer ct = (ContentTransfer) first;
+		java.io.InputStream in = null;
+		try {
+			in = ct.accessContentStream();
+			java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+			byte[] buf = new byte[8192];
+			int n;
+			while ((n = in.read(buf)) != -1) {
+				bos.write(buf, 0, n);
+			}
+			String text = bos.toString("UTF-8");
+			Object parsed = JSON.parse(text);
+			if (!(parsed instanceof JSONObject)) {
+				throw new IllegalStateException("Report request content is not a JSON object.");
+			}
+			return (JSONObject) parsed;
+		} finally {
+			if (in != null) {
+				try {
+					in.close();
+				} catch (Exception e) {
+					// ignore
+				}
+			}
+		}
+	}
+
+	/**
+	 * Checks in as a major version so the document is released (not left in reservation) as version 1.0.
+	 */
+	private static void saveAsMajorVersion(Document doc) {
+		doc.checkin(AutoClassify.DO_NOT_AUTO_CLASSIFY, CheckinType.MAJOR_VERSION);
+		doc.save(RefreshMode.REFRESH);
+	}
+
+	/**
+	 * Sets {@link ReportPluginConstants} metadata on the new document. Full payload remains in JSON content.
+	 */
+	private static void applyReportRequestMetadata(Properties props, JSONObject payloadJson) throws Exception {
+		putStringProperty(props, ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS,
+				ReportPluginConstants.REPORT_REQUEST_INITIAL_STATUS);
+
+		String targetClass = trim(payloadJson.get("targetClassSymbolicName"));
+		if (targetClass == null) {
+			throw new IllegalArgumentException("targetClassSymbolicName is required to set TargetDocumentClass.");
+		}
+		putStringProperty(props, ReportPluginConstants.REPORT_REQUEST_PROPERTY_TARGET_DOCUMENT_CLASS, targetClass);
+
+		String repositoryName = resolveRepositoryName(payloadJson);
+		putStringProperty(props, ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPOSITORY_NAME, repositoryName);
+
+		Object critObj = payloadJson.get("criteria");
+		JSONArray criteria = critObj instanceof JSONArray ? (JSONArray) critObj : new JSONArray();
+		putStringListProperty(props, ReportPluginConstants.REPORT_REQUEST_PROPERTY_SEARCH_CRITERIA_PARAMS,
+				buildSearchCriteriaParams(criteria));
+
+		putStringListProperty(props, ReportPluginConstants.REPORT_REQUEST_PROPERTY_RESULT_SET_COLUMNS,
+				buildResultSetColumns(payloadJson));
+
+		String sqlQuery = trim(payloadJson.get("sqlQuery"));
+		if (sqlQuery != null) {
+			putStringProperty(props, ReportPluginConstants.REPORT_REQUEST_PROPERTY_SQL_QUERY, sqlQuery);
+		}
+
+		putStringListProperty(props, ReportPluginConstants.REPORT_REQUEST_PROPERTY_SEND_EMAIL_TO,
+				buildEmailList(payloadJson, ReportPluginConstants.JSON_SEND_EMAIL_TO));
+		putStringListProperty(props, ReportPluginConstants.REPORT_REQUEST_PROPERTY_SEND_EMAIL_CC,
+				buildEmailList(payloadJson, ReportPluginConstants.JSON_SEND_EMAIL_CC));
+	}
+
+	private static String[] buildEmailList(JSONObject payloadJson, String jsonKey) {
+		List<String> emails = new ArrayList<String>();
+		Object raw = payloadJson.get(jsonKey);
+		if (!(raw instanceof JSONArray)) {
+			return new String[0];
+		}
+		JSONArray arr = (JSONArray) raw;
+		java.util.HashSet<String> seen = new java.util.HashSet<String>();
+		for (int i = 0; i < arr.size(); i++) {
+			String email = trim(arr.get(i));
+			if (email == null || !EmailValidator.isValid(email)) {
+				continue;
+			}
+			String key = email.toLowerCase();
+			if (seen.add(key)) {
+				emails.add(email);
+			}
+		}
+		return emails.toArray(new String[emails.size()]);
+	}
+
+	private static String resolveRepositoryName(JSONObject payloadJson) {
+		String name = trim(payloadJson.get("repositoryName"));
+		if (name != null) {
+			return name;
+		}
+		name = trim(payloadJson.get("objectStoreName"));
+		return name != null ? name : "";
+	}
+
+	private static String[] buildSearchCriteriaParams(JSONArray criteria) {
+		List<String> entries = new ArrayList<String>();
+		if (criteria == null) {
+			return new String[0];
+		}
+		for (int i = 0; i < criteria.size(); i++) {
+			Object row = criteria.get(i);
+			if (!(row instanceof JSONObject)) {
+				continue;
+			}
+			JSONObject c = (JSONObject) row;
+			String prop = trim(c.get("propertySymbolicName"));
+			String operator = trim(c.get("operator"));
+			if (prop == null || operator == null) {
+				continue;
+			}
+			String valuesPart = formatCriteriaValues(c.get("values"));
+			entries.add(prop + "|" + operator + "|" + valuesPart);
+		}
+		return entries.toArray(new String[entries.size()]);
+	}
+
+	private static String formatCriteriaValues(Object valuesObj) {
+		if (!(valuesObj instanceof JSONArray)) {
+			return "";
+		}
+		JSONArray vals = (JSONArray) valuesObj;
+		List<String> parts = new ArrayList<String>();
+		for (int i = 0; i < vals.size(); i++) {
+			Object v = vals.get(i);
+			if (v == null) {
+				continue;
+			}
+			String s = String.valueOf(v).trim();
+			if (s.length() > 0) {
+				parts.add(s);
+			}
+		}
+		if (parts.isEmpty()) {
+			return "";
+		}
+		StringBuilder sb = new StringBuilder();
+		for (int i = 0; i < parts.size(); i++) {
+			if (i > 0) {
+				sb.append(',');
+			}
+			sb.append(parts.get(i));
+		}
+		return sb.toString();
+	}
+
+	private static String[] buildResultSetColumns(JSONObject payloadJson) {
+		List<String> columns = new ArrayList<String>();
+		Object rdObj = payloadJson.get("resultDisplay");
+		if (!(rdObj instanceof JSONObject)) {
+			return new String[0];
+		}
+		Object colsObj = ((JSONObject) rdObj).get("columns");
+		if (!(colsObj instanceof JSONArray)) {
+			return new String[0];
+		}
+		JSONArray cols = (JSONArray) colsObj;
+		for (int i = 0; i < cols.size(); i++) {
+			Object col = cols.get(i);
+			if (col instanceof JSONObject) {
+				String sym = trim(((JSONObject) col).get("propertySymbolicName"));
+				if (sym != null) {
+					columns.add(sym);
+				}
+			} else if (col != null) {
+				String sym = String.valueOf(col).trim();
+				if (sym.length() > 0) {
+					columns.add(sym);
+				}
+			}
+		}
+		return columns.toArray(new String[columns.size()]);
+	}
+
+	private static void putStringProperty(Properties props, String propertyName, String value) throws Exception {
+		try {
+			props.putValue(propertyName, value != null ? value : "");
+		} catch (RuntimeException e) {
+			throw metadataAssignmentError(propertyName, e);
+		}
+	}
+
+	private static void putStringListProperty(Properties props, String propertyName, String[] values) throws Exception {
+		try {
+			StringList list = Factory.StringList.createList();
+			if (values != null) {
+				for (String v : values) {
+					if (v != null && v.length() > 0) {
+						list.add(v);
+					}
+				}
+			}
+			props.putValue(propertyName, list);
+		} catch (RuntimeException e) {
+			throw metadataAssignmentError(propertyName, e);
+		}
+	}
+
+	private static IllegalStateException metadataAssignmentError(String propertyName, RuntimeException cause) {
+		String detail = cause.getMessage() != null ? cause.getMessage() : cause.toString();
+		return new IllegalStateException(
+				"Failed to set ReportRequest property '" + propertyName + "': " + detail
+						+ ". Verify the property exists on class ReportRequest and the user has write access.",
+				cause);
+	}
+
+	private static String trim(Object o) {
+		if (o == null) {
+			return null;
+		}
+		String s = String.valueOf(o).trim();
+		return s.length() == 0 ? null : s;
+	}
+}
+
+
+
+
+package com.cnb.reports.service;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+
+import org.apache.struts.util.MessageResources;
+
+import com.cnb.reports.constants.ReportPluginConstants;
+import com.cnb.reports.p8.P8PropertyValues;
+import com.filenet.api.collection.IndependentObjectSet;
+import com.filenet.api.collection.PageIterator;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.Properties;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.ecm.json.JSONResultSetColumn;
+import com.ibm.ecm.json.JSONResultSetResponse;
+import com.ibm.ecm.json.JSONResultSetRow;
+import com.ibm.json.java.JSONArray;
+import com.ibm.json.java.JSONObject;
+
+/**
+ * P8 execution for {@link com.cnb.reports.service.ReportRequestsSearchService}, modeled on IBM's
+ * {@code SamplePluginSearchServiceP8}: run CE SQL, fill {@link JSONResultSetResponse}, drive {@code ContentList}.
+ */
+public final class ReportRequestsSearchServiceP8 {
+
+	private static final int FETCH_PAGE_SIZE = 350;
+
+	private ReportRequestsSearchServiceP8() {
+	}
+
+	@SuppressWarnings("rawtypes")
+	public static void executeP8Search(String repositoryId, PluginServiceCallbacks callbacks,
+			JSONResultSetResponse jsonResultSet, Locale clientLocale) throws Exception {
+		ObjectStore objectStore = callbacks.getP8ObjectStore(repositoryId);
+
+		buildResultStructure(jsonResultSet, callbacks.getResources(), clientLocale);
+
+		SearchSQL searchSQL = new SearchSQL(ReportPluginConstants.REPORT_REQUEST_LIST_SQL);
+		SearchScope searchScope = new SearchScope(objectStore);
+
+		// Null filter: let CE hydrate the default property set for each row. Narrow ICN document filters plus a
+		// projection-only SELECT routinely cause FNRCA0024E (MimeType, ClassDescription, ...) when calling
+		// get_MimeType() / getP8PrivilegeMasks().
+		List<Object> searchResults = new ArrayList<Object>(FETCH_PAGE_SIZE);
+		IndependentObjectSet resultsObjectSet = searchScope.fetchObjects(searchSQL, FETCH_PAGE_SIZE, null,
+				Boolean.TRUE);
+		PageIterator pageIterator = resultsObjectSet.pageIterator();
+		if (pageIterator.nextPage()) {
+			for (Object obj : pageIterator.getCurrentPage()) {
+				searchResults.add(obj);
+			}
+		}
+
+		HashMap<Object, Long> privMasks = null;
+		try {
+			privMasks = callbacks.getP8PrivilegeMasks(repositoryId, searchResults);
+		} catch (Exception e) {
+			// If masks cannot be resolved, rows still render; privileges default below.
+			privMasks = null;
+		}
+
+		for (Object searchResult : searchResults) {
+			Document doc = (Document) searchResult;
+			Properties props = doc.getProperties();
+
+			StringBuffer sbId = new StringBuffer();
+			sbId.append(doc.getClassName()).append(",").append(objectStore.get_Id().toString()).append(",")
+					.append(doc.get_Id().toString());
+
+			long privileges = 0L;
+			if (privMasks != null) {
+				Long pm = privMasks.get(doc);
+				if (pm != null) {
+					privileges = pm.longValue();
+				}
+			}
+
+			String title = P8PropertyValues.asString(props, "DocumentTitle");
+			if (title.length() == 0) {
+				try {
+					String n = doc.get_Name();
+					if (n != null && n.length() > 0) {
+						title = n;
+					}
+				} catch (RuntimeException e) {
+					// Name not in cache for this row shape
+				}
+			}
+
+			String mimeForRow = P8PropertyValues.asString(props, "MimeType");
+			if (mimeForRow.length() == 0) {
+				mimeForRow = ReportPluginConstants.JSON_MIME_TYPE;
+			}
+
+			boolean locked = false;
+			String lockOwner = "";
+			boolean currentVersion = true;
+			try {
+				locked = doc.isLocked();
+				String lo = doc.get_LockOwner();
+				lockOwner = lo != null ? lo : "";
+				currentVersion = doc.get_IsCurrentVersion();
+			} catch (RuntimeException e) {
+				// Lock / version not in cache â€” safe defaults for the grid
+			}
+
+			JSONResultSetRow row = new JSONResultSetRow(sbId.toString(), title, mimeForRow, privileges);
+
+			row.addAttribute("locked", locked, JSONResultSetRow.TYPE_BOOLEAN, null, Boolean.toString(locked));
+			row.addAttribute("lockedUser", lockOwner, JSONResultSetRow.TYPE_STRING, null, lockOwner);
+			row.addAttribute("currentVersion", currentVersion, JSONResultSetRow.TYPE_BOOLEAN, null,
+					Boolean.toString(currentVersion));
+
+			row.addAttribute("ID", doc.get_Id().toString(), JSONResultSetRow.TYPE_STRING, null, doc.get_Id()
+					.toString());
+			row.addAttribute("className", doc.getClassName(), JSONResultSetRow.TYPE_STRING, null, doc.getClassName());
+
+			String targetClass = P8PropertyValues.asString(props,
+					ReportPluginConstants.REPORT_REQUEST_PROPERTY_TARGET_DOCUMENT_CLASS);
+			String status = P8PropertyValues.asString(props, ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS);
+			String dateCreated = P8PropertyValues.asDateTimeForResultSet(props,
+					ReportPluginConstants.REPORT_REQUEST_PROPERTY_DATE_CREATED);
+			String lastExecutionDate = P8PropertyValues.asDateTimeForResultSet(props,
+					ReportPluginConstants.REPORT_REQUEST_PROPERTY_LAST_EXECUTION_DATE);
+			String executionStartDate = P8PropertyValues.asDateTimeForResultSet(props,
+					ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_START_DATE);
+			String executionEndDate = P8PropertyValues.asDateTimeForResultSet(props,
+					ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_END_DATE);
+
+			row.addAttribute("DocumentTitle", title, JSONResultSetRow.TYPE_STRING, null, title);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_TARGET_DOCUMENT_CLASS, targetClass,
+					JSONResultSetRow.TYPE_STRING, null, targetClass);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS, status, JSONResultSetRow.TYPE_STRING,
+					null, status);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_DATE_CREATED, dateCreated,
+					JSONResultSetRow.TYPE_STRING, null, dateCreated);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_LAST_EXECUTION_DATE, lastExecutionDate,
+					JSONResultSetRow.TYPE_STRING, null, lastExecutionDate);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_START_DATE,
+					executionStartDate, JSONResultSetRow.TYPE_STRING, null, executionStartDate);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_END_DATE, executionEndDate,
+					JSONResultSetRow.TYPE_STRING, null, executionEndDate);
+
+			String downloadFlag = isCompletedStatus(status) ? "download" : "";
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_GRID_DOWNLOAD_FIELD, downloadFlag,
+					JSONResultSetRow.TYPE_STRING, null, downloadFlag);
+
+			jsonResultSet.addRow(row);
+		}
+	}
+
+	private static void buildResultStructure(JSONResultSetResponse jsonResultSet, MessageResources resources,
+			Locale clientLocale) throws Exception {
+		String[] states = new String[1];
+		states[0] = JSONResultSetColumn.STATE_LOCKED;
+
+		jsonResultSet.addColumn(new JSONResultSetColumn("&nbsp;", "36px",
+				ReportPluginConstants.REPORT_REQUEST_GRID_DOWNLOAD_FIELD, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("&nbsp;", "multiStateIcon", false, states));
+		jsonResultSet.addColumn(new JSONResultSetColumn("&nbsp;", "17px", "mimeTypeIcon", null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Report Name", "220px", "DocumentTitle", null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Target Document Class", "180px",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_TARGET_DOCUMENT_CLASS, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Status", "100px",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Date created", "170px",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_DATE_CREATED, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Last Execution Date", "170px",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_LAST_EXECUTION_DATE, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Report Execution Start Date", "190px",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_START_DATE, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Report Execution End Date", "190px",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_END_DATE, null, false));
+
+		JSONArray fieldsToDisplay = new JSONArray();
+		fieldsToDisplay.add(fieldDisplay("DocumentTitle", "Report Name"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_TARGET_DOCUMENT_CLASS,
+				"Target Document Class"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS, "Status"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_DATE_CREATED, "Date created"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_LAST_EXECUTION_DATE,
+				"Last Execution Date"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_START_DATE,
+				"Report Execution Start Date"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_END_DATE,
+				"Report Execution End Date"));
+
+		jsonResultSet.addMagazineColumn(new JSONResultSetColumn("content", "100%", "content", fieldsToDisplay,
+				new JSONArray()));
+	}
+
+	private static boolean isCompletedStatus(String status) {
+		return status != null
+				&& ReportPluginConstants.REPORT_REQUEST_STATUS_COMPLETED.equalsIgnoreCase(status.trim());
+	}
+
+	private static JSONObject fieldDisplay(String field, String displayName) throws Exception {
+		JSONObject o = new JSONObject();
+		o.put("field", field);
+		o.put("displayName", displayName);
+		return o;
+	}
+}
+
+
+
+
+package com.cnb.reports.service;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import com.cnb.reports.constants.ReportPluginConstants;
+import com.cnb.reports.mail.EmailService;
+import com.cnb.reports.mail.MailConfig;
+import com.cnb.reports.mail.ReportEmailPayloadUtil;
+import com.cnb.reports.mail.ReportRequestEmailContext;
+import com.cnb.reports.p8.P8ContextUtil;
+import com.cnb.reports.p8.ReportRequestDocumentHelper;
+import com.ibm.ecm.extension.PluginResponseUtil;
+import com.ibm.ecm.extension.PluginService;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.ecm.json.JSONResponse;
+import com.ibm.json.java.JSONArray;
+import com.ibm.json.java.JSONObject;
+
+
+/**
+ * Accepts a JSON body describing the report request, persists it as content on a {@code ReportRequest} document.
+ * <p>
+ * All CE access uses the logged-in user's context from {@link com.ibm.ecm.extension.PluginServiceCallbacks} (see
+ * {@link com.cnb.reports.p8.P8ContextUtil}); no dedicated service connection is created for this flow.
+ * </p>
+ */
+public class SubmitReportRequestService extends PluginService {
+
+	public static final String SERVICE_ID = ReportPluginConstants.SERVICE_SUBMIT_REPORT_REQUEST;
+
+	@Override
+	public String getId() {
+		return SERVICE_ID;
+	}
+
+	@Override
+	public void execute(PluginServiceCallbacks callbacks, HttpServletRequest request, HttpServletResponse response)
+			throws Exception {
+		final String method = "execute";
+		callbacks.getLogger().logEntry(this, method, request);
+		try {
+			String body = readBody(request);
+			if (body == null || body.trim().isEmpty()) {
+				writeFailure(response, request, callbacks, "Request body is empty.");
+				return;
+			}
+
+			Object parsed;
+			try {
+				parsed = com.ibm.json.java.JSON.parse(body);
+			} catch (Exception e) {
+				writeFailure(response, request, callbacks, "Invalid JSON: " + safeMsg(e));
+				return;
+			}
+			if (!(parsed instanceof JSONObject)) {
+				writeFailure(response, request, callbacks, "Request body must be a JSON object.");
+				return;
+			}
+			final JSONObject payload = (JSONObject) parsed;
+
+			String repositoryId = trimString(payload.get("repositoryId"));
+			if (repositoryId == null) {
+				writeFailure(response, request, callbacks, "repositoryId is required.");
+				return;
+			}
+
+			String reportName = trimString(payload.get("reportName"));
+			if (reportName == null) {
+				writeFailure(response, request, callbacks, "reportName is required.");
+				return;
+			}
+
+			String targetClass = trimString(payload.get("targetClassSymbolicName"));
+			if (targetClass == null) {
+				writeFailure(response, request, callbacks, "targetClassSymbolicName is required.");
+				return;
+			}
+
+			Object critObj = payload.get("criteria");
+			if (!(critObj instanceof JSONArray)) {
+				writeFailure(response, request, callbacks, "criteria must be a JSON array.");
+				return;
+			}
+
+			String submittedBy = callbacks.getUserId() != null ? callbacks.getUserId() : "";
+			payload.put("submittedBy", submittedBy);
+			payload.put("submittedOn", nowIsoUtc());
+			if (trimString(payload.get("status")) == null) {
+				payload.put("status", ReportPluginConstants.REPORT_REQUEST_INITIAL_STATUS);
+			}
+
+			String invalidEmail = ReportEmailPayloadUtil.validatePayloadEmails(payload);
+			if (invalidEmail != null) {
+				writeFailure(response, request, callbacks,
+						"Invalid email address: " + invalidEmail + ". Use semicolon (;) to separate addresses.");
+				return;
+			}
+			ReportEmailPayloadUtil.normalizePayloadEmails(payload);
+
+			// Persist on CE using the interactive user's P8 subject and object store from callbacks only (no service
+			// connection, no alternate CE login).
+			JSONObject created;
+			try {
+				created = P8ContextUtil.runWithP8Context(callbacks, repositoryId,
+						new P8ContextUtil.P8Callback<JSONObject>() {
+							@Override
+							public JSONObject run(com.filenet.api.core.ObjectStore objectStore) throws Exception {
+								return ReportRequestDocumentHelper.createReportRequestDocument(objectStore, payload);
+							}
+						});
+			} catch (Exception e) {
+				callbacks.getLogger().logError(this, method, request, e);
+				writeFailure(response, request, callbacks, friendlyCreateError(e));
+				return;
+			}
+
+			sendAcknowledgementEmailSafely(callbacks, payload);
+
+			JSONResponse ok = new JSONResponse();
+			ok.put("success", true);
+			ok.put("reportRequestId", created.get("reportRequestId"));
+			ok.put("documentId", created.get("documentId"));
+			ok.put("message", "Report request submitted successfully.");
+			PluginResponseUtil.writeJSONResponse(request, response, ok, callbacks, SERVICE_ID);
+		} finally {
+			callbacks.getLogger().logExit(this, method, request);
+		}
+	}
+
+	private static void sendAcknowledgementEmailSafely(PluginServiceCallbacks callbacks, JSONObject payload) {
+		try {
+			MailConfig mailConfig = new MailConfig();
+			EmailService emailService = new EmailService(mailConfig, callbacks);
+			ReportRequestEmailContext context = EmailService.buildAcknowledgementContext(payload);
+			emailService.sendAcknowledgementEmail(context);
+		} catch (Exception ex) {
+			callbacks.getLogger().logError(SubmitReportRequestService.class, "sendAcknowledgementEmailSafely", "", ex);
+		}
+	}
+
+	private static String nowIsoUtc() {
+		java.text.SimpleDateFormat fmt = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'");
+		fmt.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+		return fmt.format(new java.util.Date());
+	}
+
+	private static String friendlyCreateError(Exception e) {
+		String m = e.getMessage();
+		if (m != null && m.length() > 0) {
+			return m;
+		}
+		Throwable c = e.getCause();
+		if (c != null && c.getMessage() != null) {
+			return c.getMessage();
+		}
+		return "Unable to create report request document. Check class ReportRequest, security, and CE connectivity.";
+	}
+
+	private static void writeFailure(HttpServletResponse response, HttpServletRequest request,
+			PluginServiceCallbacks callbacks, String message) throws Exception {
+		JSONResponse err = new JSONResponse();
+		err.put("success", false);
+		err.put("message", message);
+		PluginResponseUtil.writeJSONResponse(request, response, err, callbacks, SERVICE_ID);
+	}
+
+	private static String readBody(HttpServletRequest request) throws IOException {
+		StringBuilder sb = new StringBuilder();
+		BufferedReader reader = request.getReader();
+		String line;
+		while ((line = reader.readLine()) != null) {
+			sb.append(line);
+		}
+		return sb.toString();
+	}
+
+	private static String trimString(Object o) {
+		if (o == null) {
+			return null;
+		}
+		String s = String.valueOf(o).trim();
+		return s.length() == 0 ? null : s;
+	}
+
+	private static String safeMsg(Exception e) {
+		return e.getMessage() != null ? e.getMessage() : e.toString();
+	}
+}
+
+
+
+
+package com.cnb.reports.constants;
+
+/**
+ * Central constants for the CNB Reports plug-in (service ids, FileNet class, content naming).
+ */
+public final class ReportPluginConstants {
+
+	public static final String SERVICE_SUBMIT_REPORT_REQUEST = "submitReportRequest";
+	public static final String SERVICE_GET_REPORT_REQUEST_DETAILS = "getReportRequestDetails";
+	/** Plugin service id: {@code JSONResultSetResponse} for {@code ecm.widget.listView.ContentList} (sample plug-in style). */
+	public static final String SERVICE_REPORT_REQUESTS_SEARCH = "reportRequestsSearchService";
+
+	public static final String REPORT_REQUEST_CLASS = "ReportRequest";
+
+	/** Symbolic name of the custom document property for workflow state on {@link #REPORT_REQUEST_CLASS}. */
+	public static final String REPORT_REQUEST_PROPERTY_STATUS = "Status";
+
+	/** Initial value for {@link #REPORT_REQUEST_PROPERTY_STATUS} when the request is first created. */
+	public static final String REPORT_REQUEST_INITIAL_STATUS = "Pending";
+
+	/** Status value when the report output is ready to download from the grid. */
+	public static final String REPORT_REQUEST_STATUS_COMPLETED = "Completed";
+
+	/** Grid column field id for the conditional download action icon. */
+	public static final String REPORT_REQUEST_GRID_DOWNLOAD_FIELD = "reportDownload";
+
+	public static final String REPORT_REQUEST_PROPERTY_TARGET_DOCUMENT_CLASS = "TargetDocumentClass";
+	public static final String REPORT_REQUEST_PROPERTY_REPOSITORY_NAME = "RepositoryName";
+	public static final String REPORT_REQUEST_PROPERTY_SEND_EMAIL_TO = "SendEmailTo";
+	public static final String REPORT_REQUEST_PROPERTY_SEND_EMAIL_CC = "SendEmailCC";
+
+	/** JSON payload key for {@link #REPORT_REQUEST_PROPERTY_SEND_EMAIL_TO}. */
+	public static final String JSON_SEND_EMAIL_TO = "sendEmailTo";
+	/** JSON payload key for {@link #REPORT_REQUEST_PROPERTY_SEND_EMAIL_CC}. */
+	public static final String JSON_SEND_EMAIL_CC = "sendEmailCC";
+	public static final String REPORT_REQUEST_PROPERTY_SEARCH_CRITERIA_PARAMS = "SearchCriteriaParams";
+	public static final String REPORT_REQUEST_PROPERTY_RESULT_SET_COLUMNS = "ResultSetColumns";
+	public static final String REPORT_REQUEST_PROPERTY_SQL_QUERY = "SQLQuery";
+
+	public static final String REPORT_REQUEST_PROPERTY_LAST_EXECUTION_DATE = "LastExecutionDate";
+	public static final String REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_START_DATE = "ReportExecutionStartDate";
+	public static final String REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_END_DATE = "ReportExecutionEndDate";
+
+	/** System property used for list sort order ({@code ORDER BY DateCreated DESC}). */
+	public static final String REPORT_REQUEST_PROPERTY_DATE_CREATED = "DateCreated";
+
+	/** Display format for date/time columns in {@code JSONResultSetResponse} grids. */
+	public static final String RESULT_SET_DATETIME_DISPLAY_PATTERN = "MM/dd/yyyy hh:mm:ss a";
+
+	/**
+	 * Server-side list query. {@code [This]} and {@code MimeType} are required so search rows carry enough state for
+	 * {@code PluginServiceCallbacks#getP8PrivilegeMasks} and for {@code ContentList} (avoids FNRCA0024E on
+	 * ClassDescription / MimeType when only a narrow projection was returned).
+	 */
+	public static final String REPORT_REQUEST_LIST_SQL = "SELECT [This], Id, DocumentTitle, "
+			+ REPORT_REQUEST_PROPERTY_TARGET_DOCUMENT_CLASS + ", " + REPORT_REQUEST_PROPERTY_STATUS + ", "
+			+ REPORT_REQUEST_PROPERTY_DATE_CREATED + ", " + REPORT_REQUEST_PROPERTY_LAST_EXECUTION_DATE + ", "
+			+ REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_START_DATE + ", "
+			+ REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_END_DATE + ", MimeType FROM " + REPORT_REQUEST_CLASS
+			+ " WHERE IsCurrentVersion = true ORDER BY " + REPORT_REQUEST_PROPERTY_DATE_CREATED + " DESC";
+	
+	public static final String JSON_MIME_TYPE = "application/json";
+
+	public static final String JSON_FILENAME_PREFIX = "report-request-";
+	public static final String JSON_FILENAME_SUFFIX = ".json";
+
+	private ReportPluginConstants() {
+	}
+}
+
+
+
+
+package com.cnb.reports.mail;
+
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.json.java.JSONObject;
+
+public final class EmailService {
+
+	private static final String DEFAULT_ACK_BODY = "Hello,\n\n"
+			+ "Your report request has been submitted successfully.\n\n"
+			+ "Report Name: ${reportName}\n"
+			+ "Target Document Class: ${targetDocumentClass}\n"
+			+ "Repository Name: ${repositoryName}\n"
+			+ "Status: ${status}\n"
+			+ "Submitted On: ${submittedOn}\n\n"
+			+ "You will receive another email once the report execution is completed.\n\n"
+			+ "Thank you.\n";
+
+	private final MailConfig config;
+	private final SmtpEmailSender sender;
+	private final PluginServiceCallbacks callbacks;
+
+	public EmailService(MailConfig config, PluginServiceCallbacks callbacks) {
+		this.config = config;
+		this.callbacks = callbacks;
+		this.sender = new SmtpEmailSender(config, callbacks);
+	}
+
+	public void sendAcknowledgementEmail(ReportRequestEmailContext context) {
+		try {
+			if (context.getSendEmailTo().isEmpty()) {
+				return;
+			}
+			String subject = "Report Request Submitted - " + safe(context.getReportName());
+			String body = EmailTemplateRenderer.render(
+					config.getAcknowledgementTemplateFile(), DEFAULT_ACK_BODY, context);
+			sender.send(subject, body, context.getSendEmailTo(), context.getSendEmailCc());
+		} catch (Exception ex) {
+			logError("sendAcknowledgementEmail", ex);
+		}
+	}
+
+	public static ReportRequestEmailContext buildAcknowledgementContext(JSONObject payloadJson) {
+		ReportRequestEmailContext context = new ReportRequestEmailContext();
+		context.setReportName(trim(payloadJson.get("reportName")));
+		context.setTargetDocumentClass(trim(payloadJson.get("targetClassSymbolicName")));
+		context.setRepositoryName(resolveRepositoryName(payloadJson));
+		context.setStatus(trim(payloadJson.get("status")));
+		context.setSubmittedOn(trim(payloadJson.get("submittedOn")));
+		context.setSendEmailTo(readEmailArray(payloadJson, "sendEmailTo"));
+		context.setSendEmailCc(readEmailArray(payloadJson, "sendEmailCC"));
+		if (context.getSendEmailCc().isEmpty()) {
+			context.setSendEmailCc(readEmailArray(payloadJson, "sendEmailCc"));
+		}
+		return context;
+	}
+
+	private static String resolveRepositoryName(JSONObject payloadJson) {
+		String name = trim(payloadJson.get("repositoryName"));
+		if (name != null) {
+			return name;
+		}
+		name = trim(payloadJson.get("objectStoreName"));
+		return name != null ? name : "";
+	}
+
+	private static java.util.List<String> readEmailArray(JSONObject payloadJson, String key) {
+		Object raw = payloadJson.get(key);
+		java.util.List<String> emails = new java.util.ArrayList<String>();
+		if (raw instanceof com.ibm.json.java.JSONArray) {
+			com.ibm.json.java.JSONArray arr = (com.ibm.json.java.JSONArray) raw;
+			for (int i = 0; i < arr.size(); i++) {
+				Object value = arr.get(i);
+				if (value != null) {
+					emails.add(String.valueOf(value));
+				}
+			}
+		} else if (raw instanceof String) {
+			emails.addAll(EmailValidator.parseSemicolonSeparated((String) raw));
+		}
+		return EmailValidator.normalizeList(emails);
+	}
+
+	private static String safe(String value) {
+		return value != null && value.length() > 0 ? value : "Report Request";
+	}
+
+	private static String trim(Object value) {
+		if (value == null) {
+			return null;
+		}
+		String text = String.valueOf(value).trim();
+		return text.length() == 0 ? null : text;
+	}
+
+	private void logError(String method, Exception ex) {
+		if (callbacks != null && callbacks.getLogger() != null) {
+			callbacks.getLogger().logError(this, method, "", ex);
+		}
+	}
+}
+
+
+
+
+package com.cnb.reports.mail;
+
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.Charset;
+
+public final class EmailTemplateRenderer {
+
+	private static final Charset UTF8 = Charset.forName("UTF-8");
+
+	private EmailTemplateRenderer() {
+	}
+
+	public static String render(File templateFile, String defaultTemplate, ReportRequestEmailContext context)
+			throws IOException {
+		String template = defaultTemplate;
+		if (templateFile != null && templateFile.isFile()) {
+			template = readFile(templateFile);
+		}
+		return applyPlaceholders(template, context);
+	}
+
+	public static String applyPlaceholders(String template, ReportRequestEmailContext context) {
+		if (template == null) {
+			return "";
+		}
+		String rendered = template;
+		rendered = replace(rendered, "reportName", context.getReportName());
+		rendered = replace(rendered, "targetDocumentClass", context.getTargetDocumentClass());
+		rendered = replace(rendered, "repositoryName", context.getRepositoryName());
+		rendered = replace(rendered, "status", context.getStatus());
+		rendered = replace(rendered, "submittedOn", context.getSubmittedOn());
+		return rendered;
+	}
+
+	private static String replace(String template, String key, String value) {
+		String replacement = value != null ? value : "";
+		return template.replace("${" + key + "}", replacement);
+	}
+
+	private static String readFile(File file) throws IOException {
+		StringBuilder sb = new StringBuilder();
+		BufferedReader reader = null;
+		try {
+			reader = new BufferedReader(new InputStreamReader(new FileInputStream(file), UTF8));
+			String line;
+			while ((line = reader.readLine()) != null) {
+				if (sb.length() > 0) {
+					sb.append('\n');
+				}
+				sb.append(line);
+			}
+		} finally {
+			if (reader != null) {
+				try {
+					reader.close();
+				} catch (IOException e) {
+					// ignore
+				}
+			}
+		}
+		return sb.toString();
+	}
+}
+
+
+
+
+
+
+.CNBReportsPluginLaunchIcon {
+	width: 32px;
+	height: 32px;
+	background: url('images/AdminDashboardFeatureIcon.svg') no-repeat;
+	background-position: -16px -16px;
+}
+
+.cnbReportsFeatureRoot,
+.cnbReportsFeatureMainPane {
+	width: 100%;
+	height: 100%;
+	box-sizing: border-box;
+}
+
+.cnbReportsRepoLabel {
+	margin-left: 12px;
+	margin-right: 6px;
+}
+
+.cnbReportsGridToolbar {
+	display: flex;
+	justify-content: flex-end;
+	align-items: center;
+	padding: 4px 0 6px 0;
+}
+
+.cnbReportsGridPane {
+	display: flex;
+	flex-direction: column;
+}
+
+.cnbReportsGridHost {
+	flex: 1 1 auto;
+	width: 100%;
+	min-height: 200px;
+	padding: 0 !important;
+}
+
+.cnbReportDownloadIcon {
+	cursor: pointer;
+	vertical-align: middle;
+}
+
+.cnbReportDownloadIcon:focus {
+	outline: 1px dotted #333;
+}
+
+.cnbReportsGridHint {
+	font-size: 0.9em;
+	color: #555;
+	margin: 4px 0 0 0;
+}
+
+.cnbReportDetailsJson {
+	max-height: 360px;
+	overflow: auto;
+	font-family: monospace;
+	font-size: 12px;
+	white-space: pre-wrap;
+}
+
+.cnbReportRequestDialog .propertyRow {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+	margin-bottom: 12px;
+}
+
+.cnbReportRequestDialog .propertyRow label {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+
+.cnbReportRequestDialog .propertyRow > .dijit,
+.cnbReportRequestDialog .propertyRow > div {
+	flex: 1 1 480px;
+	min-width: 420px;
+	max-width: 100%;
+}
+
+.cnbReportRequestDialog .propertyRow .dijitTextBox,
+.cnbReportRequestDialog .propertyRow .dijitValidationTextBox {
+	width: 100%;
+}
+
+.cnbReportRequestDialog .ecmBasicSearchBuilder .buttonArea {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 10px;
+}
+
+.cnbReportDetailsSection {
+	margin-top: 12px;
+}
+
+
+
+
+define([
+	"dojo/_base/lang"
+], function(lang) {
+
+	var BLANK_GIF = require.toUrl("dojo/resources/blank.gif");
+
+	/**
+	 * Grid cell decorator for {@code reportDownload} column. Shows download icon when the row is Completed.
+	 */
+	var ReportDownloadDecorator = {
+		DOWNLOAD_FIELD: "reportDownload",
+		DOWNLOAD_TOKEN: "download",
+		STATUS_FIELD: "Status",
+		STATUS_COMPLETED: "completed",
+
+		/**
+		 * Invoked with {@code this} = {@code ecm.widget.listView.ContentList}.
+		 */
+		decorateCell: function(data, rowId, rowIndex) {
+			if (!ReportDownloadDecorator.shouldShowDownload(this, data, rowId)) {
+				return "&nbsp;";
+			}
+			return "<img role=\"button\" class=\"ecmMimeTypeIcon ecmDownloadIcon cnbReportDownloadIcon\" "
+				+ "alt=\"Download report\" title=\"Download report\" tabindex=\"0\" src=\"" + BLANK_GIF + "\" />";
+		},
+
+		/**
+		 * @param contentList {@code ecm.widget.listView.ContentList}
+		 */
+		shouldShowDownload: function(contentList, data, rowId) {
+			if (ReportDownloadDecorator.cellShowsDownload(data)) {
+				return true;
+			}
+			if (!contentList || !contentList.grid || !rowId) {
+				return false;
+			}
+			try {
+				var item = contentList.grid.row(rowId).item();
+				if (!item || !item.attributes) {
+					return false;
+				}
+				var status = item.attributes[ReportDownloadDecorator.STATUS_FIELD];
+				if (status == null && item.getValue) {
+					status = item.getValue(ReportDownloadDecorator.STATUS_FIELD);
+				}
+				if (status == null && item.getDisplayValue) {
+					status = item.getDisplayValue(ReportDownloadDecorator.STATUS_FIELD);
+				}
+				return status != null
+					&& String(status).trim().toLowerCase() === ReportDownloadDecorator.STATUS_COMPLETED;
+			} catch (e) {
+				return false;
+			}
+		},
+
+		cellShowsDownload: function(data) {
+			if (data === ReportDownloadDecorator.DOWNLOAD_TOKEN) {
+				return true;
+			}
+			if (data != null && typeof data === "object") {
+				return false;
+			}
+			var text = data != null ? String(data).trim() : "";
+			return text.toLowerCase() === ReportDownloadDecorator.DOWNLOAD_TOKEN;
+		}
+	};
+
+	lang.setObject("cNBReportsPluginDojo.ReportDownloadDecorator", ReportDownloadDecorator);
+
+	return ReportDownloadDecorator;
+});
+
+
+
+<div class="cnbReportRequestDialog">
+	<div class="propertyRow">
+		<label data-dojo-attach-point="reportNameLabel" for="${id}_reportName">Report name:</label>
+		<div data-dojo-type="ecm/widget/ValidationTextBox" data-dojo-attach-point="reportNameField" id="${id}_reportName"
+			data-dojo-props="required:true, trim:true, maxLength:256"></div>
+	</div>
+	<div class="propertyRow">
+		<label data-dojo-attach-point="sendEmailToLabel" for="${id}_sendEmailTo">Send Email To:</label>
+		<div data-dojo-type="ecm/widget/ValidationTextBox" data-dojo-attach-point="sendEmailToField" id="${id}_sendEmailTo"
+			data-dojo-props="trim:true, maxLength:2048, placeHolder:'john@test.com;sarah@test.com'"></div>
+	</div>
+	<div class="propertyRow">
+		<label data-dojo-attach-point="sendEmailCcLabel" for="${id}_sendEmailCc">Send Email CC:</label>
+		<div data-dojo-type="ecm/widget/ValidationTextBox" data-dojo-attach-point="sendEmailCcField" id="${id}_sendEmailCc"
+			data-dojo-props="trim:true, maxLength:2048, placeHolder:'manager@test.com'"></div>
+	</div>
+	<div data-dojo-type="dijit/layout/ContentPane" data-dojo-attach-point="searchDefinitionHost" style="padding:0;min-height:320px;"></div>
+</div>
+
+
+
+
+define([
+	"dojo/_base/declare",
+	"dojo/_base/array",
+	"dojo/_base/lang",
+	"dojo/aspect",
+	"dojo/dom-style",
+	"ecm/LoggerMixin",
+	"ecm/MessagesMixin",
+	"ecm/widget/dialog/BaseDialog",
+	"ecm/widget/dialog/MessageDialog",
+	"ecm/widget/search/BasicSearchDefinition",
+	"dojo/text!./templates/ReportRequestDialog.html",
+	"./ReportService"
+], function(declare, array, lang, aspect, domStyle, LoggerMixin, MessagesMixin, BaseDialog, MessageDialog,
+	BasicSearchDefinition, template, reportService) {
+
+	function mapCriterionValues(criterion) {
+		var vals = [];
+		if (criterion.values && criterion.values.length) {
+			array.forEach(criterion.values, function(v) {
+				if (v && typeof v === "object" && v.value !== undefined && v.value !== null) {
+					vals.push(v.value);
+				} else if (v !== undefined && v !== null) {
+					vals.push(v);
+				}
+			});
+		} else if (criterion.value !== undefined && criterion.value !== null && criterion.value !== "") {
+			vals.push(criterion.value);
+		}
+		return vals;
+	}
+
+	function mapCriteria(searchTemplate) {
+		var list = searchTemplate.searchCriteria || [];
+		return array.map(list, function(c, idx) {
+			return {
+				sequence: idx + 1,
+				propertySymbolicName: c.id || "",
+				propertyDisplayName: c.name || c.label || c.id || "",
+				operator: c.selectedOperator || "",
+				dataType: c.dataType || "",
+				values: mapCriterionValues(c)
+			};
+		});
+	}
+
+	function mapResultDisplay(searchTemplate) {
+		var rd = searchTemplate.resultsDisplay || {};
+		var cols = array.map(rd.columns || [], function(colId) {
+			return {
+				propertySymbolicName: colId,
+				propertyDisplayName: colId
+			};
+		});
+		var sort = [];
+		if (rd.sortBy) {
+			sort.push({
+				propertySymbolicName: rd.sortBy,
+				direction: rd.sortAscending === false ? "DESC" : "ASC"
+			});
+		}
+		return {
+			columns: cols,
+			sort: sort
+		};
+	}
+
+	function mapSearchScope(searchTemplate) {
+		var folders = searchTemplate.folders || [];
+		if (!folders.length) {
+			return "OBJECT_STORE";
+		}
+		return "FOLDER";
+	}
+
+	function mapVersionOption(searchTemplate) {
+		if (!searchTemplate.moreOptions) {
+			return "CURRENT_VERSION";
+		}
+		var v = searchTemplate.moreOptions.versionOption;
+		if (!v) {
+			return "CURRENT_VERSION";
+		}
+		return String(v).toUpperCase();
+	}
+
+	var EMAIL_SEPARATOR = ";";
+
+	function parseSemicolonEmails(raw) {
+		if (raw === undefined || raw === null) {
+			return [];
+		}
+		var text = String(raw).trim();
+		if (text.length === 0) {
+			return [];
+		}
+		var seen = {};
+		var emails = [];
+		array.forEach(text.split(EMAIL_SEPARATOR), function(part) {
+			var email = lang.trim(part);
+			if (!email) {
+				return;
+			}
+			var key = email.toLowerCase();
+			if (!seen[key]) {
+				seen[key] = true;
+				emails.push(email);
+			}
+		});
+		return emails;
+	}
+
+	function isValidEmailAddress(email) {
+		return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+	}
+
+	function findInvalidEmail(emails) {
+		for (var i = 0; i < emails.length; i++) {
+			if (!isValidEmailAddress(emails[i])) {
+				return emails[i];
+			}
+		}
+		return null;
+	}
+
+	function buildInvalidEmailMessage(invalidEmail) {
+		return "Invalid email address detected:\n" + invalidEmail
+			+ "\nPlease enter valid email addresses separated by semicolon (;).";
+	}
+
+	function buildPayload(repository, reportName, sendEmailTo, sendEmailCc, searchTemplate) {
+		var os = (searchTemplate.objectStores && searchTemplate.objectStores[0]) || {};
+		var targetSym = searchTemplate.className || "";
+		var targetDisp = targetSym;
+		if (repository && targetSym) {
+			var cls = repository.getContentClass(targetSym);
+			if (cls && cls.name) {
+				targetDisp = cls.name;
+			}
+		}
+		var repositoryName = (repository && (repository.name || repository.repositoryName))
+			|| os.displayName
+			|| (repository && repository.objectStoreDisplayName)
+			|| (repository && repository.objectStoreName)
+			|| "";
+		return {
+			reportName: reportName,
+			sendEmailTo: sendEmailTo || [],
+			sendEmailCC: sendEmailCc || [],
+			repositoryId: repository.id,
+			repositoryName: repositoryName,
+			objectStoreId: os.id || repository.objectStoreName || "",
+			objectStoreName: os.displayName || repository.objectStoreDisplayName || repository.objectStoreName || "",
+			targetClassSymbolicName: targetSym,
+			targetClassDisplayName: targetDisp,
+			includeSubclasses: !!searchTemplate.includeSubclasses,
+			searchScope: mapSearchScope(searchTemplate),
+			versionOption: mapVersionOption(searchTemplate),
+			criteria: mapCriteria(searchTemplate),
+			resultDisplay: mapResultDisplay(searchTemplate)
+		};
+	}
+
+	return declare("cNBReportsPluginDojo.ReportRequestDialog", [
+		BaseDialog,
+		LoggerMixin,
+		MessagesMixin
+	], {
+		contentString: template,
+		widgetsInTemplate: true,
+		repository: null,
+		cancelButtonLabel: "Cancel",
+
+		postCreate: function() {
+			this.inherited(arguments);
+			this.setTitle("Create Report Request");
+			this.setIntroText("");
+			this.addButton("Submit Report Request", "_onSubmit", false, true);
+
+			this.searchDefinition = new BasicSearchDefinition({
+				displaySearchInCtrl: false,
+				saveSupported: false
+			});
+			this.searchDefinitionHost.set("content", this.searchDefinition);
+			this.searchDefinition.setRepository(this.repository);
+
+			// Do not hide the whole buttonArea: OOTB "Results display" lives there (resultsDisplayButton /
+			// SearchResultsDisplayOptions). Hide only actions we replace with the dialog workflow.
+			this.own(aspect.after(this.searchDefinition, "onLoad", lang.hitch(this, function() {
+				var sd = this.searchDefinition;
+				var hideBtn = function(w) {
+					if (w && w.domNode) {
+						domStyle.set(w.domNode, "display", "none");
+					}
+				};
+				hideBtn(sd.searchButton);
+				hideBtn(sd.saveButton);
+				hideBtn(sd.saveAsButton);
+				hideBtn(sd.cancelButton);
+				// Hide "Search in" folder selector row and "Search options" link.
+				if (sd._moreOptions && sd._moreOptions.domNode) {
+					domStyle.set(sd._moreOptions.domNode, "display", "none");
+				}
+				if (sd._moreOptionsNode) {
+					domStyle.set(sd._moreOptionsNode, "display", "none");
+				}
+				if (sd._folderLabelNode && sd._folderLabelNode.parentNode) {
+					var searchInRow = sd._folderLabelNode.parentNode.parentNode;
+					if (searchInRow && searchInRow.tagName === "TR") {
+						domStyle.set(searchInRow, "display", "none");
+					}
+				}
+				if (sd.folderSelector && sd.folderSelector.domNode) {
+					domStyle.set(sd.folderSelector.domNode, "display", "none");
+				}
+				if (sd.folderSelectorDropDown && sd.folderSelectorDropDown.domNode) {
+					domStyle.set(sd.folderSelectorDropDown.domNode, "display", "none");
+				}
+				if (sd.searchInDropDown && sd.searchInDropDown.domNode) {
+					domStyle.set(sd.searchInDropDown.domNode, "display", "none");
+				}
+				var k = sd.keepSearchCriteriaExpanded;
+				if (k && k.domNode && k.domNode.parentNode) {
+					domStyle.set(k.domNode.parentNode, "display", "none");
+				}
+			})));
+		},
+
+		show: function() {
+			this.inherited(arguments);
+			if (this.searchDefinition && this.searchDefinition.resize) {
+				this.searchDefinition.resize();
+			}
+		},
+
+		resize: function() {
+			this.inherited(arguments);
+			if (this.searchDefinition && this.searchDefinition.resize) {
+				this.searchDefinition.resize();
+			}
+		},
+
+		_onSubmit: function() {
+			if (!this.reportNameField.validate()) {
+				return;
+			}
+			var invalid = this.searchDefinition.attributeDefinitionFormWid
+				&& this.searchDefinition.attributeDefinitionFormWid.validate();
+			if (invalid) {
+				if (invalid.focus) {
+					invalid.focus();
+				}
+				return;
+			}
+			if (!this.searchDefinition._meetsMinimumCriteria()) {
+				var msg = this.messages.search_insufficient_input || "Specify search criteria.";
+				new MessageDialog({
+					text: msg
+				}).show();
+				return;
+			}
+
+			var sendEmailTo = parseSemicolonEmails(this.sendEmailToField.get("value"));
+			var invalidTo = findInvalidEmail(sendEmailTo);
+			if (invalidTo) {
+				new MessageDialog({
+					text: buildInvalidEmailMessage(invalidTo)
+				}).show();
+				return;
+			}
+			var sendEmailCc = parseSemicolonEmails(this.sendEmailCcField.get("value"));
+			var invalidCc = findInvalidEmail(sendEmailCc);
+			if (invalidCc) {
+				new MessageDialog({
+					text: buildInvalidEmailMessage(invalidCc)
+				}).show();
+				return;
+			}
+
+			var searchTemplate = this.searchDefinition._prepareSearchTemplateForExecution();
+			var reportName = this.reportNameField.get("value");
+			var payload = buildPayload(this.repository, reportName, sendEmailTo, sendEmailCc, searchTemplate);
+
+			var self = this;
+			reportService.submitReportRequest(this.repository.id, payload, function(res) {
+				if (self._submitMessageDialog) {
+					self._submitMessageDialog.destroyRecursive();
+				}
+				self._submitMessageDialog = new MessageDialog({
+					text: res.message || "Report request submitted successfully."
+				});
+				self._submitMessageDialog.show();
+				if (lang.isFunction(self.onSubmitted)) {
+					self.onSubmitted(res);
+				}
+				self.hide();
+			}, function(res) {
+				var msg = "Request failed.";
+				if (res) {
+					if (res.message) {
+						msg = res.message;
+					} else if (res.errors && res.errors.length) {
+						msg = res.errors[0].text || msg;
+					}
+				}
+				new MessageDialog({
+					text: msg
+				}).show();
+			});
+		},
+
+		onSubmitted: function(response) {
+		}
+	});
+});
+
+
+
+
+<div class="cnbReportsFeatureMainPane">
+	<div data-dojo-type="dijit/layout/BorderContainer" data-dojo-attach-point="borderContainer" gutters="false" style="width:100%;height:100%;">
+		<div data-dojo-type="dijit/layout/ContentPane" data-dojo-attach-point="topPane" region="top" style="padding:8px;">
+			<button data-dojo-type="dijit/form/Button" data-dojo-attach-point="createButton" type="button"></button>
+			<div class="cnbReportsHeader" data-dojo-attach-point="headerNode"></div>
+			<div style="margin-top:8px;">
+				<label data-dojo-attach-point="repositoryLabel" class="cnbReportsRepoLabel" for="${id}_repoSelect"></label>
+				<select data-dojo-type="dijit/form/Select" data-dojo-attach-point="repositorySelect" data-dojo-props="name:'repositorySelect'" id="${id}_repoSelect"></select>
+			</div>
+		</div>
+		<div data-dojo-type="dijit/layout/ContentPane" data-dojo-attach-point="gridPane" region="center" class="cnbReportsGridPane" style="padding:0 8px 8px 8px;">
+			<div class="cnbReportsGridToolbar">
+				<button data-dojo-type="dijit/form/Button" data-dojo-attach-point="refreshButton" type="button" label="Refresh"></button>
+			</div>
+			<div data-dojo-type="dijit/layout/ContentPane" data-dojo-attach-point="gridHost" class="cnbReportsGridHost"></div>
+		</div>
+	</div>
+</div>
+
+
+
+define([
+	"dojo/_base/declare",
+	"dojo/_base/array",
+	"dojo/_base/lang",
+	"dijit/layout/BorderContainer",
+	"dijit/layout/ContentPane",
+	"dijit/form/Button",
+	"dijit/form/Select",
+	"dijit/_WidgetBase",
+	"dijit/_TemplatedMixin",
+	"dijit/_WidgetsInTemplateMixin",
+	"ecm/LoggerMixin",
+	"ecm/MessagesMixin",
+	"ecm/model/Desktop",
+	"ecm/model/ResultSet",
+	"ecm/widget/dialog/MessageDialog",
+	"ecm/widget/listView/ContentList",
+	"ecm/widget/listView/gridModules/RowContextMenu",
+	"ecm/widget/listView/gridModules/DndRowMoveCopy",
+	"ecm/widget/listView/gridModules/DndFromDesktopAddDoc",
+	"ecm/widget/listView/modules/Toolbar2",
+	"ecm/widget/listView/modules/Bar",
+	"ecm/widget/listView/modules/DocInfo",
+	"ecm/widget/listView/modules/ViewDetail",
+	"ecm/widget/listView/modules/ViewMagazine",
+	"ecm/widget/listView/modules/ViewFilmStrip",
+	"dojo/text!./templates/ReportsFeatureMainPane.html",
+	"./ReportRequestDialog",
+	"./ReportRequestDetailsDialog",
+	"./ReportService",
+	"./ReportDownloadDecorator",
+	"./ReportRequestDownloadGridModule"
+], function(declare, array, lang, BorderContainer, ContentPane, Button, Select, _WidgetBase, _TemplatedMixin,
+	_WidgetsInTemplateMixin, LoggerMixin, MessagesMixin, Desktop, ResultSet, MessageDialog, ContentList, RowContextMenu,
+	DndRowMoveCopy, DndFromDesktopAddDoc, Toolbar, DocInfo, Bar, ViewDetail, ViewMagazine, ViewFilmStrip, template,
+	ReportRequestDialog, ReportRequestDetailsDialog, reportService, ReportDownloadDecorator, ReportRequestDownloadGridModule) {
+
+	var REPORT_DOWNLOAD_FIELD = ReportDownloadDecorator.DOWNLOAD_FIELD;
+
+	/** Symbolic name of the FileNet class (must match {@code ReportPluginConstants.REPORT_REQUEST_CLASS}). */
+	var REPORT_REQUEST_CLASS = "ReportRequest";
+
+	return declare("cNBReportsPluginDojo.ReportsFeatureMainPane", [
+		_WidgetBase,
+		_TemplatedMixin,
+		_WidgetsInTemplateMixin,
+		LoggerMixin,
+		MessagesMixin
+	], {
+		templateString: template,
+		widgetsInTemplate: true,
+
+		_contentList: null,
+		_detailsDialog: null,
+
+		postCreate: function() {
+			this.logEntry("postCreate");
+			this.inherited(arguments);
+			this.createButton.set("label", "Create Report Request");
+			this.own(this.createButton.on("click", lang.hitch(this, "_onCreateClicked")));
+			this.refreshButton.set("label", "Refresh");
+			this.own(this.refreshButton.on("click", lang.hitch(this, "refreshGrid")));
+
+			this.headerNode.innerHTML = "<h2>My Requested Reports</h2>";
+			this.repositoryLabel.innerHTML = "Repository:";
+			this._populateRepositorySelect();
+
+			this._contentList = new ContentList({
+				selectFirstRowOnSetResult: false
+			});
+			this._contentList.setGridExtensionModules(this.getContentListGridModules());
+			this._contentList.setContentListModules(this.getContentListModules());
+			this._wrapContentListOpenItem();
+			this.own(this.connect(this._contentList, "onBeforeSetResultSet", lang.hitch(this, "_applyReportDownloadColumnDecorator")));
+			this.gridHost.set("content", this._contentList);
+
+			this.logExit("postCreate");
+		},
+
+		destroy: function() {
+			if (this._detailsDialog) {
+				this._detailsDialog.destroyRecursive();
+				this._detailsDialog = null;
+			}
+			this.inherited(arguments);
+		},
+
+		getContentListGridModules: function() {
+			var mods = [];
+			mods.push(ReportRequestDownloadGridModule);
+			mods.push(DndRowMoveCopy);
+			mods.push(DndFromDesktopAddDoc);
+			mods.push(RowContextMenu);
+			return mods;
+		},
+
+		_applyReportDownloadColumnDecorator: function(resultSet) {
+			var cells = this._getResultSetDetailCells(resultSet);
+			if (!cells) {
+				return;
+			}
+			array.forEach(cells, lang.hitch(this, function(cell) {
+				this._configureDownloadColumn(cell);
+			}));
+		},
+
+		_getResultSetDetailCells: function(resultSet) {
+			if (!resultSet || !resultSet.structure) {
+				return null;
+			}
+			if (resultSet.structure.cells && resultSet.structure.cells[0]) {
+				return resultSet.structure.cells[0];
+			}
+			if (resultSet.structure instanceof Array) {
+				return resultSet.structure;
+			}
+			return null;
+		},
+
+		_configureDownloadColumn: function(cell) {
+			if (!cell || cell.field !== REPORT_DOWNLOAD_FIELD) {
+				return;
+			}
+			cell.decorator = "cNBReportsPluginDojo.ReportDownloadDecorator.decorateCell";
+			cell.sortable = false;
+			cell.filterable = false;
+			cell.headerClasses = "ecmIconCell";
+			cell.cellClasses = "ecmIconCell";
+			cell.width = cell.width || "36px";
+		},
+
+		getContentListModules: function() {
+			var viewModules = [];
+			viewModules.push(ViewDetail);
+			viewModules.push(ViewMagazine);
+			if (Desktop.showViewFilmstrip) {
+				viewModules.push(ViewFilmStrip);
+			}
+
+			return [
+				DocInfo,
+				{
+					moduleClass: Bar,
+					top: [
+						[
+							[
+								{
+									moduleClass: Toolbar
+								},
+								{
+									moduleClasses: viewModules,
+									"className": "BarViewModules"
+								}
+							]
+						]
+					]
+				}
+			];
+		},
+
+		_wrapContentListOpenItem: function() {
+			var cl = this._contentList;
+			var origOpenItem = lang.hitch(cl, cl.openItem);
+			var self = this;
+			cl.openItem = function(item) {
+				if (item && self._itemIsReportRequest(item)) {
+					self._onViewReport({
+						documentId: item.id,
+						documentTitle: item.name || ""
+					});
+					return;
+				}
+				return origOpenItem(item);
+			};
+		},
+
+		_itemIsReportRequest: function(item) {
+			var t = item.template;
+			if (typeof t === "string" && t === REPORT_REQUEST_CLASS) {
+				return true;
+			}
+			if (t && t.name === REPORT_REQUEST_CLASS) {
+				return true;
+			}
+			if (item.templateName === REPORT_REQUEST_CLASS) {
+				return true;
+			}
+			return false;
+		},
+
+		_populateRepositorySelect: function() {
+			var repos = [];
+			if (Desktop.repositories && Desktop.repositories.length) {
+				array.forEach(Desktop.repositories, function(r) {
+					if (r && r.type === "p8") {
+						repos.push(r);
+					}
+				});
+			}
+			var opts = array.map(repos, function(r) {
+				return {
+					label: r.name,
+					value: r.id
+				};
+			});
+			this.repositorySelect.set("options", opts.length ? opts : [
+				{
+					label: "No P8 repository",
+					value: ""
+				}
+			]);
+			if (opts.length) {
+				this.repositorySelect.set("value", opts[0].value);
+			}
+			this.own(this.repositorySelect.on("change", lang.hitch(this, "refreshGrid")));
+		},
+
+		getSelectedRepository: function() {
+			var id = this.repositorySelect.get("value");
+			if (!id) {
+				return null;
+			}
+			return Desktop.getRepository(id);
+		},
+
+		loadContent: function() {
+			this.logEntry("loadContent");
+			this.inherited(arguments);
+			this.refreshGrid();
+			if (this.borderContainer) {
+				this.borderContainer.resize();
+			}
+			this.logExit("loadContent");
+		},
+
+		resize: function() {
+			this.inherited(arguments);
+			if (this.borderContainer) {
+				this.borderContainer.resize();
+			}
+		},
+
+		refreshGrid: function() {
+			var repo = this.getSelectedRepository();
+			if (!repo) {
+				if (this._contentList) {
+					this._contentList.reset();
+				}
+				return;
+			}
+			if (!repo.connected) {
+				this.own(this.connect(repo, "onConnected", lang.hitch(this, function() {
+					this.refreshGrid();
+				})));
+				return;
+			}
+			this._contentList.setGridExtensionModules(this.getContentListGridModules());
+			this._contentList.setContentListModules(this.getContentListModules());
+
+			var self = this;
+			reportService.listReportRequests(repo.id, function(response) {
+				response.repository = repo;
+				var resultSet = new ResultSet(response);
+				self._contentList.setResultSet(resultSet);
+			}, function(response) {
+				var msg = "Unable to load report requests.";
+				if (response && response.message) {
+					msg = response.message;
+				} else if (response && response.errors && response.errors.length) {
+					msg = response.errors[0].text || msg;
+				}
+				new MessageDialog({
+					text: msg
+				}).show();
+				self._contentList.reset();
+			});
+		},
+
+		_onCreateClicked: function() {
+			var repo = this.getSelectedRepository();
+			if (!repo) {
+				new MessageDialog({
+					text: "Select a FileNet repository."
+				}).show();
+				return;
+			}
+			var dlg = new ReportRequestDialog({
+				repository: repo,
+				style: "width: 90%; height: 90%;"
+			});
+			dlg.onSubmitted = lang.hitch(this, function() {
+				this.refreshGrid();
+			});
+			dlg.show();
+		},
+
+		_onViewReport: function(summary) {
+			var repo = this.getSelectedRepository();
+			if (!repo || !summary || !summary.documentId) {
+				return;
+			}
+			var self = this;
+			reportService.getReportRequestDetails(repo.id, summary.documentId, null, function(res) {
+				if (!self._detailsDialog) {
+					self._detailsDialog = new ReportRequestDetailsDialog({
+						style: "width: 720px; height: 520px;"
+					});
+				}
+				self._detailsDialog.setDetails(res.details || {});
+				self._detailsDialog.show();
+			}, function(res) {
+				var msg = "Unable to load details.";
+				if (res && res.message) {
+					msg = res.message;
+				}
+				new MessageDialog({
+					text: msg
+				}).show();
+			});
+		}
+	});
+});
+
+
+
+| Display Name                | Symbolic Name            | Type     | Cardinality | Notes                                        |
+| --------------------------- | ------------------------ | -------- | ----------- | -------------------------------------------- |
+| Status                      | Status                   | String   | Single      | Uses ReportCL choice list                    |
+| Target Document Class       | TargetDocumentClass      | String   | Single      | Stores selected target class symbolic name   |
+| Repository Name             | RepositoryName           | String   | Single      | Stores selected object store/repository name |
+| Report Execution Start Date | ReportExecutionStartDate | DateTime | Single      | Set by execution engine                      |
+| Report Execution End Date   | ReportExecutionEndDate   | DateTime | Single      | Set by execution engine                      |
+| Last Execution Date         | LastExecutionDate        | DateTime | Single      | Set by execution engine                      |
+| Search Criteria Params      | SearchCriteriaParams     | String   | Multi       | Format: Property|Operator|Value              |
+| ResultSet Columns           | ResultSetColumns         | String   | Multi       | Stores selected result columns               |
+| SQL Query                   | SQLQuery                 | String   | Single      | Stores generated CE SQL query                |
+| Send Email To               | SendEmailTo              | String   | Multi       | Stores TO email IDs                          |
+| Send Email CC               | SendEmailCC              | String   | Multi       | Stores CC email IDs                          |
+
+
+
+ReportCL
+
+Pending
+Hold
+InProgress
+Completed
+Failed
+Cancelled
+Rerun
