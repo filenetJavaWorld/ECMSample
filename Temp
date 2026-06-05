@@ -1,1 +1,778 @@
-temp
+
+.cnbReportsFeatureRoot,
+.cnbReportsFeatureMainPane {
+	width: 100%;
+	height: 100%;
+	box-sizing: border-box;
+}
+
+.cnbReportsTopPane {
+	padding: 8px 12px !important;
+}
+
+.cnbReportsHeaderBar {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 12px;
+}
+
+.cnbReportsHeaderTitle {
+	margin: 0;
+	font-size: 1.25rem;
+	font-weight: 600;
+	line-height: 1.2;
+}
+
+.cnbReportsHeaderActions {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
+.cnbReportsRepoRow {
+	display: flex;
+	align-items: center;
+	margin-top: 8px;
+}
+
+.cnbReportsRepoLabel {
+	margin-right: 6px;
+}
+
+.cnbReportsGridPane {
+	display: flex;
+	flex-direction: column;
+	padding: 0 8px 8px 8px !important;
+}
+
+.cnbReportsGridHost .ecmContentList .ecmDocInfoPane,
+.cnbReportsGridHost .ecmContentList .dijitBorderContainerPane.ecmDocInfoPane {
+	display: none !important;
+}
+
+.cnbReportsGridHost {
+	flex: 1 1 auto;
+	width: 100%;
+	min-height: 200px;
+	padding: 0 !important;
+}
+
+.cnbReportsGridHost .ecmContentList .topContainer {
+	display: none !important;
+}
+
+.cnbReportsGridHost .ecmContentList .gridx .gridxHeaderRow .gridxCell,
+.cnbReportsGridHost .ecmContentList .gridxAlternatingRows .gridxBody .gridxRow .gridxCell {
+	padding-left: 3px !important;
+	padding-right: 3px !important;
+}
+
+.cnbReportsGridHost .ecmContentList .gridx .gridxHeaderRow .gridxCell .gridxSortNode {
+	padding-left: 3px;
+	padding-right: 3px;
+}
+
+.cnbReportDownloadIcon {
+	cursor: pointer;
+	vertical-align: middle;
+}
+
+.cnbReportDownloadIcon:focus {
+	outline: 1px dotted #333;
+}
+
+.cnbReportsGridHint {
+	font-size: 0.9em;
+	color: #555;
+	margin: 4px 0 0 0;
+}
+
+.cnbReportDetailsJson {
+	max-height: 360px;
+	overflow: auto;
+	font-family: monospace;
+	font-size: 12px;
+	white-space: pre-wrap;
+}
+
+.cnbReportRequestDialog .propertyRow {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px 12px;
+	margin-bottom: 12px;
+}
+
+.cnbReportRequestDialog .cnbSendEmailRadioGroup {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	flex: 1 1 480px;
+	min-width: 420px;
+}
+
+.cnbReportRequestDialog .cnbSendEmailRadioOption {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	white-space: nowrap;
+}
+
+.cnbReportRequestDialog .cnbSendEmailRadioOption label {
+	margin: 0;
+}
+
+.cnbReportRequestDialog .propertyRow label {
+	flex: 0 0 auto;
+	white-space: nowrap;
+}
+
+.cnbReportRequestDialog .propertyRow > .dijit,
+.cnbReportRequestDialog .propertyRow > div {
+	flex: 1 1 480px;
+	min-width: 420px;
+	max-width: 100%;
+}
+
+.cnbReportRequestDialog .propertyRow .dijitTextBox,
+.cnbReportRequestDialog .propertyRow .dijitValidationTextBox {
+	width: 100%;
+}
+
+.cnbReportRequestDialog .ecmBasicSearchBuilder .buttonArea {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px 10px;
+}
+
+/* Hide bottom search-builder actions; Add Property stays visible via JS in propertyOptions */
+.cnbReportRequestDialog .ecmBasicSearchBuilder .buttonArea .dijitButton,
+.cnbReportRequestDialog .ecmBasicSearchBuilder .buttonArea .ecmKeepSearchCriteriaExpandedCheckBox {
+	display: none !important;
+}
+
+.cnbReportRequestDialog .ecmBasicSearchBuilder .propertyOptions {
+	display: block;
+	min-height: 28px;
+}
+
+.cnbReportRequestDialog .ecmBasicSearchBuilder .propertyOptions .cnbShowAddProperty {
+	display: inline-block !important;
+	visibility: visible !important;
+}
+
+.cnbReportDetailsSection {
+	margin-top: 12px;
+}
+
+.cnbReportsGridHost .gridx .cnbReportStatusCell .cnbReportStatus,
+.cnbReportsGridHost .gridx .gridxCell .cnbReportStatus {
+	font-weight: bold !important;
+}
+
+.cnbReportsGridHost .gridx .cnbReportStatus.cnbReportStatusCompleted {
+	color: #228B22 !important;
+}
+
+.cnbReportsGridHost .gridx .cnbReportStatus.cnbReportStatusInprogress {
+	color: #D4A017 !important;
+}
+
+.cnbReportsGridHost .gridx .cnbReportStatus.cnbReportStatusPending {
+	color: #FF8C00 !important;
+}
+
+.cnbReportsGridHost .gridx .cnbReportStatus.cnbReportStatusCancelled {
+	color: #000000 !important;
+}
+
+.cnbReportsGridHost .gridx .cnbReportStatus.cnbReportStatusHold {
+	color: #0000CD !important;
+}
+
+.cnbReportsGridHost .gridx .cnbReportStatus.cnbReportStatusFailed {
+	color: #CC0000 !important;
+}
+
+.cnbReportsGridHost .gridx .cnbReportStatus.cnbReportStatusDefault {
+	color: #333333 !important;
+}
+
+
+
+
+package com.cnb.reports.service;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+
+import org.apache.struts.util.MessageResources;
+
+import com.cnb.reports.constants.ReportPluginConstants;
+import com.cnb.reports.p8.P8PropertyValues;
+import com.filenet.api.collection.IndependentObjectSet;
+import com.filenet.api.collection.PageIterator;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.Properties;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.ecm.json.JSONResultSetColumn;
+import com.ibm.ecm.json.JSONResultSetResponse;
+import com.ibm.ecm.json.JSONResultSetRow;
+import com.ibm.json.java.JSONArray;
+import com.ibm.json.java.JSONObject;
+
+/**
+ * P8 execution for {@link com.cnb.reports.service.ReportRequestsSearchService}, modeled on IBM's
+ * {@code SamplePluginSearchServiceP8}: run CE SQL, fill {@link JSONResultSetResponse}, drive {@code ContentList}.
+ */
+public final class ReportRequestsSearchServiceP8 {
+
+	private static final int FETCH_PAGE_SIZE = 350;
+
+	private ReportRequestsSearchServiceP8() {
+	}
+
+	@SuppressWarnings("rawtypes")
+	public static void executeP8Search(String repositoryId, PluginServiceCallbacks callbacks,
+			JSONResultSetResponse jsonResultSet, Locale clientLocale) throws Exception {
+		ObjectStore objectStore = callbacks.getP8ObjectStore(repositoryId);
+
+		buildResultStructure(jsonResultSet, callbacks.getResources(), clientLocale);
+
+		SearchSQL searchSQL = new SearchSQL(ReportPluginConstants.REPORT_REQUEST_LIST_SQL);
+		SearchScope searchScope = new SearchScope(objectStore);
+
+		// Null filter: let CE hydrate the default property set for each row. Narrow ICN document filters plus a
+		// projection-only SELECT routinely cause FNRCA0024E (MimeType, ClassDescription, ...) when calling
+		// get_MimeType() / getP8PrivilegeMasks().
+		List<Object> searchResults = new ArrayList<Object>(FETCH_PAGE_SIZE);
+		IndependentObjectSet resultsObjectSet = searchScope.fetchObjects(searchSQL, FETCH_PAGE_SIZE, null,
+				Boolean.TRUE);
+		PageIterator pageIterator = resultsObjectSet.pageIterator();
+		if (pageIterator.nextPage()) {
+			for (Object obj : pageIterator.getCurrentPage()) {
+				searchResults.add(obj);
+			}
+		}
+
+		HashMap<Object, Long> privMasks = null;
+		try {
+			privMasks = callbacks.getP8PrivilegeMasks(repositoryId, searchResults);
+		} catch (Exception e) {
+			// If masks cannot be resolved, rows still render; privileges default below.
+			privMasks = null;
+		}
+
+		for (Object searchResult : searchResults) {
+			Document doc = (Document) searchResult;
+			Properties props = doc.getProperties();
+
+			StringBuffer sbId = new StringBuffer();
+			sbId.append(doc.getClassName()).append(",").append(objectStore.get_Id().toString()).append(",")
+					.append(doc.get_Id().toString());
+
+			long privileges = 0L;
+			if (privMasks != null) {
+				Long pm = privMasks.get(doc);
+				if (pm != null) {
+					privileges = pm.longValue();
+				}
+			}
+
+			String title = P8PropertyValues.asString(props, "DocumentTitle");
+			if (title.length() == 0) {
+				try {
+					String n = doc.get_Name();
+					if (n != null && n.length() > 0) {
+						title = n;
+					}
+				} catch (RuntimeException e) {
+					// Name not in cache for this row shape
+				}
+			}
+
+			String mimeForRow = P8PropertyValues.asString(props, "MimeType");
+			if (mimeForRow.length() == 0) {
+				mimeForRow = ReportPluginConstants.JSON_MIME_TYPE;
+			}
+
+			boolean locked = false;
+			String lockOwner = "";
+			boolean currentVersion = true;
+			try {
+				locked = doc.isLocked();
+				String lo = doc.get_LockOwner();
+				lockOwner = lo != null ? lo : "";
+				currentVersion = doc.get_IsCurrentVersion();
+			} catch (RuntimeException e) {
+				// Lock / version not in cache — safe defaults for the grid
+			}
+
+			JSONResultSetRow row = new JSONResultSetRow(sbId.toString(), title, mimeForRow, privileges);
+
+			row.addAttribute("locked", locked, JSONResultSetRow.TYPE_BOOLEAN, null, Boolean.toString(locked));
+			row.addAttribute("lockedUser", lockOwner, JSONResultSetRow.TYPE_STRING, null, lockOwner);
+			row.addAttribute("currentVersion", currentVersion, JSONResultSetRow.TYPE_BOOLEAN, null,
+					Boolean.toString(currentVersion));
+
+			row.addAttribute("ID", doc.get_Id().toString(), JSONResultSetRow.TYPE_STRING, null, doc.get_Id()
+					.toString());
+			row.addAttribute("className", doc.getClassName(), JSONResultSetRow.TYPE_STRING, null, doc.getClassName());
+
+			String targetClass = P8PropertyValues.asString(props,
+					ReportPluginConstants.REPORT_REQUEST_PROPERTY_TARGET_DOCUMENT_CLASS);
+			String repositoryName = P8PropertyValues.asString(props,
+					ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPOSITORY_NAME);
+			String status = P8PropertyValues.asString(props, ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS);
+			String dateCreated = P8PropertyValues.asDateTimeForResultSet(props,
+					ReportPluginConstants.REPORT_REQUEST_PROPERTY_DATE_CREATED);
+			String lastExecutionDate = P8PropertyValues.asDateTimeForResultSet(props,
+					ReportPluginConstants.REPORT_REQUEST_PROPERTY_LAST_EXECUTION_DATE);
+			String executionStartDate = P8PropertyValues.asDateTimeForResultSet(props,
+					ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_START_DATE);
+			String executionEndDate = P8PropertyValues.asDateTimeForResultSet(props,
+					ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_END_DATE);
+
+			row.addAttribute("DocumentTitle", title, JSONResultSetRow.TYPE_STRING, null, title);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_TARGET_DOCUMENT_CLASS, targetClass,
+					JSONResultSetRow.TYPE_STRING, null, targetClass);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPOSITORY_NAME, repositoryName,
+					JSONResultSetRow.TYPE_STRING, null, repositoryName);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS, status, JSONResultSetRow.TYPE_STRING,
+					null, status);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_DATE_CREATED, dateCreated,
+					JSONResultSetRow.TYPE_STRING, null, dateCreated);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_LAST_EXECUTION_DATE, lastExecutionDate,
+					JSONResultSetRow.TYPE_STRING, null, lastExecutionDate);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_START_DATE,
+					executionStartDate, JSONResultSetRow.TYPE_STRING, null, executionStartDate);
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_END_DATE, executionEndDate,
+					JSONResultSetRow.TYPE_STRING, null, executionEndDate);
+
+			String downloadFlag = isCompletedStatus(status) ? "download" : "";
+			row.addAttribute(ReportPluginConstants.REPORT_REQUEST_GRID_DOWNLOAD_FIELD, downloadFlag,
+					JSONResultSetRow.TYPE_STRING, null, downloadFlag);
+
+			jsonResultSet.addRow(row);
+		}
+	}
+
+	private static void buildResultStructure(JSONResultSetResponse jsonResultSet, MessageResources resources,
+			Locale clientLocale) throws Exception {
+		String[] states = new String[1];
+		states[0] = JSONResultSetColumn.STATE_LOCKED;
+
+		jsonResultSet.addColumn(new JSONResultSetColumn("&nbsp;", "2%",
+				ReportPluginConstants.REPORT_REQUEST_GRID_DOWNLOAD_FIELD, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("&nbsp;","multiStateIcon", false, states));
+		jsonResultSet.addColumn(new JSONResultSetColumn("&nbsp;", "2%", "mimeTypeIcon", null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Report Name", "14%", "DocumentTitle", null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Target Document Class", "11%",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_TARGET_DOCUMENT_CLASS, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Repository Name", "9%",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPOSITORY_NAME, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Status", "8%",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Date created", "12%",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_DATE_CREATED, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Last Execution Date", "12%",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_LAST_EXECUTION_DATE, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Report Execution Start Date", "12%",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_START_DATE, null, false));
+		jsonResultSet.addColumn(new JSONResultSetColumn("Report Execution End Date", "12%",
+				ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_END_DATE, null, false));
+
+		JSONArray fieldsToDisplay = new JSONArray();
+		fieldsToDisplay.add(fieldDisplay("DocumentTitle", "Report Name"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_TARGET_DOCUMENT_CLASS,
+				"Target Document Class"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPOSITORY_NAME,
+				"Repository Name"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_STATUS, "Status"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_DATE_CREATED, "Date created"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_LAST_EXECUTION_DATE,
+				"Last Execution Date"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_START_DATE,
+				"Report Execution Start Date"));
+		fieldsToDisplay.add(fieldDisplay(ReportPluginConstants.REPORT_REQUEST_PROPERTY_REPORT_EXECUTION_END_DATE,
+				"Report Execution End Date"));
+
+		jsonResultSet.addMagazineColumn(new JSONResultSetColumn("content", "100%", "content", fieldsToDisplay,
+				new JSONArray()));
+	}
+
+	private static boolean isCompletedStatus(String status) {
+		return status != null
+				&& ReportPluginConstants.REPORT_REQUEST_STATUS_COMPLETED.equalsIgnoreCase(status.trim());
+	}
+
+	private static JSONObject fieldDisplay(String field, String displayName) throws Exception {
+		JSONObject o = new JSONObject();
+		o.put("field", field);
+		o.put("displayName", displayName);
+		return o;
+	}
+}
+
+
+
+
+define([
+	"dojo/_base/declare",
+	"dojo/_base/array",
+	"dojo/_base/lang",
+	"dijit/layout/BorderContainer",
+	"dijit/layout/ContentPane",
+	"dijit/form/Button",
+	"dijit/form/Select",
+	"dijit/_WidgetBase",
+	"dijit/_TemplatedMixin",
+	"dijit/_WidgetsInTemplateMixin",
+	"ecm/LoggerMixin",
+	"ecm/MessagesMixin",
+	"ecm/model/Desktop",
+	"ecm/model/ResultSet",
+	"ecm/widget/dialog/MessageDialog",
+	"ecm/widget/listView/ContentList",
+	"ecm/widget/listView/gridModules/RowContextMenu",
+	"ecm/widget/listView/gridModules/DndRowMoveCopy",
+	"ecm/widget/listView/gridModules/DndFromDesktopAddDoc",
+	"dojo/text!./templates/ReportsFeatureMainPane.html",
+	"./ReportRequestDialog",
+	"./ReportRequestDetailsDialog",
+	"./ReportService",
+	"./ReportDownloadDecorator",
+	"./ReportStatusDecorator",
+	"./ReportRequestDownloadGridModule"
+], function(declare, array, lang, BorderContainer, ContentPane, Button, Select, _WidgetBase, _TemplatedMixin,
+	_WidgetsInTemplateMixin, LoggerMixin, MessagesMixin, Desktop, ResultSet, MessageDialog, ContentList, RowContextMenu,
+	DndRowMoveCopy, DndFromDesktopAddDoc, template,
+	ReportRequestDialog, ReportRequestDetailsDialog, reportService, ReportDownloadDecorator, ReportStatusDecorator,
+	ReportRequestDownloadGridModule) {
+
+	var REPORT_DOWNLOAD_FIELD = ReportDownloadDecorator.DOWNLOAD_FIELD;
+	var REPORT_STATUS_FIELD = ReportStatusDecorator.STATUS_FIELD;
+
+	/** Symbolic name of the FileNet class (must match {@code ReportPluginConstants.REPORT_REQUEST_CLASS}). */
+	var REPORT_REQUEST_CLASS = "ReportRequest";
+
+	/** Grid column widths — compact layout so all columns fit without excess whitespace. */
+	var COLUMN_WIDTHS = {
+		reportDownload: "2%",
+		multiStateIcon: "2%",
+		mimeTypeIcon: "2%",
+		DocumentTitle: "14%",
+		TargetDocumentClass: "11%",
+		RepositoryName: "9%",
+		Status: "8%",
+		DateCreated: "12%",
+		LastExecutionDate: "12%",
+		ReportExecutionStartDate: "12%",
+		ReportExecutionEndDate: "12%"
+	};
+
+	return declare("cNBReportsPluginDojo.ReportsFeatureMainPane", [
+		_WidgetBase,
+		_TemplatedMixin,
+		_WidgetsInTemplateMixin,
+		LoggerMixin,
+		MessagesMixin
+	], {
+		templateString: template,
+		widgetsInTemplate: true,
+
+		_contentList: null,
+		_detailsDialog: null,
+
+		postCreate: function() {
+			this.logEntry("postCreate");
+			this.inherited(arguments);
+			this.createButton.set("label", "Create Report Request");
+			this.own(this.createButton.on("click", lang.hitch(this, "_onCreateClicked")));
+			this.refreshButton.set("label", "Refresh");
+			this.own(this.refreshButton.on("click", lang.hitch(this, "refreshGrid")));
+
+			this.repositoryLabel.innerHTML = "Repository:";
+			this._populateRepositorySelect();
+
+			this._contentList = new ContentList({
+				selectFirstRowOnSetResult: false,
+				showDocInfo: false
+			});
+			this._contentList.setGridExtensionModules(this.getContentListGridModules());
+			this._contentList.setContentListModules(this.getContentListModules());
+			this._wrapContentListOpenItem();
+			this.own(this.connect(this._contentList, "onBeforeSetResultSet", lang.hitch(this, "_applyReportColumnDecorators")));
+			this.own(this.connect(this._contentList, "onSetResultSet", lang.hitch(this, "_patchGridColumnDecorators")));
+			this.gridHost.set("content", this._contentList);
+
+			this.logExit("postCreate");
+		},
+
+		destroy: function() {
+			if (this._detailsDialog) {
+				this._detailsDialog.destroyRecursive();
+				this._detailsDialog = null;
+			}
+			this.inherited(arguments);
+		},
+
+		getContentListGridModules: function() {
+			var mods = [];
+			mods.push(ReportRequestDownloadGridModule);
+			mods.push(DndRowMoveCopy);
+			mods.push(DndFromDesktopAddDoc);
+			mods.push(RowContextMenu);
+			return mods;
+		},
+
+		_applyReportColumnDecorators: function(resultSet) {
+			var cells = this._getResultSetDetailCells(resultSet);
+			if (!cells) {
+				return;
+			}
+			array.forEach(cells, lang.hitch(this, function(cell) {
+				this._applyColumnWidth(cell);
+				this._configureDownloadColumn(cell);
+				this._configureStatusColumn(cell);
+			}));
+		},
+
+		_patchGridColumnDecorators: function() {
+			var grid = this._contentList && this._contentList.grid;
+			if (!grid || !grid._columns) {
+				return;
+			}
+			array.forEach(grid._columns, lang.hitch(this, function(column) {
+				if (!column || column.field !== REPORT_STATUS_FIELD) {
+					return;
+				}
+				column.decorator = ReportStatusDecorator.getDecorator();
+				column.sortable = false;
+				column.filterable = false;
+				column.cellClasses = "cnbReportStatusCell";
+			}));
+		},
+
+		_getResultSetDetailCells: function(resultSet) {
+			if (!resultSet || !resultSet.structure) {
+				return null;
+			}
+			if (resultSet.structure.cells && resultSet.structure.cells[0]) {
+				return resultSet.structure.cells[0];
+			}
+			if (resultSet.structure instanceof Array) {
+				return resultSet.structure;
+			}
+			return null;
+		},
+
+		_applyColumnWidth: function(cell) {
+			if (!cell || !cell.field) {
+				return;
+			}
+			var width = COLUMN_WIDTHS[cell.field];
+			if (width) {
+				cell.width = width;
+			}
+		},
+
+		_configureDownloadColumn: function(cell) {
+			if (!cell || cell.field !== REPORT_DOWNLOAD_FIELD) {
+				return;
+			}
+			cell.decorator = "cNBReportsPluginDojo.ReportDownloadDecorator.decorateCell";
+			cell.sortable = false;
+			cell.filterable = false;
+			cell.headerClasses = "ecmIconCell";
+			cell.cellClasses = "ecmIconCell";
+			cell.width = cell.width || "2%";
+		},
+
+		_configureStatusColumn: function(cell) {
+			if (!cell || cell.field !== REPORT_STATUS_FIELD) {
+				return;
+			}
+			cell.decorator = ReportStatusDecorator.getDecorator();
+			cell.sortable = false;
+			cell.filterable = false;
+			cell.cellClasses = "cnbReportStatusCell";
+			cell.width = cell.width || "8%";
+		},
+
+		getContentListModules: function() {
+			// No ContentList bar/toolbar (Refresh, Add Document, New Folder, Actions, view toggles).
+			return [];
+		},
+
+		_wrapContentListOpenItem: function() {
+			var cl = this._contentList;
+			var origOpenItem = lang.hitch(cl, cl.openItem);
+			var self = this;
+			cl.openItem = function(item) {
+				if (item && self._itemIsReportRequest(item)) {
+					self._onViewReport({
+						documentId: item.id,
+						documentTitle: item.name || ""
+					});
+					return;
+				}
+				return origOpenItem(item);
+			};
+		},
+
+		_itemIsReportRequest: function(item) {
+			var t = item.template;
+			if (typeof t === "string" && t === REPORT_REQUEST_CLASS) {
+				return true;
+			}
+			if (t && t.name === REPORT_REQUEST_CLASS) {
+				return true;
+			}
+			if (item.templateName === REPORT_REQUEST_CLASS) {
+				return true;
+			}
+			return false;
+		},
+
+		_populateRepositorySelect: function() {
+			var repos = [];
+			if (Desktop.repositories && Desktop.repositories.length) {
+				array.forEach(Desktop.repositories, function(r) {
+					if (r && r.type === "p8") {
+						repos.push(r);
+					}
+				});
+			}
+			var opts = array.map(repos, function(r) {
+				return {
+					label: r.name,
+					value: r.id
+				};
+			});
+			this.repositorySelect.set("options", opts.length ? opts : [
+				{
+					label: "No P8 repository",
+					value: ""
+				}
+			]);
+			if (opts.length) {
+				this.repositorySelect.set("value", opts[0].value);
+			}
+			this.own(this.repositorySelect.on("change", lang.hitch(this, "refreshGrid")));
+		},
+
+		getSelectedRepository: function() {
+			var id = this.repositorySelect.get("value");
+			if (!id) {
+				return null;
+			}
+			return Desktop.getRepository(id);
+		},
+
+		loadContent: function() {
+			this.logEntry("loadContent");
+			this.inherited(arguments);
+			this.refreshGrid();
+			if (this.borderContainer) {
+				this.borderContainer.resize();
+			}
+			this.logExit("loadContent");
+		},
+
+		resize: function() {
+			this.inherited(arguments);
+			if (this.borderContainer) {
+				this.borderContainer.resize();
+			}
+		},
+
+		refreshGrid: function() {
+			var repo = this.getSelectedRepository();
+			if (!repo) {
+				if (this._contentList) {
+					this._contentList.reset();
+				}
+				return;
+			}
+			if (!repo.connected) {
+				this.own(this.connect(repo, "onConnected", lang.hitch(this, function() {
+					this.refreshGrid();
+				})));
+				return;
+			}
+			this._contentList.setGridExtensionModules(this.getContentListGridModules());
+			this._contentList.setContentListModules(this.getContentListModules());
+
+			var self = this;
+			reportService.listReportRequests(repo.id, function(response) {
+				response.repository = repo;
+				var resultSet = new ResultSet(response);
+				self._contentList.setResultSet(resultSet);
+			}, function(response) {
+				var msg = "Unable to load report requests.";
+				if (response && response.message) {
+					msg = response.message;
+				} else if (response && response.errors && response.errors.length) {
+					msg = response.errors[0].text || msg;
+				}
+				new MessageDialog({
+					text: msg
+				}).show();
+				self._contentList.reset();
+			});
+		},
+
+		_onCreateClicked: function() {
+			var repo = this.getSelectedRepository();
+			if (!repo) {
+				new MessageDialog({
+					text: "Select a FileNet repository."
+				}).show();
+				return;
+			}
+			var dlg = new ReportRequestDialog({
+				repository: repo,
+				style: "width: 90%; height: 90%;"
+			});
+			dlg.onSubmitted = lang.hitch(this, function() {
+				this.refreshGrid();
+			});
+			dlg.show();
+		},
+
+		_onViewReport: function(summary) {
+			var repo = this.getSelectedRepository();
+			if (!repo || !summary || !summary.documentId) {
+				return;
+			}
+			var self = this;
+			reportService.getReportRequestDetails(repo.id, summary.documentId, null, function(res) {
+				if (!self._detailsDialog) {
+					self._detailsDialog = new ReportRequestDetailsDialog({
+						style: "width: 720px; height: 520px;"
+					});
+				}
+				self._detailsDialog.setDetails(res.details || {});
+				self._detailsDialog.show();
+			}, function(res) {
+				var msg = "Unable to load details.";
+				if (res && res.message) {
+					msg = res.message;
+				}
+				new MessageDialog({
+					text: msg
+				}).show();
+			});
+		}
+	});
+});
+
