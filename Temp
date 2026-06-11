@@ -1,1 +1,11 @@
-temp
+InputStream is = new java.io.ByteArrayInputStream(
+    ((String) JSONObject.parse(callbacks.loadConfiguration())
+        .get("edsLookupConfiguration"))
+        .getBytes("UTF-8")
+);
+
+
+InputStream is = new java.io.ByteArrayInputStream(
+    ((String) JSONObject.parse(callbacks.loadConfiguration()).get("edsLookupConfiguration"))
+        .getBytes("UTF-8")
+);
