@@ -1,1 +1,588 @@
-temp
+define([
+	"dojo/_base/declare",
+	"dojo/json",
+	"dijit/_TemplatedMixin",
+	"dijit/_WidgetsInTemplateMixin",
+	"ecm/widget/admin/PluginConfigurationPane",
+	"dojo/text!./templates/ConfigurationPane.html"
+], function(
+	declare,
+	dojoJson,
+	_TemplatedMixin,
+	_WidgetsInTemplateMixin,
+	PluginConfigurationPane,
+	template
+) {
+
+	return declare("searchPluginDojo.ConfigurationPane", [
+		PluginConfigurationPane,
+		_TemplatedMixin,
+		_WidgetsInTemplateMixin
+	], {
+
+		templateString: template,
+		widgetsInTemplate: true,
+
+		load: function(callback) {
+
+			if (this.configurationString) {
+
+				try {
+
+					var jsonConfig = dojoJson.parse(this.configurationString);
+
+					this.edsLookupConfigurationField.value =
+						jsonConfig.edsLookupConfiguration || "";
+
+				} catch (e) {
+
+					this.logError(
+						"load",
+						"Failed to load configuration: " + e.message
+					);
+				}
+			}
+
+			if (callback) {
+				callback();
+			}
+		},
+
+		_onParamChange: function() {
+
+			var configJson = {
+
+				edsLookupConfiguration:
+					this.edsLookupConfigurationField.value
+			};
+
+			this.configurationString =
+				JSON.stringify(configJson);
+
+			this.onSaveNeeded(true);
+		},
+
+		validate: function() {
+
+			try {
+
+				JSON.parse(
+					this.edsLookupConfigurationField.value || "{}"
+				);
+
+			} catch (e) {
+
+				alert("Invalid JSON configuration.");
+
+				return false;
+			}
+
+			return true;
+		}
+	});
+});
+
+
+
+
+<div>
+
+	<table class="propertyTable" role="presentation">
+
+		<tr>
+			<td class="propertyRowLabel" style="vertical-align: top;">
+				<span class="required">*</span>
+				<label for="${id}_edsLookupConfiguration">
+					EDS Lookup Configuration:
+				</label>
+			</td>
+
+			<td class="propertyRowValue">
+				<textarea
+					id="${id}_edsLookupConfiguration"
+					data-dojo-attach-point="edsLookupConfigurationField"
+					data-dojo-attach-event="onKeyUp: _onParamChange"
+					style="width:95%;height:500px;font-family:monospace;resize:vertical;">
+				</textarea>
+			</td>
+		</tr>
+
+	</table>
+
+</div>
+
+
+
+
+
+package com.cnb.eds.editor.config;
+
+import java.util.HashMap;
+import java.util.Map;
+
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.json.java.JSONArray;
+import com.ibm.json.java.JSONObject;
+
+/**
+ * Manages lookup configuration for custom property editors
+ * Loads and caches configuration from lookupConfig.json
+ */
+public class LookupConfigManager {
+    
+    private static LookupConfigManager instance;
+    private JSONObject config;
+    private Map<String, Map<String, JSONObject>> cache;
+    
+    private LookupConfigManager() {
+        cache = new HashMap<String, Map<String, JSONObject>>();
+        config = new JSONObject();
+    }
+    
+    /**
+     * Get singleton instance
+     */
+    public static synchronized LookupConfigManager getInstance() {
+        if (instance == null) {
+            instance = new LookupConfigManager();
+        }
+        return instance;
+    }
+    
+    /**
+     * Load configuration from JSON file
+     */
+    public synchronized void loadConfiguration(PluginServiceCallbacks callbacks) {
+        try {
+            String pluginConfigString = callbacks.loadConfiguration();
+
+            if (pluginConfigString == null || pluginConfigString.trim().length() == 0) {
+                System.err.println("[LookupConfigManager] Configuration file not found!");
+                config = new JSONObject();
+                cache.clear();
+                return;
+            }
+
+            JSONObject pluginConfig = JSONObject.parse(pluginConfigString);
+
+            Object edsLookupConfigObject = pluginConfig.get("edsLookupConfiguration");
+
+            if (edsLookupConfigObject == null) {
+                System.err.println("[LookupConfigManager] Configuration file not found!");
+                config = new JSONObject();
+                cache.clear();
+                return;
+            }
+
+            if (edsLookupConfigObject instanceof JSONObject) {
+                config = (JSONObject) edsLookupConfigObject;
+            } else {
+                config = JSONObject.parse((String) edsLookupConfigObject);
+            }
+
+            cache.clear();
+
+            System.out.println("[LookupConfigManager] Configuration loaded successfully");
+            
+            // Log what was loaded for debugging
+            JSONObject docClasses = (JSONObject) config.get("documentClasses");
+            if (docClasses != null) {
+                System.out.println("[LookupConfigManager] Loaded " + docClasses.size() + " document class(es):");
+                for (Object key : docClasses.keySet()) {
+                    System.out.println("[LookupConfigManager]   - " + key);
+                }
+            } else {
+                System.err.println("[LookupConfigManager] WARNING: No documentClasses found in config!");
+            }
+            
+            JSONObject dataSources = (JSONObject) config.get("dataSources");
+            if (dataSources != null) {
+                System.out.println("[LookupConfigManager] Loaded " + dataSources.size() + " datasource(s):");
+                for (Object key : dataSources.keySet()) {
+                    System.out.println("[LookupConfigManager]   - " + key);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[LookupConfigManager] Error loading configuration: " + e.getMessage());
+            e.printStackTrace();
+            config = new JSONObject();
+            cache.clear();
+        }
+    }
+    
+    /**
+     * Get property configuration for a specific document class and property
+     * 
+     * @param documentClass The document class name (e.g., "Book")
+     * @param propertyName The property name (e.g., "AccountNumber")
+     * @return Property configuration JSON object, or null if not found
+     */
+    public JSONObject getPropertyConfig(String documentClass, String propertyName) {
+        try {
+            JSONObject docClasses = (JSONObject) config.get("documentClasses");
+            if (docClasses == null) {
+                System.out.println("[LookupConfigManager] No documentClasses found in config");
+                return null;
+            }
+            
+            JSONObject classConfig = (JSONObject) docClasses.get(documentClass);
+            if (classConfig == null) {
+                System.out.println("[LookupConfigManager] Document class not found: " + documentClass);
+                return null;
+            }
+            
+            JSONObject properties = (JSONObject) classConfig.get("properties");
+            if (properties == null) {
+                System.out.println("[LookupConfigManager] No properties found for class: " + documentClass);
+                return null;
+            }
+            
+            JSONObject propertyConfig = (JSONObject) properties.get(propertyName);
+            if (propertyConfig == null) {
+                System.out.println("[LookupConfigManager] Property not found: " + propertyName + " in class: " + documentClass);
+                return null;
+            }
+            
+            return propertyConfig;
+        } catch (Exception e) {
+            System.err.println("[LookupConfigManager] Error getting property config: " + e.getMessage());
+            e.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Check if a property has custom editor configured
+     * 
+     * @param documentClass The document class name
+     * @param propertyName The property name
+     * @return true if custom editor is configured, false otherwise
+     */
+    public boolean hasCustomEditor(String documentClass, String propertyName) {
+        return getPropertyConfig(documentClass, propertyName) != null;
+    }
+    
+    /**
+     * Get all properties for a document class that have custom editors
+     * 
+     * @param documentClass The document class name
+     * @return Map of property name to configuration
+     */
+    public Map<String, JSONObject> getDocumentClassProperties(String documentClass) {
+        // Check cache first
+        if (cache.containsKey(documentClass)) {
+            return cache.get(documentClass);
+        }
+        
+        Map<String, JSONObject> properties = new HashMap<String, JSONObject>();
+        try {
+            JSONObject docClasses = (JSONObject) config.get("documentClasses");
+            if (docClasses == null) return properties;
+            
+            JSONObject classConfig = (JSONObject) docClasses.get(documentClass);
+            if (classConfig == null) return properties;
+            
+            JSONObject propsConfig = (JSONObject) classConfig.get("properties");
+            if (propsConfig == null) return properties;
+            
+            for (Object key : propsConfig.keySet()) {
+                String propName = (String) key;
+                properties.put(propName, (JSONObject) propsConfig.get(propName));
+            }
+            
+            // Cache the result
+            cache.put(documentClass, properties);
+            
+            System.out.println("[LookupConfigManager] Loaded " + properties.size() + " properties for class: " + documentClass);
+        } catch (Exception e) {
+            System.err.println("[LookupConfigManager] Error getting document class properties: " + e.getMessage());
+            e.printStackTrace();
+        }
+        
+        return properties;
+    }
+    
+    /**
+     * Reload configuration (useful for hot-reloading without restart)
+     */
+    public void reloadConfiguration(PluginServiceCallbacks callbacks) {
+        cache.clear();
+        loadConfiguration(callbacks);
+        System.out.println("[LookupConfigManager] Configuration reloaded");
+    }
+    
+    /**
+     * Get datasource configuration by name
+     * 
+     * @param dataSourceName Name of the datasource
+     * @return Datasource configuration JSON object, or null if not found
+     */
+    public JSONObject getDataSourceConfig(String dataSourceName) {
+        try {
+            JSONObject dataSources = (JSONObject) config.get("dataSources");
+            if (dataSources == null) {
+                System.err.println("[LookupConfigManager] No dataSources found in configuration");
+                return null;
+            }
+            
+            JSONObject dataSourceConfig = (JSONObject) dataSources.get(dataSourceName);
+            if (dataSourceConfig == null) {
+                System.err.println("[LookupConfigManager] Datasource not found: " + dataSourceName);
+                return null;
+            }
+            
+            return dataSourceConfig;
+        } catch (Exception e) {
+            System.err.println("[LookupConfigManager] Error getting datasource config: " + e.getMessage());
+            e.printStackTrace();
+            return null;
+        }
+    }
+    
+    /**
+     * Get all configured datasource names
+     * 
+     * @return Array of datasource names
+     */
+    public String[] getDataSourceNames() {
+        try {
+            JSONObject dataSources = (JSONObject) config.get("dataSources");
+            if (dataSources == null) {
+                return new String[0];
+            }
+            
+            return (String[]) dataSources.keySet().toArray(new String[0]);
+        } catch (Exception e) {
+            System.err.println("[LookupConfigManager] Error getting datasource names: " + e.getMessage());
+            return new String[0];
+        }
+    }
+    
+    /**
+     * Get all configured document class names (for debugging)
+     * 
+     * @return String representation of available document classes
+     */
+    public String getAvailableDocumentClasses() {
+        try {
+            JSONObject docClasses = (JSONObject) config.get("documentClasses");
+            if (docClasses == null || docClasses.isEmpty()) {
+                return "[none]";
+            }
+            
+            StringBuilder sb = new StringBuilder();
+            sb.append("[");
+            int count = 0;
+            for (Object key : docClasses.keySet()) {
+                if (count > 0) sb.append(", ");
+                sb.append("'").append(key).append("'");
+                count++;
+            }
+            sb.append("]");
+            return sb.toString();
+        } catch (Exception e) {
+            return "[error: " + e.getMessage() + "]";
+        }
+    }
+    
+    /**
+     * Check if a document class exists in configuration
+     * 
+     * @param documentClass The document class name
+     * @return true if document class is configured, false otherwise
+     */
+    public boolean hasDocumentClass(String documentClass) {
+        try {
+            JSONObject docClasses = (JSONObject) config.get("documentClasses");
+            if (docClasses == null) {
+                return false;
+            }
+            return docClasses.containsKey(documentClass);
+        } catch (Exception e) {
+            System.err.println("[LookupConfigManager] Error checking document class: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    /**
+     * Check if a desktop is allowed for a document class
+     * 
+     * @param documentClass The document class name
+     * @param desktopId The desktop ID
+     * @return true if desktop is allowed (or no desktop restriction configured), false otherwise
+     */
+    public boolean isDesktopAllowed(String documentClass, String desktopId) {
+        try {
+            JSONObject docClasses = (JSONObject) config.get("documentClasses");
+            if (docClasses == null) {
+                return false;
+            }
+            
+            JSONObject classConfig = (JSONObject) docClasses.get(documentClass);
+            if (classConfig == null) {
+                return false;
+            }
+            
+            // Check if desktops array is configured
+            JSONArray desktops = (JSONArray) classConfig.get("desktops");
+            
+            // If no desktops configured, allow all desktops
+            if (desktops == null || desktops.isEmpty()) {
+                System.out.println("[LookupConfigManager] No desktop restrictions for class: " + documentClass);
+                return true;
+            }
+            
+            // Check if current desktop is in the allowed list
+            for (int i = 0; i < desktops.size(); i++) {
+                String allowedDesktop = (String) desktops.get(i);
+                if (allowedDesktop != null && allowedDesktop.equals(desktopId)) {
+                    return true;
+                }
+            }
+            
+            return false;
+        } catch (Exception e) {
+            System.err.println("[LookupConfigManager] Error checking desktop access: " + e.getMessage());
+            e.printStackTrace();
+            return false;
+        }
+    }
+    
+    /**
+     * Get list of allowed desktops for a document class
+     * 
+     * @param documentClass The document class name
+     * @return String representation of allowed desktops
+     */
+    public String getAllowedDesktops(String documentClass) {
+        try {
+            JSONObject docClasses = (JSONObject) config.get("documentClasses");
+            if (docClasses == null) {
+                return "[none]";
+            }
+            
+            JSONObject classConfig = (JSONObject) docClasses.get(documentClass);
+            if (classConfig == null) {
+                return "[class not found]";
+            }
+            
+            JSONArray desktops = (JSONArray) classConfig.get("desktops");
+            if (desktops == null || desktops.isEmpty()) {
+                return "[all desktops allowed]";
+            }
+            
+            StringBuilder sb = new StringBuilder();
+            sb.append("[");
+            for (int i = 0; i < desktops.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append("'").append(desktops.get(i)).append("'");
+            }
+            sb.append("]");
+            return sb.toString();
+        } catch (Exception e) {
+            return "[error: " + e.getMessage() + "]";
+        }
+    }
+    
+    /**
+     * Get full configuration for client-side use
+     * @return JSONObject containing documentClasses configuration (without datasource credentials)
+     */
+    public JSONObject getFullConfiguration() {
+        try {
+            JSONObject clientConfig = new JSONObject();
+            
+            // Only expose documentClasses to client (not datasource credentials for security)
+            JSONObject docClasses = (JSONObject) config.get("documentClasses");
+            if (docClasses != null) {
+                clientConfig.put("documentClasses", docClasses);
+            } else {
+                clientConfig.put("documentClasses", new JSONObject());
+            }
+            
+            System.out.println("[LookupConfigManager] Returning configuration with " + 
+                             (docClasses != null ? docClasses.size() : 0) + " document classes");
+            
+            return clientConfig;
+        } catch (Exception e) {
+            System.err.println("[LookupConfigManager] Error getting full configuration: " + e.getMessage());
+            e.printStackTrace();
+            
+            JSONObject errorConfig = new JSONObject();
+            try {
+                errorConfig.put("documentClasses", new JSONObject());
+            } catch (Exception ex) {
+                // Ignore
+            }
+            return errorConfig;
+        }
+    }
+}
+
+
+
+
+
+package com.cnb.eds.editor.service;
+
+import java.io.PrintWriter;
+
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import com.cnb.eds.editor.config.LookupConfigManager;
+import com.ibm.ecm.extension.PluginService;
+import com.ibm.ecm.extension.PluginServiceCallbacks;
+import com.ibm.json.java.JSONObject;
+
+/**
+ * Service to expose lookupConfig.json to the client-side JavaScript
+ * Loads JSON directly from classpath
+ */
+public class GetLookupConfigService extends PluginService {
+
+    @Override
+    public String getId() {
+        return "GetLookupConfigService";
+    }
+
+    @Override
+    public void execute(PluginServiceCallbacks callbacks, HttpServletRequest request, HttpServletResponse response) throws Exception {
+        System.out.println("[GetLookupConfigService] Request received");
+        
+        try {
+            System.out.println("[GetLookupConfigService] Loading EDS lookup configuration from plugin configuration...");
+            
+            LookupConfigManager configManager = LookupConfigManager.getInstance();
+            configManager.loadConfiguration(callbacks);
+            
+            JSONObject clientConfig = configManager.getFullConfiguration();
+            
+            // Return the configuration as JSON
+            response.setContentType("application/json");
+            response.setCharacterEncoding("UTF-8");
+            response.setStatus(HttpServletResponse.SC_OK);
+            
+            PrintWriter writer = response.getWriter();
+            writer.write(clientConfig.serialize());
+            writer.flush();
+            
+            System.out.println("[GetLookupConfigService] ✓ Configuration sent successfully");
+            
+        } catch (Exception e) {
+            System.err.println("[GetLookupConfigService] ✗ Error: " + e.getMessage());
+            e.printStackTrace();
+            
+            response.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+            
+            JSONObject errorResponse = new JSONObject();
+            errorResponse.put("error", e.getMessage());
+            errorResponse.put("documentClasses", new JSONObject());
+            
+            response.setContentType("application/json");
+            PrintWriter writer = response.getWriter();
+            writer.write(errorResponse.serialize());
+            writer.flush();
+        }
+    }
+}
