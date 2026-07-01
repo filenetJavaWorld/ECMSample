@@ -1,1 +1,2394 @@
-temp
+package com.filenet.loadtest.config;
+
+/**
+ * Application configuration loaded from config.properties.
+ */
+public class AppConfig {
+
+    private final String ceUri;
+    private final String username;
+    private final String password;
+    private final String objectStoreName;
+    private final int threadCount;
+    private final String sampleContentFile;
+    private final String mimeType;
+    private final String metricsOutputFile;
+    private final String classConfigFile;
+    private final boolean searchEnabled;
+    private final int searchThreadCount;
+    private final int searchIterations;
+    private final String searchConfigFile;
+    private final String searchMetricsOutputFile;
+
+    public AppConfig(String ceUri, String username, String password, String objectStoreName,
+                     int threadCount, String sampleContentFile, String mimeType,
+                     String metricsOutputFile, String classConfigFile,
+                     boolean searchEnabled, int searchThreadCount, int searchIterations,
+                     String searchConfigFile, String searchMetricsOutputFile) {
+        this.ceUri = ceUri;
+        this.username = username;
+        this.password = password;
+        this.objectStoreName = objectStoreName;
+        this.threadCount = threadCount;
+        this.sampleContentFile = sampleContentFile;
+        this.mimeType = mimeType;
+        this.metricsOutputFile = metricsOutputFile;
+        this.classConfigFile = classConfigFile;
+        this.searchEnabled = searchEnabled;
+        this.searchThreadCount = searchThreadCount;
+        this.searchIterations = searchIterations;
+        this.searchConfigFile = searchConfigFile;
+        this.searchMetricsOutputFile = searchMetricsOutputFile;
+    }
+
+    public String getCeUri() {
+        return ceUri;
+    }
+
+    public String getUsername() {
+        return username;
+    }
+
+    public String getPassword() {
+        return password;
+    }
+
+    public String getObjectStoreName() {
+        return objectStoreName;
+    }
+
+    public int getThreadCount() {
+        return threadCount;
+    }
+
+    public String getSampleContentFile() {
+        return sampleContentFile;
+    }
+
+    public String getMimeType() {
+        return mimeType;
+    }
+
+    public String getMetricsOutputFile() {
+        return metricsOutputFile;
+    }
+
+    public String getClassConfigFile() {
+        return classConfigFile;
+    }
+
+    public boolean isSearchEnabled() {
+        return searchEnabled;
+    }
+
+    public int getSearchThreadCount() {
+        return searchThreadCount;
+    }
+
+    public int getSearchIterations() {
+        return searchIterations;
+    }
+
+    public String getSearchConfigFile() {
+        return searchConfigFile;
+    }
+
+    public String getSearchMetricsOutputFile() {
+        return searchMetricsOutputFile;
+    }
+}
+
+
+
+package com.filenet.loadtest.config;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Properties;
+
+/**
+ * Loads application configuration from a properties file.
+ */
+public final class ConfigLoader {
+
+    private static final String DEFAULT_CONFIG = "config.properties";
+
+    private ConfigLoader() {
+    }
+
+    /**
+     * Loads configuration from the default config.properties file in the working directory.
+     *
+     * @return application configuration
+     * @throws IOException if the file cannot be read
+     */
+    public static AppConfig load() throws IOException {
+        return load(DEFAULT_CONFIG);
+    }
+
+    /**
+     * Loads configuration from the specified properties file path.
+     *
+     * @param configFilePath path to config.properties
+     * @return application configuration
+     * @throws IOException if the file cannot be read
+     */
+    public static AppConfig load(String configFilePath) throws IOException {
+        Properties props = new Properties();
+        try (InputStream input = new FileInputStream(configFilePath)) {
+            props.load(input);
+        }
+
+        return new AppConfig(
+                trimTrailingSlash(require(props, "ce.uri")),
+                require(props, "ce.username"),
+                require(props, "ce.password"),
+                require(props, "ce.objectStore"),
+                parseInt(props, "thread.count", 5),
+                require(props, "sample.content.file"),
+                require(props, "sample.mimeType"),
+                require(props, "output.metrics.file"),
+                require(props, "class.config.file"),
+                parseBoolean(props, "search.enabled", false),
+                parseInt(props, "search.thread.count", 5),
+                parseInt(props, "search.iterations", 10),
+                props.getProperty("search.config.file", "search-config.csv"),
+                props.getProperty("search.output.metrics.file", "search-test-results.csv")
+        );
+    }
+
+    private static String require(Properties props, String key) {
+        String value = props.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException("Missing required configuration property: " + key);
+        }
+        return value.trim();
+    }
+
+    private static int parseInt(Properties props, String key, int defaultValue) {
+        String value = props.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        return Integer.parseInt(value.trim());
+    }
+
+    private static boolean parseBoolean(Properties props, String key, boolean defaultValue) {
+        String value = props.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        return Boolean.parseBoolean(value.trim());
+    }
+
+    private static String trimTrailingSlash(String uri) {
+        if (uri == null) {
+            return null;
+        }
+        while (uri.endsWith("/")) {
+            uri = uri.substring(0, uri.length() - 1);
+        }
+        return uri;
+    }
+}
+
+
+
+package com.filenet.loadtest.connection;
+
+import com.filenet.api.core.Connection;
+import com.filenet.api.core.Domain;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.util.UserContext;
+import com.filenet.loadtest.config.AppConfig;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import javax.security.auth.Subject;
+
+/**
+ * Encapsulates an independent FileNet CE session for a single worker thread.
+ * Each instance creates its own Connection, authenticates, and manages UserContext lifecycle.
+ */
+public class FileNetSession implements AutoCloseable {
+
+    private static final Logger LOG = LogManager.getLogger(FileNetSession.class);
+
+    private final Connection connection;
+    private final Subject subject;
+    private final Domain domain;
+    private final ObjectStore objectStore;
+    private final String threadName;
+
+    private FileNetSession(Connection connection, Subject subject, Domain domain,
+                           ObjectStore objectStore, String threadName) {
+        this.connection = connection;
+        this.subject = subject;
+        this.domain = domain;
+        this.objectStore = objectStore;
+        this.threadName = threadName;
+    }
+
+    /**
+     * Creates a new independent FileNet session for the current thread.
+     *
+     * @param config application configuration
+     * @return new session with UserContext pushed
+     * @throws Exception if connection or authentication fails
+     */
+    public static FileNetSession create(AppConfig config) throws Exception {
+        String threadName = Thread.currentThread().getName();
+        LOG.debug("[{}] Creating independent FileNet connection to {}", threadName, config.getCeUri());
+
+        Connection connection = Factory.Connection.getConnection(config.getCeUri());
+
+        Subject subject = UserContext.createSubject(
+                connection,
+                config.getUsername(),
+                config.getPassword(),
+                null
+        );
+
+        if (subject == null) {
+            throw new IllegalStateException("FileNet authentication failed: UserContext.createSubject returned null. "
+                    + "Check ce.username and ce.password in config.properties.");
+        }
+
+        UserContext.get().pushSubject(subject);
+
+        Domain domain = Factory.Domain.fetchInstance(connection, null, null);
+        ObjectStore objectStore = Factory.ObjectStore.fetchInstance(
+                domain,
+                config.getObjectStoreName(),
+                null
+        );
+
+        LOG.info("[{}] FileNet session established for object store: {}",
+                threadName, config.getObjectStoreName());
+
+        return new FileNetSession(connection, subject, domain, objectStore, threadName);
+    }
+
+    public Connection getConnection() {
+        return connection;
+    }
+
+    public Domain getDomain() {
+        return domain;
+    }
+
+    public ObjectStore getObjectStore() {
+        return objectStore;
+    }
+
+    public Subject getSubject() {
+        return subject;
+    }
+
+    /**
+     * Pops the UserContext Subject for this thread. Must be called when the session is no longer needed.
+     */
+    @Override
+    public void close() {
+        try {
+            UserContext.get().popSubject();
+            LOG.debug("[{}] FileNet session closed and UserContext popped", threadName);
+        } catch (Exception ex) {
+            LOG.warn("[{}] Error while closing FileNet session: {}", threadName, ex.getMessage(), ex);
+        }
+    }
+}
+
+
+
+
+package com.filenet.loadtest.csv;
+
+import com.filenet.loadtest.model.ClassConfig;
+import com.filenet.loadtest.model.SearchQueryConfig;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
+
+import java.io.FileReader;
+import java.io.IOException;
+import java.io.Reader;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Reads class configuration and document CSV files using Apache Commons CSV.
+ */
+public final class CsvDataReader {
+
+    private CsvDataReader() {
+    }
+
+    /**
+     * Reads class-config.csv with columns: ClassSymbolicName, CSVFile.
+     *
+     * @param filePath path to class-config.csv
+     * @return list of class configurations
+     * @throws IOException if the file cannot be read
+     */
+    public static List<ClassConfig> readClassConfig(String filePath) throws IOException {
+        List<ClassConfig> configs = new ArrayList<>();
+
+        try (Reader reader = new FileReader(filePath);
+             CSVParser parser = CSVFormat.DEFAULT
+                     .withFirstRecordAsHeader()
+                     .withIgnoreEmptyLines()
+                     .withTrim()
+                     .parse(reader)) {
+
+            for (CSVRecord record : parser) {
+                String className = getRequired(record, "ClassSymbolicName");
+                String csvFile = getRequired(record, "CSVFile");
+                configs.add(new ClassConfig(className, csvFile));
+            }
+        }
+
+        return configs;
+    }
+
+    /**
+     * Reads a document CSV file. Header columns map to FileNet property symbolic names.
+     *
+     * @param filePath path to document CSV
+     * @return list of row maps keyed by column name
+     * @throws IOException if the file cannot be read
+     */
+    public static List<Map<String, String>> readDocumentCsv(String filePath) throws IOException {
+        List<Map<String, String>> rows = new ArrayList<>();
+
+        try (Reader reader = new FileReader(filePath);
+             CSVParser parser = CSVFormat.DEFAULT
+                     .withFirstRecordAsHeader()
+                     .withIgnoreEmptyLines()
+                     .withTrim()
+                     .parse(reader)) {
+
+            Map<String, Integer> headerMap = parser.getHeaderMap();
+
+            for (CSVRecord record : parser) {
+                Map<String, String> row = new LinkedHashMap<>();
+                for (String header : headerMap.keySet()) {
+                    row.put(header, record.isMapped(header) ? record.get(header) : "");
+                }
+                rows.add(row);
+            }
+        }
+
+        return rows;
+    }
+
+    /**
+     * Reads search-config.csv with columns: SearchType, ClassName, PropertyName, SearchValue.
+     *
+     * @param filePath path to search-config.csv
+     * @return list of search query configurations
+     * @throws IOException if the file cannot be read
+     */
+    public static List<SearchQueryConfig> readSearchConfig(String filePath) throws IOException {
+        List<SearchQueryConfig> queries = new ArrayList<>();
+
+        try (Reader reader = new FileReader(filePath);
+             CSVParser parser = CSVFormat.DEFAULT
+                     .withFirstRecordAsHeader()
+                     .withIgnoreEmptyLines()
+                     .withTrim()
+                     .parse(reader)) {
+
+            for (CSVRecord record : parser) {
+                String typeStr = getRequired(record, "SearchType");
+                SearchQueryConfig.SearchType searchType;
+                try {
+                    searchType = SearchQueryConfig.SearchType.valueOf(typeStr.trim().toUpperCase());
+                } catch (IllegalArgumentException ex) {
+                    throw new IOException("Invalid SearchType in search config: " + typeStr, ex);
+                }
+
+                String className = getRequired(record, "ClassName");
+                String propertyName = record.isMapped("PropertyName") ? record.get("PropertyName") : "";
+                String searchValue = record.isMapped("SearchValue") ? record.get("SearchValue") : "";
+
+                queries.add(new SearchQueryConfig(searchType, className, propertyName, searchValue));
+            }
+        }
+
+        return queries;
+    }
+
+    private static String getRequired(CSVRecord record, String column) throws IOException {
+        if (!record.isMapped(column)) {
+            throw new IOException("Missing required CSV column: " + column);
+        }
+        String value = record.get(column);
+        if (value == null || value.trim().isEmpty()) {
+            throw new IOException("Empty value for required column '" + column + "' at record " + record.getRecordNumber());
+        }
+        return value.trim();
+    }
+}
+
+
+
+package com.filenet.loadtest.logging;
+
+import org.apache.logging.log4j.Logger;
+
+/**
+ * Centralized logging helpers for consistent load test log messages.
+ */
+public final class LoadTestLogger {
+
+    private LoadTestLogger() {
+    }
+
+    /**
+     * Logs thread lifecycle start message.
+     *
+     * @param logger     Log4j2 logger
+     * @param threadName thread name
+     * @param phase      load test phase (Upload/Search)
+     */
+    public static void logThreadStarted(Logger logger, String threadName, String phase) {
+        logger.info("[{}] {} thread started: {}", phase, threadName, threadName);
+    }
+
+    /**
+     * Logs thread lifecycle completion message.
+     *
+     * @param logger     Log4j2 logger
+     * @param threadName thread name
+     * @param phase      load test phase (Upload/Search)
+     */
+    public static void logThreadCompleted(Logger logger, String threadName, String phase) {
+        logger.info("[{}] {} thread completed: {}", phase, threadName, threadName);
+    }
+}
+
+
+
+package com.filenet.loadtest.main;
+
+import com.filenet.loadtest.config.AppConfig;
+import com.filenet.loadtest.config.ConfigLoader;
+import com.filenet.loadtest.search.SearchOrchestrator;
+import com.filenet.loadtest.upload.UploadOrchestrator;
+import com.filenet.loadtest.util.StartupValidator;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.lang.Thread.UncaughtExceptionHandler;
+
+/**
+ * Main entry point for the IBM FileNet CPE load testing utility.
+ * Runs document upload load testing followed by optional search load testing.
+ */
+public final class LoadTestApplication {
+
+    private static final Logger LOG = LogManager.getLogger(LoadTestApplication.class);
+
+    private LoadTestApplication() {
+    }
+
+    /**
+     * Application entry point.
+     *
+     * @param args optional config file path (defaults to config.properties)
+     */
+    public static void main(String[] args) {
+        Thread.setDefaultUncaughtExceptionHandler(new UncaughtExceptionHandler() {
+            @Override
+            public void uncaughtException(Thread t, Throwable e) {
+                LOG.error("Uncaught exception in thread {}: {}", t.getName(), e.getMessage(), e);
+            }
+        });
+
+        LOG.info("IBM FileNet CPE Load Test Utility starting");
+
+        try {
+            AppConfig config = args.length > 0
+                    ? ConfigLoader.load(args[0])
+                    : ConfigLoader.load();
+
+            StartupValidator.validate(config);
+
+            long overallStart = System.currentTimeMillis();
+
+            UploadOrchestrator uploadOrchestrator = new UploadOrchestrator(config);
+            uploadOrchestrator.execute();
+
+            SearchOrchestrator searchOrchestrator = new SearchOrchestrator(config);
+            searchOrchestrator.execute();
+
+            long overallEnd = System.currentTimeMillis();
+            LOG.info("Load test utility completed. Total wall-clock time: {} ms",
+                    overallEnd - overallStart);
+
+        } catch (Exception ex) {
+            LOG.error("Load test utility failed: {}", ex.getMessage(), ex);
+            System.err.println("Load test failed: " + ex.getMessage());
+            System.exit(1);
+        }
+    }
+}
+
+
+
+package com.filenet.loadtest.mapper;
+
+import com.filenet.api.admin.ClassDefinition;
+import com.filenet.api.admin.PropertyDefinition;
+import com.filenet.api.admin.PropertyDefinitionBoolean;
+import com.filenet.api.admin.PropertyDefinitionDateTime;
+import com.filenet.api.admin.PropertyDefinitionFloat64;
+import com.filenet.api.admin.PropertyDefinitionId;
+import com.filenet.api.admin.PropertyDefinitionInteger32;
+import com.filenet.api.admin.PropertyDefinitionObject;
+import com.filenet.api.admin.PropertyDefinitionString;
+import com.filenet.api.collection.DateTimeList;
+import com.filenet.api.collection.Integer32List;
+import com.filenet.api.collection.PropertyDefinitionList;
+import com.filenet.api.collection.StringList;
+import com.filenet.api.constants.Cardinality;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.util.Id;
+import com.filenet.loadtest.util.DateTimeUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.Date;
+import java.util.Iterator;
+import java.util.Map;
+
+/**
+ * Maps CSV column values to FileNet document properties using class property definitions.
+ */
+public final class PropertyMapper {
+
+    private static final Logger LOG = LogManager.getLogger(PropertyMapper.class);
+    private static final String DOCUMENT_TITLE = "DocumentTitle";
+    private static final String MULTI_VALUE_DELIMITER = "\\|";
+
+    private PropertyMapper() {
+    }
+
+    /**
+     * Applies CSV row values to document properties based on FileNet property definitions.
+     *
+     * @param document    target document
+     * @param objectStore object store for fetching class definition
+     * @param className   document class symbolic name
+     * @param row         CSV row data
+     * @throws Exception if property mapping fails
+     */
+    public static void applyProperties(Document document, ObjectStore objectStore,
+                                       String className, Map<String, String> row) throws Exception {
+        ClassDefinition classDefinition = Factory.ClassDefinition.fetchInstance(
+                objectStore, className, null);
+
+        for (Map.Entry<String, String> entry : row.entrySet()) {
+            String propertyName = entry.getKey();
+            String rawValue = entry.getValue();
+
+            if (propertyName == null || propertyName.trim().isEmpty()) {
+                continue;
+            }
+
+            if (DOCUMENT_TITLE.equalsIgnoreCase(propertyName)) {
+                continue;
+            }
+
+            if (rawValue == null || rawValue.trim().isEmpty()) {
+                continue;
+            }
+
+            PropertyDefinition propertyDefinition = findPropertyDefinition(classDefinition, propertyName);
+            if (propertyDefinition == null) {
+                LOG.warn("Property '{}' not found on class '{}'. Skipping.", propertyName, className);
+                continue;
+            }
+
+            Object convertedValue = convertValue(rawValue, propertyDefinition);
+            document.getProperties().putObjectValue(propertyName, convertedValue);
+        }
+    }
+
+    private static PropertyDefinition findPropertyDefinition(ClassDefinition classDefinition,
+                                                             String propertyName) {
+        PropertyDefinitionList propertyDefinitions = classDefinition.get_PropertyDefinitions();
+        Iterator<?> iterator = propertyDefinitions.iterator();
+        while (iterator.hasNext()) {
+            PropertyDefinition propertyDefinition = (PropertyDefinition) iterator.next();
+            if (propertyName.equalsIgnoreCase(propertyDefinition.get_SymbolicName())) {
+                return propertyDefinition;
+            }
+        }
+        return null;
+    }
+
+    private static Object convertValue(String rawValue, PropertyDefinition propertyDefinition) throws Exception {
+        boolean isList = propertyDefinition.get_Cardinality() == Cardinality.LIST;
+
+        if (propertyDefinition instanceof PropertyDefinitionString) {
+            return isList ? toStringList(rawValue) : rawValue.trim();
+        }
+        if (propertyDefinition instanceof PropertyDefinitionInteger32) {
+            return isList ? toInteger32List(rawValue) : Integer.valueOf(rawValue.trim());
+        }
+        if (propertyDefinition instanceof PropertyDefinitionFloat64) {
+            return isList ? toStringList(rawValue) : Double.valueOf(rawValue.trim());
+        }
+        if (propertyDefinition instanceof PropertyDefinitionBoolean) {
+            return Boolean.valueOf(rawValue.trim());
+        }
+        if (propertyDefinition instanceof PropertyDefinitionDateTime) {
+            return isList ? toDateTimeList(rawValue) : DateTimeUtil.parseDate(rawValue.trim());
+        }
+        if (propertyDefinition instanceof PropertyDefinitionId) {
+            return new Id(rawValue.trim());
+        }
+        if (propertyDefinition instanceof PropertyDefinitionObject) {
+            return new Id(rawValue.trim());
+        }
+
+        LOG.warn("Unsupported property definition type {}. Treating value as String.",
+                propertyDefinition.getClass().getSimpleName());
+        return rawValue.trim();
+    }
+
+    private static StringList toStringList(String rawValue) {
+        StringList stringList = Factory.StringList.createList();
+        for (String token : rawValue.split(MULTI_VALUE_DELIMITER)) {
+            if (token != null && !token.trim().isEmpty()) {
+                stringList.add(token.trim());
+            }
+        }
+        return stringList;
+    }
+
+    private static Integer32List toInteger32List(String rawValue) {
+        Integer32List integerList = Factory.Integer32List.createList();
+        for (String token : rawValue.split(MULTI_VALUE_DELIMITER)) {
+            if (token != null && !token.trim().isEmpty()) {
+                integerList.add(Integer.valueOf(token.trim()));
+            }
+        }
+        return integerList;
+    }
+
+    private static DateTimeList toDateTimeList(String rawValue) throws Exception {
+        DateTimeList dateList = Factory.DateTimeList.createList();
+        for (String token : rawValue.split(MULTI_VALUE_DELIMITER)) {
+            if (token != null && !token.trim().isEmpty()) {
+                Date date = DateTimeUtil.parseDate(token.trim());
+                dateList.add(date);
+            }
+        }
+        return dateList;
+    }
+}
+
+
+
+package com.filenet.loadtest.metrics;
+
+import com.filenet.loadtest.model.PerformanceSummary;
+import com.filenet.loadtest.model.SearchMetricRecord;
+import com.filenet.loadtest.model.UploadMetricRecord;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVPrinter;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/**
+ * Thread-safe collector for upload and search metrics with CSV export support.
+ */
+public class MetricsCollector {
+
+    private static final Logger LOG = LogManager.getLogger(MetricsCollector.class);
+
+    private final List<UploadMetricRecord> uploadRecords = Collections.synchronizedList(new ArrayList<>());
+    private final List<SearchMetricRecord> searchRecords = Collections.synchronizedList(new ArrayList<>());
+
+    /**
+     * Records an upload metric entry.
+     *
+     * @param record upload metric record
+     */
+    public void recordUpload(UploadMetricRecord record) {
+        uploadRecords.add(record);
+    }
+
+    /**
+     * Records a search metric entry.
+     *
+     * @param record search metric record
+     */
+    public void recordSearch(SearchMetricRecord record) {
+        searchRecords.add(record);
+    }
+
+    /**
+     * Writes upload metrics to a CSV file.
+     *
+     * @param outputFile path to output CSV
+     * @throws IOException if writing fails
+     */
+    public void writeUploadMetrics(String outputFile) throws IOException {
+        try (FileWriter writer = new FileWriter(outputFile);
+             CSVPrinter printer = new CSVPrinter(writer, CSVFormat.DEFAULT.withHeader(
+                     "ThreadName", "Class", "CSV File", "Row Number", "Document ID",
+                     "Status", "Elapsed Time", "Exception Message", "Start Time", "End Time"))) {
+
+            synchronized (uploadRecords) {
+                for (UploadMetricRecord record : uploadRecords) {
+                    printer.printRecord(
+                            record.getThreadName(),
+                            record.getClassName(),
+                            record.getCsvFile(),
+                            record.getRowNumber(),
+                            record.getDocumentId(),
+                            record.getStatus(),
+                            record.getElapsedMs(),
+                            nullToEmpty(record.getExceptionMessage()),
+                            record.getStartTime(),
+                            record.getEndTime()
+                    );
+                }
+            }
+        }
+        LOG.info("Upload metrics written to {}", outputFile);
+    }
+
+    /**
+     * Writes search metrics to a CSV file.
+     *
+     * @param outputFile path to output CSV
+     * @throws IOException if writing fails
+     */
+    public void writeSearchMetrics(String outputFile) throws IOException {
+        try (FileWriter writer = new FileWriter(outputFile);
+             CSVPrinter printer = new CSVPrinter(writer, CSVFormat.DEFAULT.withHeader(
+                     "ThreadName", "SearchType", "Class", "PropertyName", "SearchValue",
+                     "Iteration", "ResultCount", "Elapsed Time", "Status",
+                     "Exception Message", "Start Time", "End Time"))) {
+
+            synchronized (searchRecords) {
+                for (SearchMetricRecord record : searchRecords) {
+                    printer.printRecord(
+                            record.getThreadName(),
+                            record.getSearchType(),
+                            record.getClassName(),
+                            nullToEmpty(record.getPropertyName()),
+                            nullToEmpty(record.getSearchValue()),
+                            record.getIteration(),
+                            record.getResultCount(),
+                            record.getElapsedMs(),
+                            record.getStatus(),
+                            nullToEmpty(record.getExceptionMessage()),
+                            record.getStartTime(),
+                            record.getEndTime()
+                    );
+                }
+            }
+        }
+        LOG.info("Search metrics written to {}", outputFile);
+    }
+
+    /**
+     * Builds upload performance summary statistics.
+     *
+     * @param totalExecutionMs total wall-clock execution time
+     * @param totalClasses     number of classes processed
+     * @return performance summary
+     */
+    public PerformanceSummary buildUploadSummary(long totalExecutionMs, int totalClasses) {
+        List<UploadMetricRecord> snapshot;
+        synchronized (uploadRecords) {
+            snapshot = new ArrayList<>(uploadRecords);
+        }
+
+        int total = snapshot.size();
+        int success = 0;
+        long totalElapsed = 0;
+        long max = 0;
+        long min = Long.MAX_VALUE;
+
+        for (UploadMetricRecord record : snapshot) {
+            if (record.isSuccess()) {
+                success++;
+            }
+            long elapsed = record.getElapsedMs();
+            totalElapsed += elapsed;
+            max = Math.max(max, elapsed);
+            min = Math.min(min, elapsed);
+        }
+
+        int failed = total - success;
+        double average = total > 0 ? (double) totalElapsed / total : 0.0;
+        if (min == Long.MAX_VALUE) {
+            min = 0;
+        }
+
+        double opsPerSecond = totalExecutionMs > 0
+                ? (total * 1000.0) / totalExecutionMs
+                : 0.0;
+
+        return new PerformanceSummary(
+                "Upload",
+                totalClasses,
+                total,
+                success,
+                failed,
+                average,
+                max,
+                min,
+                totalExecutionMs,
+                opsPerSecond
+        );
+    }
+
+    /**
+     * Builds search performance summary statistics.
+     *
+     * @param totalExecutionMs total wall-clock execution time
+     * @return performance summary
+     */
+    public PerformanceSummary buildSearchSummary(long totalExecutionMs) {
+        List<SearchMetricRecord> snapshot;
+        synchronized (searchRecords) {
+            snapshot = new ArrayList<>(searchRecords);
+        }
+
+        int total = snapshot.size();
+        int success = 0;
+        long totalElapsed = 0;
+        long max = 0;
+        long min = Long.MAX_VALUE;
+
+        for (SearchMetricRecord record : snapshot) {
+            if (record.isSuccess()) {
+                success++;
+            }
+            long elapsed = record.getElapsedMs();
+            totalElapsed += elapsed;
+            max = Math.max(max, elapsed);
+            min = Math.min(min, elapsed);
+        }
+
+        int failed = total - success;
+        double average = total > 0 ? (double) totalElapsed / total : 0.0;
+        if (min == Long.MAX_VALUE) {
+            min = 0;
+        }
+
+        double opsPerSecond = totalExecutionMs > 0
+                ? (total * 1000.0) / totalExecutionMs
+                : 0.0;
+
+        return new PerformanceSummary(
+                "Search",
+                0,
+                total,
+                success,
+                failed,
+                average,
+                max,
+                min,
+                totalExecutionMs,
+                opsPerSecond
+        );
+    }
+
+    private static String nullToEmpty(String value) {
+        return value == null ? "" : value;
+    }
+}
+
+
+
+package com.filenet.loadtest.model;
+
+/**
+ * Represents one FileNet document class and its associated document CSV file.
+ */
+public class ClassConfig {
+
+    private final String classSymbolicName;
+    private final String csvFile;
+
+    public ClassConfig(String classSymbolicName, String csvFile) {
+        this.classSymbolicName = classSymbolicName;
+        this.csvFile = csvFile;
+    }
+
+    public String getClassSymbolicName() {
+        return classSymbolicName;
+    }
+
+    public String getCsvFile() {
+        return csvFile;
+    }
+
+    @Override
+    public String toString() {
+        return "ClassConfig{class=" + classSymbolicName + ", csv=" + csvFile + "}";
+    }
+}
+
+
+
+
+package com.filenet.loadtest.model;
+
+/**
+ * Aggregated performance summary for upload or search load testing.
+ */
+public class PerformanceSummary {
+
+    private final String phase;
+    private final int totalClasses;
+    private final int totalDocuments;
+    private final int successfulCount;
+    private final int failedCount;
+    private final double averageTimeMs;
+    private final long maxTimeMs;
+    private final long minTimeMs;
+    private final long totalExecutionMs;
+    private final double operationsPerSecond;
+
+    public PerformanceSummary(String phase, int totalClasses, int totalDocuments,
+                              int successfulCount, int failedCount,
+                              double averageTimeMs, long maxTimeMs, long minTimeMs,
+                              long totalExecutionMs, double operationsPerSecond) {
+        this.phase = phase;
+        this.totalClasses = totalClasses;
+        this.totalDocuments = totalDocuments;
+        this.successfulCount = successfulCount;
+        this.failedCount = failedCount;
+        this.averageTimeMs = averageTimeMs;
+        this.maxTimeMs = maxTimeMs;
+        this.minTimeMs = minTimeMs;
+        this.totalExecutionMs = totalExecutionMs;
+        this.operationsPerSecond = operationsPerSecond;
+    }
+
+    public String getPhase() {
+        return phase;
+    }
+
+    public int getTotalClasses() {
+        return totalClasses;
+    }
+
+    public int getTotalDocuments() {
+        return totalDocuments;
+    }
+
+    public int getSuccessfulCount() {
+        return successfulCount;
+    }
+
+    public int getFailedCount() {
+        return failedCount;
+    }
+
+    public double getAverageTimeMs() {
+        return averageTimeMs;
+    }
+
+    public long getMaxTimeMs() {
+        return maxTimeMs;
+    }
+
+    public long getMinTimeMs() {
+        return minTimeMs;
+    }
+
+    public long getTotalExecutionMs() {
+        return totalExecutionMs;
+    }
+
+    public double getOperationsPerSecond() {
+        return operationsPerSecond;
+    }
+
+    public void printSummary() {
+        System.out.println();
+        System.out.println("========== " + phase + " Performance Summary ==========");
+        if (totalClasses > 0) {
+            System.out.println("Total Classes          : " + totalClasses);
+        }
+        System.out.println("Total Operations       : " + totalDocuments);
+        System.out.println("Successful             : " + successfulCount);
+        System.out.println("Failed                 : " + failedCount);
+        System.out.printf("Average Time (ms)      : %.2f%n", averageTimeMs);
+        System.out.println("Maximum Time (ms)      : " + maxTimeMs);
+        System.out.println("Minimum Time (ms)      : " + minTimeMs);
+        System.out.println("Total Execution Time   : " + totalExecutionMs + " ms ("
+                + String.format("%.2f", totalExecutionMs / 1000.0) + " sec)");
+        System.out.printf("Operations Per Second  : %.2f%n", operationsPerSecond);
+        System.out.println("====================================================");
+    }
+}
+
+
+
+
+
+
+package com.filenet.loadtest.model;
+
+/**
+ * Metrics record for a single search execution.
+ */
+public class SearchMetricRecord {
+
+    private final String threadName;
+    private final String searchType;
+    private final String className;
+    private final String propertyName;
+    private final String searchValue;
+    private final int iteration;
+    private final int resultCount;
+    private final long elapsedMs;
+    private final String status;
+    private final String exceptionMessage;
+    private final String startTime;
+    private final String endTime;
+
+    public SearchMetricRecord(String threadName, String searchType, String className,
+                              String propertyName, String searchValue, int iteration,
+                              int resultCount, long elapsedMs, String status,
+                              String exceptionMessage, String startTime, String endTime) {
+        this.threadName = threadName;
+        this.searchType = searchType;
+        this.className = className;
+        this.propertyName = propertyName;
+        this.searchValue = searchValue;
+        this.iteration = iteration;
+        this.resultCount = resultCount;
+        this.elapsedMs = elapsedMs;
+        this.status = status;
+        this.exceptionMessage = exceptionMessage;
+        this.startTime = startTime;
+        this.endTime = endTime;
+    }
+
+    public String getThreadName() {
+        return threadName;
+    }
+
+    public String getSearchType() {
+        return searchType;
+    }
+
+    public String getClassName() {
+        return className;
+    }
+
+    public String getPropertyName() {
+        return propertyName;
+    }
+
+    public String getSearchValue() {
+        return searchValue;
+    }
+
+    public int getIteration() {
+        return iteration;
+    }
+
+    public int getResultCount() {
+        return resultCount;
+    }
+
+    public long getElapsedMs() {
+        return elapsedMs;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public String getExceptionMessage() {
+        return exceptionMessage;
+    }
+
+    public String getStartTime() {
+        return startTime;
+    }
+
+    public String getEndTime() {
+        return endTime;
+    }
+
+    public boolean isSuccess() {
+        return "SUCCESS".equals(status);
+    }
+}
+
+
+
+
+
+
+package com.filenet.loadtest.model;
+
+/**
+ * Configuration for a single search query used during search load testing.
+ */
+public class SearchQueryConfig {
+
+    public enum SearchType {
+        TITLE,
+        PROPERTY,
+        CLASS,
+        DATE,
+        MULTIVALUE
+    }
+
+    private final SearchType searchType;
+    private final String className;
+    private final String propertyName;
+    private final String searchValue;
+
+    public SearchQueryConfig(SearchType searchType, String className,
+                             String propertyName, String searchValue) {
+        this.searchType = searchType;
+        this.className = className;
+        this.propertyName = propertyName;
+        this.searchValue = searchValue;
+    }
+
+    public SearchType getSearchType() {
+        return searchType;
+    }
+
+    public String getClassName() {
+        return className;
+    }
+
+    public String getPropertyName() {
+        return propertyName;
+    }
+
+    public String getSearchValue() {
+        return searchValue;
+    }
+
+    @Override
+    public String toString() {
+        return "SearchQueryConfig{type=" + searchType + ", class=" + className
+                + ", property=" + propertyName + ", value=" + searchValue + "}";
+    }
+}
+
+
+
+
+
+package com.filenet.loadtest.model;
+
+/**
+ * Metrics record for a single document upload attempt.
+ */
+public class UploadMetricRecord {
+
+    private final String threadName;
+    private final String className;
+    private final String csvFile;
+    private final int rowNumber;
+    private final String documentId;
+    private final String status;
+    private final long elapsedMs;
+    private final String exceptionMessage;
+    private final String startTime;
+    private final String endTime;
+
+    public UploadMetricRecord(String threadName, String className, String csvFile, int rowNumber,
+                              String documentId, String status, long elapsedMs, String exceptionMessage,
+                              String startTime, String endTime) {
+        this.threadName = threadName;
+        this.className = className;
+        this.csvFile = csvFile;
+        this.rowNumber = rowNumber;
+        this.documentId = documentId;
+        this.status = status;
+        this.elapsedMs = elapsedMs;
+        this.exceptionMessage = exceptionMessage;
+        this.startTime = startTime;
+        this.endTime = endTime;
+    }
+
+    public String getThreadName() {
+        return threadName;
+    }
+
+    public String getClassName() {
+        return className;
+    }
+
+    public String getCsvFile() {
+        return csvFile;
+    }
+
+    public int getRowNumber() {
+        return rowNumber;
+    }
+
+    public String getDocumentId() {
+        return documentId;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public long getElapsedMs() {
+        return elapsedMs;
+    }
+
+    public String getExceptionMessage() {
+        return exceptionMessage;
+    }
+
+    public String getStartTime() {
+        return startTime;
+    }
+
+    public String getEndTime() {
+        return endTime;
+    }
+
+    public boolean isSuccess() {
+        return "SUCCESS".equals(status);
+    }
+}
+
+
+
+
+package com.filenet.loadtest.search;
+
+import com.filenet.api.collection.IndependentObjectSet;
+import com.filenet.api.collection.PageIterator;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import com.filenet.loadtest.model.SearchQueryConfig;
+import com.filenet.loadtest.util.DateTimeUtil;
+import com.filenet.loadtest.util.SqlEscapeUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.Date;
+
+/**
+ * Executes FileNet searches for load testing.
+ */
+public class SearchExecutor {
+
+    private static final Logger LOG = LogManager.getLogger(SearchExecutor.class);
+
+    private final ObjectStore objectStore;
+
+    public SearchExecutor(ObjectStore objectStore) {
+        this.objectStore = objectStore;
+    }
+
+    /**
+     * Executes a configured search and returns the number of results.
+     *
+     * @param query search query configuration
+     * @return result count
+     * @throws Exception if search execution fails
+     */
+    public int executeSearch(SearchQueryConfig query) throws Exception {
+        SearchSQL searchSQL = buildSearchSql(query);
+        LOG.debug("Executing search SQL: {}", searchSQL.toString());
+
+        SearchScope searchScope = new SearchScope(objectStore);
+        IndependentObjectSet resultSet = searchScope.fetchObjects(searchSQL, null, null, Boolean.TRUE);
+
+        int count = 0;
+        PageIterator pageIterator = resultSet.pageIterator();
+        if (pageIterator.nextPage()) {
+            Integer totalCount = pageIterator.getTotalCount();
+            if (totalCount != null) {
+                return totalCount;
+            }
+            count += pageIterator.getCurrentPage().length;
+            while (pageIterator.nextPage()) {
+                count += pageIterator.getCurrentPage().length;
+            }
+        }
+
+        LOG.debug("Search {} returned {} results", query.getSearchType(), count);
+        return count;
+    }
+
+    private SearchSQL buildSearchSql(SearchQueryConfig query) throws Exception {
+        SearchSQL searchSQL = new SearchSQL();
+        searchSQL.setSelectList("Id, DocumentTitle");
+        searchSQL.setFromClauseInitialValue(query.getClassName(), null, true);
+
+        String whereClause = buildWhereClause(query);
+        if (whereClause != null && !whereClause.isEmpty()) {
+            searchSQL.setWhereClause(whereClause);
+        }
+
+        return searchSQL;
+    }
+
+    private String buildWhereClause(SearchQueryConfig query) throws Exception {
+        switch (query.getSearchType()) {
+            case TITLE:
+                return "DocumentTitle = '" + SqlEscapeUtil.escape(query.getSearchValue()) + "'";
+
+            case PROPERTY:
+                validateProperty(query);
+                return query.getPropertyName() + " = '"
+                        + SqlEscapeUtil.escape(query.getSearchValue()) + "'";
+
+            case CLASS:
+                return null;
+
+            case DATE:
+                validateProperty(query);
+                Date date = DateTimeUtil.parseDate(query.getSearchValue());
+                long timestamp = date.getTime();
+                return query.getPropertyName() + " = " + timestamp;
+
+            case MULTIVALUE:
+                validateProperty(query);
+                return query.getPropertyName() + " = '"
+                        + SqlEscapeUtil.escape(query.getSearchValue()) + "'";
+
+            default:
+                throw new IllegalArgumentException("Unsupported search type: " + query.getSearchType());
+        }
+    }
+
+    private void validateProperty(SearchQueryConfig query) {
+        if (query.getPropertyName() == null || query.getPropertyName().trim().isEmpty()) {
+            throw new IllegalArgumentException("PropertyName is required for search type: "
+                    + query.getSearchType());
+        }
+        if (query.getSearchValue() == null || query.getSearchValue().trim().isEmpty()) {
+            throw new IllegalArgumentException("SearchValue is required for search type: "
+                    + query.getSearchType());
+        }
+    }
+}
+
+
+
+package com.filenet.loadtest.search;
+
+import com.filenet.loadtest.config.AppConfig;
+import com.filenet.loadtest.csv.CsvDataReader;
+import com.filenet.loadtest.metrics.MetricsCollector;
+import com.filenet.loadtest.model.PerformanceSummary;
+import com.filenet.loadtest.model.SearchQueryConfig;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Orchestrates concurrent search load testing using a fixed thread pool.
+ */
+public class SearchOrchestrator {
+
+    private static final Logger LOG = LogManager.getLogger(SearchOrchestrator.class);
+
+    private final AppConfig config;
+
+    public SearchOrchestrator(AppConfig config) {
+        this.config = config;
+    }
+
+    /**
+     * Executes the search load test if enabled in configuration.
+     *
+     * @return performance summary, or null if search is disabled
+     * @throws Exception if orchestration fails
+     */
+    public PerformanceSummary execute() throws Exception {
+        if (!config.isSearchEnabled()) {
+            LOG.info("Search load testing is disabled (search.enabled=false)");
+            return null;
+        }
+
+        List<SearchQueryConfig> searchQueries = CsvDataReader.readSearchConfig(config.getSearchConfigFile());
+        if (searchQueries.isEmpty()) {
+            throw new IllegalStateException("No search queries configured in " + config.getSearchConfigFile());
+        }
+
+        int threadCount = config.getSearchThreadCount();
+        LOG.info("Starting search load test - Queries: {}, Threads: {}, Iterations per thread: {}",
+                searchQueries.size(), threadCount, config.getSearchIterations());
+
+        MetricsCollector metricsCollector = new MetricsCollector();
+        AtomicInteger iterationCounter = new AtomicInteger(0);
+
+        ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
+
+        long startMs = System.currentTimeMillis();
+
+        for (int i = 0; i < threadCount; i++) {
+            executorService.submit(new SearchWorker(config, searchQueries, metricsCollector, iterationCounter));
+        }
+
+        executorService.shutdown();
+        boolean finished = executorService.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+        if (!finished) {
+            LOG.warn("Search executor did not terminate cleanly");
+        }
+
+        long totalExecutionMs = System.currentTimeMillis() - startMs;
+
+        metricsCollector.writeSearchMetrics(config.getSearchMetricsOutputFile());
+        PerformanceSummary summary = metricsCollector.buildSearchSummary(totalExecutionMs);
+        summary.printSummary();
+
+        LOG.info("Search load test completed");
+        return summary;
+    }
+}
+
+
+
+
+package com.filenet.loadtest.search;
+
+import com.filenet.loadtest.config.AppConfig;
+import com.filenet.loadtest.connection.FileNetSession;
+import com.filenet.loadtest.metrics.MetricsCollector;
+import com.filenet.loadtest.model.SearchMetricRecord;
+import com.filenet.loadtest.model.SearchQueryConfig;
+import com.filenet.loadtest.util.DateTimeUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
+/**
+ * Worker thread that repeatedly executes configured searches using its own FileNet session.
+ */
+public class SearchWorker implements Runnable {
+
+    private static final Logger LOG = LogManager.getLogger(SearchWorker.class);
+
+    private final AppConfig config;
+    private final List<SearchQueryConfig> searchQueries;
+    private final MetricsCollector metricsCollector;
+    private final AtomicInteger iterationCounter;
+
+    public SearchWorker(AppConfig config, List<SearchQueryConfig> searchQueries,
+                        MetricsCollector metricsCollector, AtomicInteger iterationCounter) {
+        this.config = config;
+        this.searchQueries = searchQueries;
+        this.metricsCollector = metricsCollector;
+        this.iterationCounter = iterationCounter;
+    }
+
+    @Override
+    public void run() {
+        String threadName = Thread.currentThread().getName();
+        LOG.info("Search thread started: {}", threadName);
+
+        try {
+            try (FileNetSession session = FileNetSession.create(config)) {
+                SearchExecutor searchExecutor = new SearchExecutor(session.getObjectStore());
+
+                for (int iteration = 1; iteration <= config.getSearchIterations(); iteration++) {
+                    for (SearchQueryConfig query : searchQueries) {
+                        executeSearch(threadName, iteration, query, searchExecutor);
+                    }
+                    iterationCounter.incrementAndGet();
+                }
+            }
+        } catch (Throwable ex) {
+            LOG.error("Search thread {} failed: {} - {}", threadName, ex.getClass().getName(), ex.getMessage(), ex);
+        } finally {
+            LOG.info("Search thread completed: {}", threadName);
+        }
+    }
+
+    private void executeSearch(String threadName, int iteration, SearchQueryConfig query,
+                               SearchExecutor searchExecutor) {
+        long startMs = System.currentTimeMillis();
+        String startTime = DateTimeUtil.formatTimestamp(startMs);
+        String status = "SUCCESS";
+        String errorMessage = "";
+        int resultCount = 0;
+
+        try {
+            resultCount = searchExecutor.executeSearch(query);
+            LOG.debug("Search completed - Thread: {}, Type: {}, Results: {}",
+                    threadName, query.getSearchType(), resultCount);
+        } catch (Exception ex) {
+            status = "FAILED";
+            errorMessage = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
+            LOG.error("Search failed - Thread: {}, Type: {}, Class: {}: {}",
+                    threadName, query.getSearchType(), query.getClassName(), errorMessage, ex);
+        }
+
+        long endMs = System.currentTimeMillis();
+        String endTime = DateTimeUtil.formatTimestamp(endMs);
+
+        metricsCollector.recordSearch(new SearchMetricRecord(
+                threadName,
+                query.getSearchType().name(),
+                query.getClassName(),
+                query.getPropertyName(),
+                query.getSearchValue(),
+                iteration,
+                resultCount,
+                endMs - startMs,
+                status,
+                errorMessage,
+                startTime,
+                endTime
+        ));
+    }
+}
+
+
+
+package com.filenet.loadtest.upload;
+
+import com.filenet.api.collection.ContentElementList;
+import com.filenet.api.constants.AutoClassify;
+import com.filenet.api.constants.CheckinType;
+import com.filenet.api.constants.RefreshMode;
+import com.filenet.api.core.ContentTransfer;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.util.Id;
+import com.filenet.loadtest.config.AppConfig;
+import com.filenet.loadtest.mapper.PropertyMapper;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.File;
+import java.io.FileInputStream;
+import java.util.Map;
+
+/**
+ * Creates and checks in FileNet documents from CSV row data.
+ */
+public class DocumentUploader {
+
+    private static final Logger LOG = LogManager.getLogger(DocumentUploader.class);
+    private static final String DOCUMENT_TITLE = "DocumentTitle";
+
+    private final ObjectStore objectStore;
+    private final AppConfig config;
+
+    public DocumentUploader(ObjectStore objectStore, AppConfig config) {
+        this.objectStore = objectStore;
+        this.config = config;
+    }
+
+    /**
+     * Creates a document from a CSV row, attaches content, and checks it in as a major version.
+     *
+     * @param className document class symbolic name
+     * @param row       CSV row data
+     * @param rowNumber row number for default title generation
+     * @return created document ID
+     * @throws Exception if document creation fails
+     */
+    public String uploadDocument(String className, Map<String, String> row, int rowNumber) throws Exception {
+        Document document = Factory.Document.createInstance(objectStore, className);
+
+        String title = row.containsKey(DOCUMENT_TITLE) && row.get(DOCUMENT_TITLE) != null
+                && !row.get(DOCUMENT_TITLE).trim().isEmpty()
+                ? row.get(DOCUMENT_TITLE).trim()
+                : className + "_Doc_" + rowNumber;
+
+        document.getProperties().putValue(DOCUMENT_TITLE, title);
+        document.set_MimeType(config.getMimeType());
+
+        PropertyMapper.applyProperties(document, objectStore, className, row);
+        attachContent(document);
+
+        document.checkin(AutoClassify.DO_NOT_AUTO_CLASSIFY, CheckinType.MAJOR_VERSION);
+        document.save(RefreshMode.REFRESH);
+
+        Id documentId = document.get_Id();
+        LOG.info("Document uploaded - Class: {}, Title: {}, ID: {}", className, title, documentId);
+        return documentId.toString();
+    }
+
+    private void attachContent(Document document) throws Exception {
+        File contentFile = new File(config.getSampleContentFile());
+        if (!contentFile.exists()) {
+            throw new IllegalStateException("Sample content file not found: " + contentFile.getAbsolutePath());
+        }
+
+        ContentTransfer contentTransfer = Factory.ContentTransfer.createInstance();
+        contentTransfer.setCaptureSource(new FileInputStream(contentFile));
+        contentTransfer.set_RetrievalName(contentFile.getName());
+        contentTransfer.set_ContentType(config.getMimeType());
+
+        ContentElementList contentList = Factory.ContentElement.createList();
+        contentList.add(contentTransfer);
+        document.set_ContentElements(contentList);
+    }
+}
+
+
+
+
+package com.filenet.loadtest.upload;
+
+import com.filenet.loadtest.config.AppConfig;
+import com.filenet.loadtest.csv.CsvDataReader;
+import com.filenet.loadtest.metrics.MetricsCollector;
+import com.filenet.loadtest.model.ClassConfig;
+import com.filenet.loadtest.model.PerformanceSummary;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.List;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Orchestrates concurrent document upload load testing using a fixed thread pool
+ * and a shared class queue (producer-consumer model).
+ */
+public class UploadOrchestrator {
+
+    private static final Logger LOG = LogManager.getLogger(UploadOrchestrator.class);
+
+    private final AppConfig config;
+
+    public UploadOrchestrator(AppConfig config) {
+        this.config = config;
+    }
+
+    /**
+     * Executes the upload load test.
+     *
+     * @return performance summary
+     * @throws Exception if orchestration fails
+     */
+    public PerformanceSummary execute() throws Exception {
+        List<ClassConfig> classConfigs = CsvDataReader.readClassConfig(config.getClassConfigFile());
+        if (classConfigs.isEmpty()) {
+            throw new IllegalStateException("No classes configured in " + config.getClassConfigFile());
+        }
+
+        int threadCount = config.getThreadCount();
+        LOG.info("Starting upload load test - Total classes: {}, Thread count: {}",
+                classConfigs.size(), threadCount);
+
+        BlockingQueue<ClassConfig> classQueue = new LinkedBlockingQueue<>(classConfigs);
+        LOG.info("Class queue loaded with {} entries", classQueue.size());
+        MetricsCollector metricsCollector = new MetricsCollector();
+
+        ExecutorService executorService = Executors.newFixedThreadPool(threadCount);
+
+        long startMs = System.currentTimeMillis();
+
+        for (int i = 0; i < threadCount; i++) {
+            executorService.submit(new UploadWorker(classQueue, config, metricsCollector));
+        }
+
+        executorService.shutdown();
+        boolean finished = executorService.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+        if (!finished) {
+            LOG.warn("Upload executor did not terminate cleanly");
+        }
+
+        long totalExecutionMs = System.currentTimeMillis() - startMs;
+
+        metricsCollector.writeUploadMetrics(config.getMetricsOutputFile());
+        PerformanceSummary summary = metricsCollector.buildUploadSummary(totalExecutionMs, classConfigs.size());
+        summary.printSummary();
+
+        LOG.info("Upload load test completed");
+        return summary;
+    }
+}
+
+
+
+package com.filenet.loadtest.upload;
+
+import com.filenet.loadtest.config.AppConfig;
+import com.filenet.loadtest.connection.FileNetSession;
+import com.filenet.loadtest.csv.CsvDataReader;
+import com.filenet.loadtest.metrics.MetricsCollector;
+import com.filenet.loadtest.model.ClassConfig;
+import com.filenet.loadtest.model.UploadMetricRecord;
+import com.filenet.loadtest.util.DateTimeUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.BlockingQueue;
+
+/**
+ * Worker thread that processes document classes from a shared queue.
+ * Each worker maintains its own independent FileNet session.
+ */
+public class UploadWorker implements Runnable {
+
+    private static final Logger LOG = LogManager.getLogger(UploadWorker.class);
+
+    private final BlockingQueue<ClassConfig> classQueue;
+    private final AppConfig config;
+    private final MetricsCollector metricsCollector;
+
+    public UploadWorker(BlockingQueue<ClassConfig> classQueue, AppConfig config,
+                        MetricsCollector metricsCollector) {
+        this.classQueue = classQueue;
+        this.config = config;
+        this.metricsCollector = metricsCollector;
+    }
+
+    @Override
+    public void run() {
+        String threadName = Thread.currentThread().getName();
+        LOG.info("Thread started: {}", threadName);
+
+        try {
+            try (FileNetSession session = FileNetSession.create(config)) {
+                DocumentUploader uploader = new DocumentUploader(session.getObjectStore(), config);
+
+                ClassConfig classConfig;
+                while ((classConfig = classQueue.poll()) != null) {
+                    processClass(threadName, classConfig, uploader);
+                }
+            }
+        } catch (Throwable ex) {
+            LOG.error("Thread {} failed: {} - {}", threadName, ex.getClass().getName(), ex.getMessage(), ex);
+        } finally {
+            LOG.info("Thread completed: {}", threadName);
+        }
+    }
+
+    private void processClass(String threadName, ClassConfig classConfig, DocumentUploader uploader) {
+        String className = classConfig.getClassSymbolicName();
+        String csvFile = classConfig.getCsvFile();
+
+        LOG.info("Class started - Thread: {}, Class: {}, CSV: {}", threadName, className, csvFile);
+
+        try {
+            List<Map<String, String>> rows = CsvDataReader.readDocumentCsv(csvFile);
+            LOG.info("Processing class {} with {} document rows", className, rows.size());
+
+            int rowNumber = 0;
+            for (Map<String, String> row : rows) {
+                rowNumber++;
+                processRow(threadName, className, csvFile, rowNumber, row, uploader);
+            }
+
+            LOG.info("Class completed - Thread: {}, Class: {}", threadName, className);
+
+        } catch (Exception ex) {
+            LOG.error("Failed to process class {} on thread {}: {}",
+                    className, threadName, ex.getMessage(), ex);
+        }
+    }
+
+    private void processRow(String threadName, String className, String csvFile,
+                            int rowNumber, Map<String, String> row, DocumentUploader uploader) {
+        long startMs = System.currentTimeMillis();
+        String startTime = DateTimeUtil.formatTimestamp(startMs);
+        String status = "SUCCESS";
+        String documentId = "";
+        String errorMessage = "";
+
+        try {
+            documentId = uploader.uploadDocument(className, row, rowNumber);
+        } catch (Exception ex) {
+            status = "FAILED";
+            errorMessage = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
+            LOG.error("Document upload failed - Thread: {}, Class: {}, Row: {}: {}",
+                    threadName, className, rowNumber, errorMessage, ex);
+        }
+
+        long endMs = System.currentTimeMillis();
+        String endTime = DateTimeUtil.formatTimestamp(endMs);
+
+        metricsCollector.recordUpload(new UploadMetricRecord(
+                threadName,
+                className,
+                csvFile,
+                rowNumber,
+                documentId,
+                status,
+                endMs - startMs,
+                errorMessage,
+                startTime,
+                endTime
+        ));
+    }
+}
+
+
+
+package com.filenet.loadtest.util;
+
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Arrays;
+import java.util.Date;
+import java.util.List;
+import java.util.TimeZone;
+
+/**
+ * Utility for parsing and formatting dates used in CSV property mapping and metrics.
+ */
+public final class DateTimeUtil {
+
+    private static final List<String> DATE_PATTERNS = Arrays.asList(
+            "yyyy-MM-dd'T'HH:mm:ss",
+            "yyyy-MM-dd HH:mm:ss",
+            "yyyy-MM-dd"
+    );
+
+    private static final ThreadLocal<SimpleDateFormat> METRICS_FORMAT =
+            ThreadLocal.withInitial(() -> {
+                SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS");
+                sdf.setTimeZone(TimeZone.getDefault());
+                return sdf;
+            });
+
+    private DateTimeUtil() {
+    }
+
+    /**
+     * Parses a date string using supported patterns.
+     *
+     * @param value date string from CSV
+     * @return parsed date
+     * @throws ParseException if no pattern matches
+     */
+    public static Date parseDate(String value) throws ParseException {
+        String trimmed = value.trim();
+        ParseException lastException = null;
+
+        for (String pattern : DATE_PATTERNS) {
+            SimpleDateFormat sdf = new SimpleDateFormat(pattern);
+            sdf.setLenient(false);
+            try {
+                return sdf.parse(trimmed);
+            } catch (ParseException ex) {
+                lastException = ex;
+            }
+        }
+
+        throw lastException != null ? lastException
+                : new ParseException("Unable to parse date: " + value, 0);
+    }
+
+    /**
+     * Formats a timestamp for metrics output.
+     *
+     * @param epochMs epoch milliseconds
+     * @return formatted timestamp
+     */
+    public static String formatTimestamp(long epochMs) {
+        return METRICS_FORMAT.get().format(new Date(epochMs));
+    }
+}
+
+
+
+
+package com.filenet.loadtest.util;
+
+/**
+ * Utility for escaping values used in FileNet Search SQL WHERE clauses.
+ */
+public final class SqlEscapeUtil {
+
+    private SqlEscapeUtil() {
+    }
+
+    /**
+     * Escapes single quotes for SQL string literals.
+     *
+     * @param value raw value
+     * @return escaped value
+     */
+    public static String escape(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("'", "''");
+    }
+}
+
+
+
+
+package com.filenet.loadtest.util;
+
+import com.filenet.loadtest.config.AppConfig;
+import com.filenet.loadtest.connection.FileNetSession;
+import com.filenet.loadtest.csv.CsvDataReader;
+import com.filenet.loadtest.model.ClassConfig;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.File;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Validates configuration, input files, and FileNet connectivity before load testing begins.
+ */
+public final class StartupValidator {
+
+    private static final Logger LOG = LogManager.getLogger(StartupValidator.class);
+
+    private StartupValidator() {
+    }
+
+    /**
+     * Runs all startup checks and fails fast with a clear error message.
+     *
+     * @param config application configuration
+     * @throws Exception if validation fails
+     */
+    public static void validate(AppConfig config) throws Exception {
+        String workingDir = System.getProperty("user.dir");
+        LOG.info("Working directory: {}", workingDir);
+
+        validateFileExists("Sample content file", config.getSampleContentFile());
+
+        List<ClassConfig> classConfigs = CsvDataReader.readClassConfig(config.getClassConfigFile());
+        if (classConfigs.isEmpty()) {
+            throw new IllegalStateException("No classes found in " + config.getClassConfigFile());
+        }
+
+        int totalRows = 0;
+        for (ClassConfig classConfig : classConfigs) {
+            validateFileExists("Document CSV for class " + classConfig.getClassSymbolicName(),
+                    classConfig.getCsvFile());
+            List<Map<String, String>> rows = CsvDataReader.readDocumentCsv(classConfig.getCsvFile());
+            LOG.info("Class {} -> {} ({} document rows)",
+                    classConfig.getClassSymbolicName(), classConfig.getCsvFile(), rows.size());
+            totalRows += rows.size();
+        }
+
+        if (totalRows == 0) {
+            throw new IllegalStateException("All document CSV files are empty. No documents to upload.");
+        }
+
+        LOG.info("Validated {} classes with {} total document rows", classConfigs.size(), totalRows);
+
+        if (config.isSearchEnabled()) {
+            validateFileExists("Search config file", config.getSearchConfigFile());
+        }
+
+        LOG.info("Testing FileNet connection to {} (object store: {})...",
+                config.getCeUri(), config.getObjectStoreName());
+
+        try (FileNetSession session = FileNetSession.create(config)) {
+            LOG.info("FileNet preflight connection successful for object store: {}",
+                    session.getObjectStore().get_Name());
+        }
+    }
+
+    private static void validateFileExists(String description, String path) {
+        File file = new File(path);
+        if (!file.exists()) {
+            throw new IllegalStateException(description + " not found: " + file.getAbsolutePath()
+                    + " (check Eclipse Working directory is set to the project root)");
+        }
+    }
+}
+
+
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
+        </Console>
+        <RollingFile name="RollingFile" fileName="logs/load-test.log"
+                     filePattern="logs/load-test-%d{yyyy-MM-dd}-%i.log.gz">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
+            <Policies>
+                <TimeBasedTriggeringPolicy interval="1"/>
+                <SizeBasedTriggeringPolicy size="10 MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="10"/>
+        </RollingFile>
+    </Appenders>
+
+    <Loggers>
+        <Root level="info">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="RollingFile"/>
+        </Root>
+    </Loggers>
+</Configuration>
+
+
+DocumentTitle,AccountNumber,RMApprovalDept
+DC_TRUST_Accounts_Test_01,1000005001,Claims
+DC_TRUST_Accounts_Test_02,1000005002,Records
+DC_TRUST_Accounts_Test_03,1000005003,Finance
+DC_TRUST_Accounts_Test_04,1000005004,Legal
+DC_TRUST_Accounts_Test_05,1000005005,Operations
+DC_TRUST_Accounts_Test_06,1000005006,CustomerCare
+DC_TRUST_Accounts_Test_07,1000005007,Audit
+DC_TRUST_Accounts_Test_08,1000005008,Compliance
+DC_TRUST_Accounts_Test_09,1000005009,Retention
+DC_TRUST_Accounts_Test_10,1000005010,Accounts
+
+
+DocumentTitle,AccountNumber,RMApprovalDept
+DC_CLCFlood_Accounts_Test_01,1000002001,Claims
+DC_CLCFlood_Accounts_Test_02,1000002002,Records
+DC_CLCFlood_Accounts_Test_03,1000002003,Finance
+DC_CLCFlood_Accounts_Test_04,1000002004,Legal
+DC_CLCFlood_Accounts_Test_05,1000002005,Operations
+DC_CLCFlood_Accounts_Test_06,1000002006,CustomerCare
+DC_CLCFlood_Accounts_Test_07,1000002007,Audit
+DC_CLCFlood_Accounts_Test_08,1000002008,Compliance
+DC_CLCFlood_Accounts_Test_09,1000002009,Retention
+DC_CLCFlood_Accounts_Test_10,1000002010,Accounts
+
+
+DocumentTitle,RMApprovalDept,CISNumber_Single
+DC_PB_Accounts_Test_01,Claims,2000001001
+DC_PB_Accounts_Test_02,Records,2000001002
+DC_PB_Accounts_Test_03,Finance,2000001003
+DC_PB_Accounts_Test_04,Legal,2000001004
+DC_PB_Accounts_Test_05,Operations,2000001005
+DC_PB_Accounts_Test_06,CustomerCare,2000001006
+DC_PB_Accounts_Test_07,Audit,2000001007
+DC_PB_Accounts_Test_08,Compliance,2000001008
+DC_PB_Accounts_Test_09,Retention,2000001009
+DC_PB_Accounts_Test_10,Accounts,2000001010
+
+
+DocumentTitle,RMApprovalDept,CISNumber_Single
+DC_RE_Accounts_Test_01,Claims,2000003001
+DC_RE_Accounts_Test_02,Records,2000003002
+DC_RE_Accounts_Test_03,Finance,2000003003
+DC_RE_Accounts_Test_04,Legal,2000003004
+DC_RE_Accounts_Test_05,Operations,2000003005
+DC_RE_Accounts_Test_06,CustomerCare,2000003006
+DC_RE_Accounts_Test_07,Audit,2000003007
+DC_RE_Accounts_Test_08,Compliance,2000003008
+DC_RE_Accounts_Test_09,Retention,2000003009
+DC_RE_Accounts_Test_10,Accounts,2000003010
+
+
+
+DocumentTitle,RMApprovalDept,AccountNumber
+DC_RLD_Accounts_Test_01,Claims,1000000001
+DC_RLD_Accounts_Test_02,Records,1000000002
+DC_RLD_Accounts_Test_03,Finance,1000000003
+DC_RLD_Accounts_Test_04,Legal,1000000004
+DC_RLD_Accounts_Test_05,Operations,1000000005
+DC_RLD_Accounts_Test_06,CustomerCare,1000000006
+DC_RLD_Accounts_Test_07,Audit,1000000007
+DC_RLD_Accounts_Test_08,Compliance,1000000008
+DC_RLD_Accounts_Test_09,Retention,1000000009
+DC_RLD_Accounts_Test_10,Accounts,1000000010
+
+
+DocumentTitle,CISNumber_Single,RMApprovalDept
+DC_SAD_Accounts_Test_01,2000004001,Claims
+DC_SAD_Accounts_Test_02,2000004002,Records
+DC_SAD_Accounts_Test_03,2000004003,Finance
+DC_SAD_Accounts_Test_04,2000004004,Legal
+DC_SAD_Accounts_Test_05,2000004005,Operations
+DC_SAD_Accounts_Test_06,2000004006,CustomerCare
+DC_SAD_Accounts_Test_07,2000004007,Audit
+DC_SAD_Accounts_Test_08,2000004008,Compliance
+DC_SAD_Accounts_Test_09,2000004009,Retention
+DC_SAD_Accounts_Test_10,2000004010,Accounts
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.filenet.loadtest</groupId>
+    <artifactId>documents-load-test-utility</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>IBM FileNet CPE Load Test Utility</name>
+    <description>Multi-threaded document upload and search load testing utility for IBM FileNet CPE</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
+        <commons-csv.version>1.10.0</commons-csv.version>
+        <log4j.version>2.20.0</log4j.version>
+        <!-- Version tag for FileNet JARs installed from lib/ into the local Maven repo -->
+        <filenet.jace.version>5.5.8</filenet.jace.version>
+    </properties>
+
+    <dependencies>
+        <!-- IBM FileNet CE API — install once from lib/ via scripts/install-filenet-jars.ps1 -->
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>jace</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>stax-api</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>xlxpScanner</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>xlxpScannerUtils</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>${commons-csv.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>1.8</source>
+                    <target>1.8</target>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.3.0</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>com.filenet.loadtest.main.LoadTestApplication</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.filenet.loadtest.main.LoadTestApplication</mainClass>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+
+
+
+SearchType,ClassName,PropertyName,SearchValue
+TITLE,DC_RLD_Accounts,,Test1
+TITLE,DC_RLD_Accounts,,Test2
+TITLE,DC_RLD_Accounts,,Test3
+TITLE,DC_PB_Accounts,,Test1
+TITLE,DC_PB_Accounts,,Test2
+TITLE,DC_PB_Accounts,,Test3
+TITLE,DC_CLCFlood_Accounts,,Test1
+TITLE,DC_CLCFlood_Accounts,,Test2
+TITLE,DC_CLCFlood_Accounts,,Test3
+TITLE,DC_RE_Accounts,,Test1
+TITLE,DC_RE_Accounts,,Test2
+TITLE,DC_RE_Accounts,,Test3
+TITLE,DC_SAD_Accounts,,Test1
+TITLE,DC_SAD_Accounts,,Test2
+TITLE,DC_SAD_Accounts,,Test3
+TITLE,DC_TRUST_Accounts,,Test1
+TITLE,DC_TRUST_Accounts,,Test2
+TITLE,DC_TRUST_Accounts,,Test3
+TITLE,DC_RLD_Accounts,,Test4
+TITLE,DC_PB_Accounts,,Test4
+PROPERTY,DC_RLD_Accounts,AccountNumber,1000000001
+PROPERTY,DC_RLD_Accounts,AccountNumber,1000000002
+PROPERTY,DC_RLD_Accounts,AccountNumber,1000000003
+PROPERTY,DC_RLD_Accounts,RMApprovalDept,Finance
+PROPERTY,DC_RLD_Accounts,RMApprovalDept,Operations
+PROPERTY,DC_RLD_Accounts,RMApprovalDept,Risk
+PROPERTY,DC_PB_Accounts,CISNumber_Single,2000000001
+PROPERTY,DC_PB_Accounts,CISNumber_Single,2000000002
+PROPERTY,DC_PB_Accounts,CISNumber_Single,2000000003
+PROPERTY,DC_PB_Accounts,RMApprovalDept,Finance
+PROPERTY,DC_PB_Accounts,RMApprovalDept,Operations
+PROPERTY,DC_PB_Accounts,RMApprovalDept,Risk
+PROPERTY,DC_CLCFlood_Accounts,AccountNumber,3000000001
+PROPERTY,DC_CLCFlood_Accounts,AccountNumber,3000000002
+PROPERTY,DC_CLCFlood_Accounts,AccountNumber,3000000003
+PROPERTY,DC_CLCFlood_Accounts,RMApprovalDept,Finance
+PROPERTY,DC_CLCFlood_Accounts,RMApprovalDept,Operations
+PROPERTY,DC_CLCFlood_Accounts,RMApprovalDept,Risk
+PROPERTY,DC_RE_Accounts,CISNumber_Single,4000000001
+PROPERTY,DC_RE_Accounts,CISNumber_Single,4000000002
+PROPERTY,DC_RE_Accounts,CISNumber_Single,4000000003
+PROPERTY,DC_RE_Accounts,RMApprovalDept,Finance
+PROPERTY,DC_RE_Accounts,RMApprovalDept,Operations
+PROPERTY,DC_RE_Accounts,RMApprovalDept,Risk
+PROPERTY,DC_SAD_Accounts,CISNumber_Single,5000000001
+PROPERTY,DC_SAD_Accounts,CISNumber_Single,5000000002
+PROPERTY,DC_SAD_Accounts,CISNumber_Single,5000000003
+PROPERTY,DC_SAD_Accounts,RMApprovalDept,Finance
+PROPERTY,DC_SAD_Accounts,RMApprovalDept,Operations
+PROPERTY,DC_SAD_Accounts,RMApprovalDept,Risk
+PROPERTY,DC_TRUST_Accounts,AccountNumber,6000000001
+PROPERTY,DC_TRUST_Accounts,AccountNumber,6000000002
+PROPERTY,DC_TRUST_Accounts,AccountNumber,6000000003
+PROPERTY,DC_TRUST_Accounts,RMApprovalDept,Finance
+PROPERTY,DC_TRUST_Accounts,RMApprovalDept,Operations
+PROPERTY,DC_TRUST_Accounts,RMApprovalDept,Risk
+PROPERTY,DC_RLD_Accounts,AccountNumber,1000000004
+PROPERTY,DC_PB_Accounts,CISNumber_Single,2000000004
+PROPERTY,DC_CLCFlood_Accounts,AccountNumber,3000000004
+PROPERTY,DC_RE_Accounts,CISNumber_Single,4000000004
+PROPERTY,DC_SAD_Accounts,CISNumber_Single,5000000004
+PROPERTY,DC_TRUST_Accounts,AccountNumber,6000000004
+PROPERTY,DC_RLD_Accounts,AccountNumber,1000000005
+PROPERTY,DC_PB_Accounts,CISNumber_Single,2000000005
+PROPERTY,DC_CLCFlood_Accounts,AccountNumber,3000000005
+PROPERTY,DC_RE_Accounts,CISNumber_Single,4000000005
+PROPERTY,DC_SAD_Accounts,CISNumber_Single,5000000005
+PROPERTY,DC_TRUST_Accounts,AccountNumber,6000000005
+CLASS,DC_RLD_Accounts,,
+CLASS,DC_RLD_Accounts,,
+CLASS,DC_RLD_Accounts,,
+CLASS,DC_PB_Accounts,,
+CLASS,DC_PB_Accounts,,
+CLASS,DC_PB_Accounts,,
+CLASS,DC_CLCFlood_Accounts,,
+CLASS,DC_CLCFlood_Accounts,,
+CLASS,DC_CLCFlood_Accounts,,
+CLASS,DC_RE_Accounts,,
+CLASS,DC_RE_Accounts,,
+CLASS,DC_RE_Accounts,,
+CLASS,DC_SAD_Accounts,,
+CLASS,DC_SAD_Accounts,,
+CLASS,DC_SAD_Accounts,,
+CLASS,DC_TRUST_Accounts,,
+CLASS,DC_TRUST_Accounts,,
+CLASS,DC_TRUST_Accounts,,
+CLASS,DC_RLD_Accounts,,
+CLASS,DC_TRUST_Accounts,,
+
+
+
+
+
+ClassSymbolicName,CSVFile
+DC_RLD_Accounts,input/DC_RLD_Accounts.csv
+DC_PB_Accounts,input/DC_PB_Accounts.csv
+DC_CLCFlood_Accounts,input/DC_CLCFlood_Accounts.csv
+DC_RE_Accounts,input/DC_RE_Accounts.csv
+DC_SAD_Accounts,input/DC_SAD_Accounts.csv
+DC_TRUST_Accounts,input/DC_TRUST_Accounts.csv
+
+
+
+# IBM FileNet CPE Connection Settings
+ce.uri=http://192.168.4.56:9080/wsi/FNCEWS40MTOM/
+ce.username=p8admin
+ce.password=Ebla1234
+ce.objectStore=BankingOS
+
+# Upload Load Test Settings
+thread.count=5
+class.config.file=class-config.csv
+sample.content.file=input/sample-content.pdf
+sample.mimeType=application/pdf
+output.metrics.file=output/load-test-results.csv
+
+# Search Load Test Settings
+search.enabled=true
+search.thread.count=5
+search.iterations=10
+search.config.file=search-config.csv
+search.output.metrics.file=output/search-test-results.csv
