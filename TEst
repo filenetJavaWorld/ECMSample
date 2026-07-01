@@ -1,1 +1,250 @@
-temp
+import com.filenet.api.collection.PropertyDefinitionList;
+import com.filenet.api.core.ClassDefinition;
+import com.filenet.api.core.Connection;
+import com.filenet.api.core.Domain;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.PropertyDefinition;
+import com.filenet.api.util.UserContext;
+
+import javax.security.auth.Subject;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.PrintWriter;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
+public class FileNetClassCsvGenerator {
+
+    private static final String CE_URL = "http://server:port/wsi/FNCEWS40MTOM/";
+    private static final String USER_NAME = "username";
+    private static final String PASSWORD = "password";
+    private static final String JAAS_STANZA = "FileNetP8WSI";
+    private static final String OBJECT_STORE_NAME = "YourObjectStore";
+
+    // Comma-separated document class symbolic names
+    private static final String CLASS_SYMBOLIC_NAMES =
+            "DC_Customer,DC_Invoice,DC_Claims";
+
+    private static final String OUTPUT_DIR = "output";
+    private static final String INPUT_DIR_NAME = "input";
+
+    public static void main(String[] args) {
+
+        UserContext userContext = UserContext.get();
+
+        try {
+            Connection connection = Factory.Connection.getConnection(CE_URL);
+
+            Subject subject = UserContext.createSubject(
+                    connection,
+                    USER_NAME,
+                    PASSWORD,
+                    JAAS_STANZA
+            );
+
+            userContext.pushSubject(subject);
+
+            Domain domain = Factory.Domain.fetchInstance(connection, null, null);
+            ObjectStore objectStore =
+                    Factory.ObjectStore.fetchInstance(domain, OBJECT_STORE_NAME, null);
+
+            generateCsvFiles(objectStore);
+
+            System.out.println("CSV generation completed successfully.");
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        } finally {
+            try {
+                userContext.popSubject();
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private static void generateCsvFiles(ObjectStore objectStore) throws Exception {
+
+        File outputFolder = new File(OUTPUT_DIR);
+        File inputFolder = new File(outputFolder, INPUT_DIR_NAME);
+
+        if (!inputFolder.exists()) {
+            inputFolder.mkdirs();
+        }
+
+        File configCsv = new File(outputFolder, "config.csv");
+
+        Set<String> documentBaseProperties = getBaseDocumentProperties(objectStore);
+
+        try (PrintWriter configWriter =
+                     new PrintWriter(new FileWriter(configCsv))) {
+
+            configWriter.println("ClassSymbolicName,CSVFile");
+
+            String[] classNames = CLASS_SYMBOLIC_NAMES.split(",");
+
+            for (String classSymbolicName : classNames) {
+
+                classSymbolicName = classSymbolicName.trim();
+
+                if (classSymbolicName.length() == 0) {
+                    continue;
+                }
+
+                System.out.println("Processing class: " + classSymbolicName);
+
+                ClassDefinition classDefinition =
+                        Factory.ClassDefinition.fetchInstance(
+                                objectStore,
+                                classSymbolicName,
+                                null
+                        );
+
+                List<String> columns =
+                        buildCsvColumns(classDefinition, documentBaseProperties);
+
+                String csvFileName = classSymbolicName + ".csv";
+                File classCsvFile = new File(inputFolder, csvFileName);
+
+                try (PrintWriter classWriter =
+                             new PrintWriter(new FileWriter(classCsvFile))) {
+
+                    classWriter.println(toCsvLine(columns));
+                }
+
+                configWriter.println(
+                        classSymbolicName + "," + INPUT_DIR_NAME + "/" + csvFileName
+                );
+            }
+        }
+    }
+
+    private static List<String> buildCsvColumns(
+            ClassDefinition classDefinition,
+            Set<String> documentBaseProperties) {
+
+        List<String> columns = new ArrayList<>();
+
+        // Fixed columns
+        columns.add("DocumentTitle");
+        columns.add("ScannedItem");
+        columns.add("ScanDate");
+        columns.add("ScanUserID");
+
+        PropertyDefinitionList propertyDefinitions =
+                classDefinition.get_PropertyDefinitions();
+
+        for (Object obj : propertyDefinitions) {
+
+            PropertyDefinition propertyDefinition = (PropertyDefinition) obj;
+
+            String symbolicName = propertyDefinition.get_SymbolicName();
+
+            if (symbolicName == null || symbolicName.trim().length() == 0) {
+                continue;
+            }
+
+            symbolicName = symbolicName.trim();
+
+            if (!isRequiredCustomProperty(
+                    propertyDefinition,
+                    documentBaseProperties)) {
+                continue;
+            }
+
+            // Avoid duplicate columns
+            if (!columns.contains(symbolicName)) {
+                columns.add(symbolicName);
+            }
+        }
+
+        return columns;
+    }
+
+    private static boolean isRequiredCustomProperty(
+            PropertyDefinition propertyDefinition,
+            Set<String> documentBaseProperties) {
+
+        String symbolicName = propertyDefinition.get_SymbolicName();
+
+        if (symbolicName == null || symbolicName.trim().length() == 0) {
+            return false;
+        }
+
+        symbolicName = symbolicName.trim();
+
+        // Required property only
+        if (!Boolean.TRUE.equals(propertyDefinition.get_IsValueRequired())) {
+            return false;
+        }
+
+        // Exclude base Document properties
+        if (documentBaseProperties.contains(symbolicName)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static Set<String> getBaseDocumentProperties(ObjectStore objectStore) {
+
+        Set<String> baseProperties = new HashSet<>();
+
+        ClassDefinition documentClass =
+                Factory.ClassDefinition.fetchInstance(
+                        objectStore,
+                        "Document",
+                        null
+                );
+
+        PropertyDefinitionList propertyDefinitions =
+                documentClass.get_PropertyDefinitions();
+
+        for (Object obj : propertyDefinitions) {
+
+            PropertyDefinition propertyDefinition = (PropertyDefinition) obj;
+
+            String symbolicName = propertyDefinition.get_SymbolicName();
+
+            if (symbolicName != null && symbolicName.trim().length() > 0) {
+                baseProperties.add(symbolicName.trim());
+            }
+        }
+
+        return baseProperties;
+    }
+
+    private static String toCsvLine(List<String> values) {
+
+        List<String> escapedValues = new ArrayList<>();
+
+        for (String value : values) {
+            escapedValues.add(escapeCsv(value));
+        }
+
+        return String.join(",", escapedValues);
+    }
+
+    private static String escapeCsv(String value) {
+
+        if (value == null) {
+            return "";
+        }
+
+        boolean needsQuotes =
+                value.contains(",") ||
+                value.contains("\"") ||
+                value.contains("\n") ||
+                value.contains("\r");
+
+        String escaped = value.replace("\"", "\"\"");
+
+        if (needsQuotes) {
+            return "\"" + escaped + "\"";
+        }
+
+        return escaped;
+    }
+}
