@@ -1,1 +1,1939 @@
-temp
+CISPropertyUpdateUtility
+
+com.cnb.updater
+
+package com.cnb.updater.config;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+public final class AppConfig {
+
+    private final String fileNetUri;
+    private final String fileNetUsername;
+    private final String fileNetPassword;
+    private final String fileNetObjectStore;
+    private final List<String> documentClasses;
+    private final List<PropertyDefinition> searchCriteria;
+    private final TargetCisConfig targetCis;
+    private final String inputExcel;
+    private final ExcelColumnConfig excelColumns;
+    private final String outputSearchCsv;
+    private final String outputUpdatedCsv;
+    private final String logPath;
+    private final int searchBatchSize;
+
+    public AppConfig(String fileNetUri,
+                     String fileNetUsername,
+                     String fileNetPassword,
+                     String fileNetObjectStore,
+                     List<String> documentClasses,
+                     List<PropertyDefinition> searchCriteria,
+                     TargetCisConfig targetCis,
+                     String inputExcel,
+                     ExcelColumnConfig excelColumns,
+                     String outputSearchCsv,
+                     String outputUpdatedCsv,
+                     String logPath,
+                     int searchBatchSize) {
+        this.fileNetUri = fileNetUri;
+        this.fileNetUsername = fileNetUsername;
+        this.fileNetPassword = fileNetPassword;
+        this.fileNetObjectStore = fileNetObjectStore;
+        this.documentClasses = Collections.unmodifiableList(new ArrayList<>(documentClasses));
+        this.searchCriteria = Collections.unmodifiableList(new ArrayList<>(searchCriteria));
+        this.targetCis = targetCis;
+        this.inputExcel = inputExcel;
+        this.excelColumns = excelColumns;
+        this.outputSearchCsv = outputSearchCsv;
+        this.outputUpdatedCsv = outputUpdatedCsv;
+        this.logPath = logPath;
+        this.searchBatchSize = searchBatchSize;
+    }
+
+    public String getFileNetUri() {
+        return fileNetUri;
+    }
+
+    public String getFileNetUsername() {
+        return fileNetUsername;
+    }
+
+    public String getFileNetPassword() {
+        return fileNetPassword;
+    }
+
+    public String getFileNetObjectStore() {
+        return fileNetObjectStore;
+    }
+
+    public List<String> getDocumentClasses() {
+        return documentClasses;
+    }
+
+    public List<PropertyDefinition> getSearchCriteria() {
+        return searchCriteria;
+    }
+
+    public TargetCisConfig getTargetCis() {
+        return targetCis;
+    }
+
+    public String getInputExcel() {
+        return inputExcel;
+    }
+
+    public ExcelColumnConfig getExcelColumns() {
+        return excelColumns;
+    }
+
+    public String getOutputSearchCsv() {
+        return outputSearchCsv;
+    }
+
+    public String getOutputUpdatedCsv() {
+        return outputUpdatedCsv;
+    }
+
+    public String getLogPath() {
+        return logPath;
+    }
+
+    public int getSearchBatchSize() {
+        return searchBatchSize;
+    }
+}
+
+
+
+
+
+package com.cnb.updater.config;
+
+public enum CisExistenceCheck {
+    ANY_VALUE,
+    VALUE_IN_LIST;
+
+    public static CisExistenceCheck fromConfig(String value) {
+        if (value == null) {
+            throw new IllegalArgumentException("target.cis.existenceCheck is required.");
+        }
+        try {
+            return CisExistenceCheck.valueOf(value.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("Unsupported target.cis.existenceCheck: " + value
+                    + ". Supported values: ANY_VALUE, VALUE_IN_LIST");
+        }
+    }
+
+    public boolean isExisting(java.util.List<String> currentValues, String excelCisValue) {
+        if (currentValues == null || currentValues.isEmpty()) {
+            return false;
+        }
+
+        if (this == ANY_VALUE) {
+            return true;
+        }
+
+        if (excelCisValue == null || excelCisValue.trim().isEmpty()) {
+            return false;
+        }
+
+        String normalizedExcelValue = excelCisValue.trim();
+        for (String currentValue : currentValues) {
+            if (currentValue != null && normalizedExcelValue.equals(currentValue.trim())) {
+                return true;
+            }
+        }
+        return false;
+    }
+}
+
+
+
+
+package com.cnb.updater.config;
+
+public final class ExcelColumnConfig {
+
+    private final String accountNumberColumn;
+    private final String accountNameColumn;
+    private final String cisColumn;
+    private final String cisNameColumn;
+
+    public ExcelColumnConfig(String accountNumberColumn,
+                             String accountNameColumn,
+                             String cisColumn,
+                             String cisNameColumn) {
+        this.accountNumberColumn = accountNumberColumn;
+        this.accountNameColumn = accountNameColumn;
+        this.cisColumn = cisColumn;
+        this.cisNameColumn = cisNameColumn;
+    }
+
+    public String getAccountNumberColumn() {
+        return accountNumberColumn;
+    }
+
+    public String getAccountNameColumn() {
+        return accountNameColumn;
+    }
+
+    public String getCisColumn() {
+        return cisColumn;
+    }
+
+    public String getCisNameColumn() {
+        return cisNameColumn;
+    }
+}
+
+
+
+
+package com.cnb.updater.config;
+
+public enum PropertyCardinality {
+    SINGLE,
+    MULTI;
+
+    public static PropertyCardinality fromConfig(String value) {
+        if (value == null) {
+            throw new IllegalArgumentException("Property cardinality is required.");
+        }
+        try {
+            return PropertyCardinality.valueOf(value.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("Unsupported property cardinality: " + value
+                    + ". Supported values: SINGLE, MULTI");
+        }
+    }
+}
+
+
+
+
+package com.cnb.updater.config;
+
+public enum PropertyDataType {
+    STRING;
+
+    public static PropertyDataType fromConfig(String value) {
+        if (value == null) {
+            throw new IllegalArgumentException("Property data type is required.");
+        }
+        try {
+            return PropertyDataType.valueOf(value.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("Unsupported property data type: " + value
+                    + ". Supported values: STRING");
+        }
+    }
+}
+
+
+
+
+
+package com.cnb.updater.config;
+
+public final class PropertyDefinition {
+
+    private final String symbolicName;
+    private final PropertyDataType dataType;
+    private final PropertyCardinality cardinality;
+
+    public PropertyDefinition(String symbolicName,
+                              PropertyDataType dataType,
+                              PropertyCardinality cardinality) {
+        this.symbolicName = symbolicName;
+        this.dataType = dataType;
+        this.cardinality = cardinality;
+    }
+
+    public String getSymbolicName() {
+        return symbolicName;
+    }
+
+    public PropertyDataType getDataType() {
+        return dataType;
+    }
+
+    public PropertyCardinality getCardinality() {
+        return cardinality;
+    }
+}
+
+
+
+
+
+
+package com.cnb.updater.config;
+
+public final class TargetCisConfig {
+
+    private final PropertyDefinition propertyDefinition;
+    private final CisExistenceCheck existenceCheck;
+
+    public TargetCisConfig(PropertyDefinition propertyDefinition, CisExistenceCheck existenceCheck) {
+        this.propertyDefinition = propertyDefinition;
+        this.existenceCheck = existenceCheck;
+    }
+
+    public PropertyDefinition getPropertyDefinition() {
+        return propertyDefinition;
+    }
+
+    public CisExistenceCheck getExistenceCheck() {
+        return existenceCheck;
+    }
+}
+
+
+
+
+
+
+package com.cnb.updater.csv;
+
+import com.cnb.updater.model.SearchResultRecord;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVParser;
+import org.apache.commons.csv.CSVRecord;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.IOException;
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.List;
+
+public final class CsvReader {
+
+    private static final Logger LOGGER = LogManager.getLogger(CsvReader.class);
+
+    private CsvReader() {
+    }
+
+    public static List<SearchResultRecord> read(String csvFilePath) throws IOException {
+        Path path = Paths.get(csvFilePath);
+        List<SearchResultRecord> records = new ArrayList<>();
+
+        try (Reader reader = Files.newBufferedReader(path, StandardCharsets.UTF_8);
+             CSVParser parser = CSVFormat.DEFAULT
+                     .builder()
+                     .setHeader()
+                     .setSkipHeaderRecord(true)
+                     .setIgnoreEmptyLines(true)
+                     .setTrim(true)
+                     .build()
+                     .parse(reader)) {
+
+            for (CSVRecord csvRecord : parser) {
+                records.add(new SearchResultRecord(
+                        getValue(csvRecord, "ACCOUNT_NUMBER"),
+                        getValue(csvRecord, "Document_Class"),
+                        getValue(csvRecord, "Document_GUID"),
+                        getValue(csvRecord, "CIS"),
+                        getValue(csvRecord, "Status"),
+                        getValue(csvRecord, "Comments"),
+                        getValue(csvRecord, "Update_Status")
+                ));
+            }
+        }
+
+        LOGGER.info("Loaded {} row(s) from CSV file {}", records.size(), csvFilePath);
+        return records;
+    }
+
+    private static String getValue(CSVRecord record, String columnName) {
+        if (!record.isMapped(columnName)) {
+            return "";
+        }
+        String value = record.get(columnName);
+        return value == null ? "" : value.trim();
+    }
+}
+
+
+
+
+
+package com.cnb.updater.csv;
+
+import com.cnb.updater.model.SearchResultRecord;
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVPrinter;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.BufferedWriter;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.List;
+
+public final class CsvWriter {
+
+    private static final Logger LOGGER = LogManager.getLogger(CsvWriter.class);
+
+    private static final String[] HEADERS = {
+            "ACCOUNT_NUMBER",
+            "Document_Class",
+            "Document_GUID",
+            "CIS",
+            "Status",
+            "Comments",
+            "Update_Status"
+    };
+
+    private CsvWriter() {
+    }
+
+    public static void write(String csvFilePath, List<SearchResultRecord> records) throws IOException {
+        Path path = Paths.get(csvFilePath);
+        if (path.getParent() != null) {
+            Files.createDirectories(path.getParent());
+        }
+
+        try (BufferedWriter writer = Files.newBufferedWriter(path, StandardCharsets.UTF_8);
+             CSVPrinter printer = new CSVPrinter(writer, CSVFormat.DEFAULT.builder().setHeader(HEADERS).build())) {
+
+            for (SearchResultRecord record : records) {
+                printer.printRecord(
+                        record.getAccountNumber(),
+                        record.getDocumentClass(),
+                        record.getDocumentGuid(),
+                        record.getCis(),
+                        record.getStatus(),
+                        record.getComments(),
+                        record.getUpdateStatus()
+                );
+            }
+        }
+
+        LOGGER.info("Wrote {} row(s) to CSV file {}", records.size(), csvFilePath);
+    }
+}
+
+
+
+
+package com.cnb.updater.excel;
+
+import com.cnb.updater.config.ExcelColumnConfig;
+import com.cnb.updater.model.InputRecord;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.DataFormatter;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.ss.usermodel.WorkbookFactory;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+
+public final class ExcelReader {
+
+    private static final Logger LOGGER = LogManager.getLogger(ExcelReader.class);
+    private static final DataFormatter DATA_FORMATTER = new DataFormatter();
+
+    private ExcelReader() {
+    }
+
+    public static List<InputRecord> read(String excelFilePath, ExcelColumnConfig columnConfig) throws IOException {
+        List<InputRecord> records = new ArrayList<>();
+
+        try (InputStream inputStream = new FileInputStream(excelFilePath);
+             Workbook workbook = WorkbookFactory.create(inputStream)) {
+
+            Sheet sheet = workbook.getSheetAt(0);
+            if (sheet == null) {
+                throw new IllegalArgumentException("Excel file does not contain any sheets: " + excelFilePath);
+            }
+
+            Row headerRow = sheet.getRow(sheet.getFirstRowNum());
+            if (headerRow == null) {
+                throw new IllegalArgumentException("Excel sheet is empty: " + excelFilePath);
+            }
+
+            Map<String, Integer> columnIndex = mapHeaderColumns(headerRow, columnConfig);
+
+            for (int rowIndex = sheet.getFirstRowNum() + 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                Row row = sheet.getRow(rowIndex);
+                if (row == null || isBlankRow(row, columnIndex)) {
+                    continue;
+                }
+
+                String accountNumber = getCellValue(row, columnIndex.get(normalizeHeader(columnConfig.getAccountNumberColumn())));
+                if (StringUtils.isBlank(accountNumber)) {
+                    LOGGER.warn("Skipping row {} because {} is blank",
+                            rowIndex + 1, columnConfig.getAccountNumberColumn());
+                    continue;
+                }
+
+                records.add(new InputRecord(
+                        accountNumber.trim(),
+                        getCellValue(row, columnIndex.get(normalizeHeader(columnConfig.getAccountNameColumn()))),
+                        getCellValue(row, columnIndex.get(normalizeHeader(columnConfig.getCisColumn()))),
+                        getCellValue(row, columnIndex.get(normalizeHeader(columnConfig.getCisNameColumn())))
+                ));
+            }
+        }
+
+        LOGGER.info("Loaded {} input row(s) from Excel file {}", records.size(), excelFilePath);
+        return records;
+    }
+
+    private static Map<String, Integer> mapHeaderColumns(Row headerRow, ExcelColumnConfig columnConfig) {
+        Map<String, Integer> columnIndex = new HashMap<>();
+
+        for (Cell cell : headerRow) {
+            String header = normalizeHeader(getCellValue(headerRow, cell.getColumnIndex()));
+            if (StringUtils.isNotBlank(header)) {
+                columnIndex.put(header, cell.getColumnIndex());
+            }
+        }
+
+        requireColumn(columnIndex, columnConfig.getAccountNumberColumn());
+        requireColumn(columnIndex, columnConfig.getAccountNameColumn());
+        requireColumn(columnIndex, columnConfig.getCisColumn());
+        requireColumn(columnIndex, columnConfig.getCisNameColumn());
+
+        return columnIndex;
+    }
+
+    private static void requireColumn(Map<String, Integer> columnIndex, String columnName) {
+        String normalizedColumnName = normalizeHeader(columnName);
+        if (!columnIndex.containsKey(normalizedColumnName)) {
+            throw new IllegalArgumentException("Missing required Excel column: " + columnName
+                    + ". Found headers: " + columnIndex.keySet());
+        }
+    }
+
+    private static String normalizeHeader(String header) {
+        return header == null ? "" : header.trim().toUpperCase(Locale.ENGLISH);
+    }
+
+    private static boolean isBlankRow(Row row, Map<String, Integer> columnIndex) {
+        for (Integer index : columnIndex.values()) {
+            if (StringUtils.isNotBlank(getCellValue(row, index))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String getCellValue(Row row, Integer columnIndex) {
+        if (columnIndex == null) {
+            return "";
+        }
+        return getCellValue(row, columnIndex.intValue());
+    }
+
+    private static String getCellValue(Row row, int columnIndex) {
+        Cell cell = row.getCell(columnIndex);
+        if (cell == null) {
+            return "";
+        }
+        String value = DATA_FORMATTER.formatCellValue(cell);
+        return value == null ? "" : value.trim();
+    }
+}
+
+
+
+
+
+package com.cnb.updater.filenet;
+
+import com.cnb.updater.config.AppConfig;
+import com.filenet.api.core.Connection;
+import com.filenet.api.core.Domain;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.util.UserContext;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import javax.security.auth.Subject;
+
+public final class FileNetConnectionManager implements AutoCloseable {
+
+    private static final Logger LOGGER = LogManager.getLogger(FileNetConnectionManager.class);
+
+    private final AppConfig config;
+    private final Connection connection;
+    private final Subject subject;
+    private final Domain domain;
+    private final ObjectStore objectStore;
+
+    public FileNetConnectionManager(AppConfig config) {
+        this.config = config;
+        LOGGER.info("Connecting to FileNet CE at {}", config.getFileNetUri());
+
+        connection = Factory.Connection.getConnection(config.getFileNetUri());
+        subject = UserContext.createSubject(
+                connection,
+                config.getFileNetUsername(),
+                config.getFileNetPassword(),
+                null
+        );
+
+        if (subject == null) {
+            throw new IllegalStateException(
+                    "FileNet authentication failed. Check filenet.username and filenet.password.");
+        }
+
+        UserContext.get().pushSubject(subject);
+        domain = Factory.Domain.fetchInstance(connection, null, null);
+        objectStore = Factory.ObjectStore.fetchInstance(domain, config.getFileNetObjectStore(), null);
+
+        LOGGER.info("FileNet connection established for object store: {}", config.getFileNetObjectStore());
+    }
+
+    public ObjectStore getObjectStore() {
+        return objectStore;
+    }
+
+    public Domain getDomain() {
+        return domain;
+    }
+
+    public AppConfig getConfig() {
+        return config;
+    }
+
+    public void testConnection() {
+        ObjectStore os = Factory.ObjectStore.fetchInstance(domain, config.getFileNetObjectStore(), null);
+        LOGGER.info("FileNet connection test succeeded for object store {}", os.get_Name());
+    }
+
+    @Override
+    public void close() {
+        try {
+            UserContext.get().popSubject();
+            LOGGER.info("FileNet connection closed.");
+        } catch (Exception ex) {
+            LOGGER.warn("Error while closing FileNet connection: {}", ex.getMessage(), ex);
+        }
+    }
+}
+
+
+
+
+package com.cnb.updater.main;
+
+import com.cnb.updater.config.AppConfig;
+import com.cnb.updater.csv.CsvWriter;
+import com.cnb.updater.excel.ExcelReader;
+import com.cnb.updater.filenet.FileNetConnectionManager;
+import com.cnb.updater.model.InputRecord;
+import com.cnb.updater.model.SearchResultRecord;
+import com.cnb.updater.service.DocumentSearchService;
+import com.cnb.updater.util.PropertyLoader;
+import com.cnb.updater.util.ValidationUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.List;
+
+public final class SearchAndGenerateCsvMain {
+
+    private static final Logger LOGGER = LogManager.getLogger(SearchAndGenerateCsvMain.class);
+
+    private SearchAndGenerateCsvMain() {
+    }
+
+    public static void main(String[] args) {
+        LOGGER.info("Starting Utility 1 - SearchAndGenerateCsv");
+
+        String configPath = PropertyLoader.resolveConfigPath(args);
+
+        try {
+            AppConfig config = PropertyLoader.load(configPath);
+            LOGGER.info("Configuration loaded from {}", configPath);
+
+            ValidationUtil.validateForSearchUtility(config);
+
+            List<InputRecord> inputRecords = ExcelReader.read(config.getInputExcel(), config.getExcelColumns());
+            if (inputRecords.isEmpty()) {
+                LOGGER.warn("No input rows found in Excel file {}", config.getInputExcel());
+            }
+
+            List<SearchResultRecord> searchResults;
+            try (FileNetConnectionManager connectionManager = new FileNetConnectionManager(config)) {
+                connectionManager.testConnection();
+                DocumentSearchService searchService = new DocumentSearchService(connectionManager);
+                searchResults = searchService.searchAndBuildResults(inputRecords);
+            }
+
+            CsvWriter.write(config.getOutputSearchCsv(), searchResults);
+
+            long existCount = searchResults.stream()
+                    .filter(record -> SearchResultRecord.STATUS_EXIST.equals(record.getStatus()))
+                    .count();
+            long missingCount = searchResults.stream()
+                    .filter(record -> SearchResultRecord.STATUS_DOES_NOT_EXIST.equals(record.getStatus()))
+                    .count();
+            long notFoundCount = searchResults.stream()
+                    .filter(record -> SearchResultRecord.STATUS_DOCUMENT_NOT_FOUND.equals(record.getStatus()))
+                    .count();
+
+            LOGGER.info("Search processing summary: totalRows={}, exist={}, doesNotExist={}, documentNotFound={}",
+                    searchResults.size(), existCount, missingCount, notFoundCount);
+            LOGGER.info("Utility 1 completed successfully. Output CSV: {}", config.getOutputSearchCsv());
+        } catch (Exception ex) {
+            LOGGER.error("Utility 1 failed: {}", ex.getMessage(), ex);
+            System.exit(1);
+        }
+    }
+}
+
+
+
+package com.cnb.updater.main;
+
+import com.cnb.updater.config.AppConfig;
+import com.cnb.updater.csv.CsvReader;
+import com.cnb.updater.csv.CsvWriter;
+import com.cnb.updater.filenet.FileNetConnectionManager;
+import com.cnb.updater.model.SearchResultRecord;
+import com.cnb.updater.model.UpdateResultRecord;
+import com.cnb.updater.service.DocumentUpdateService;
+import com.cnb.updater.util.PropertyLoader;
+import com.cnb.updater.util.ValidationUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.List;
+
+public final class UpdateCisNumberMain {
+
+    private static final Logger LOGGER = LogManager.getLogger(UpdateCisNumberMain.class);
+
+    private UpdateCisNumberMain() {
+    }
+
+    public static void main(String[] args) {
+        LOGGER.info("Starting Utility 2 - UpdateCisNumber");
+
+        String configPath = PropertyLoader.resolveConfigPath(args);
+
+        try {
+            AppConfig config = PropertyLoader.load(configPath);
+            LOGGER.info("Configuration loaded from {}", configPath);
+
+            ValidationUtil.validateForUpdateUtility(config);
+
+            List<SearchResultRecord> records = CsvReader.read(config.getOutputSearchCsv());
+            if (records.isEmpty()) {
+                LOGGER.warn("No rows found in input CSV {}", config.getOutputSearchCsv());
+            }
+
+            UpdateResultRecord summary;
+            try (FileNetConnectionManager connectionManager = new FileNetConnectionManager(config)) {
+                connectionManager.testConnection();
+                DocumentUpdateService updateService = new DocumentUpdateService(connectionManager);
+                summary = updateService.processUpdates(records);
+            }
+
+            CsvWriter.write(config.getOutputUpdatedCsv(), records);
+
+            LOGGER.info("Update processing summary: totalRows={}, eligible={}, updated={}, skipped={}, failed={}, ignored={}",
+                    summary.getTotalRows(),
+                    summary.getEligibleRows(),
+                    summary.getUpdatedRows(),
+                    summary.getSkippedRows(),
+                    summary.getFailedRows(),
+                    summary.getIgnoredRows());
+            LOGGER.info("Utility 2 completed successfully. Output CSV: {}", config.getOutputUpdatedCsv());
+        } catch (Exception ex) {
+            LOGGER.error("Utility 2 failed: {}", ex.getMessage(), ex);
+            System.exit(1);
+        }
+    }
+}
+
+
+
+
+package com.cnb.updater.model;
+
+public final class InputRecord {
+
+    private final String accountNumber;
+    private final String accountName;
+    private final String cis;
+    private final String cisName;
+
+    public InputRecord(String accountNumber, String accountName, String cis, String cisName) {
+        this.accountNumber = accountNumber;
+        this.accountName = accountName;
+        this.cis = cis;
+        this.cisName = cisName;
+    }
+
+    public String getAccountNumber() {
+        return accountNumber;
+    }
+
+    public String getAccountName() {
+        return accountName;
+    }
+
+    public String getCis() {
+        return cis;
+    }
+
+    public String getCisName() {
+        return cisName;
+    }
+}
+
+
+
+
+package com.cnb.updater.model;
+
+public final class SearchResultRecord {
+
+    public static final String STATUS_EXIST = "EXIST";
+    public static final String STATUS_DOES_NOT_EXIST = "DOES_NOT_EXIST";
+    public static final String STATUS_DOCUMENT_NOT_FOUND = "DOCUMENT_NOT_FOUND";
+
+    public static final String COMMENT_EXIST = "CIS Number Already Exist";
+    public static final String COMMENT_DOES_NOT_EXIST = "User Provided CIS Number";
+    public static final String COMMENT_DOCUMENT_NOT_FOUND = "No matching documents found";
+
+    private final String accountNumber;
+    private final String documentClass;
+    private final String documentGuid;
+    private final String cis;
+    private final String status;
+    private String comments;
+    private String updateStatus;
+
+    public SearchResultRecord(String accountNumber,
+                              String documentClass,
+                              String documentGuid,
+                              String cis,
+                              String status,
+                              String comments,
+                              String updateStatus) {
+        this.accountNumber = accountNumber;
+        this.documentClass = documentClass;
+        this.documentGuid = documentGuid;
+        this.cis = cis;
+        this.status = status;
+        this.comments = comments;
+        this.updateStatus = updateStatus;
+    }
+
+    public static SearchResultRecord documentNotFound(String accountNumber) {
+        return new SearchResultRecord(
+                accountNumber,
+                "",
+                "",
+                "",
+                STATUS_DOCUMENT_NOT_FOUND,
+                COMMENT_DOCUMENT_NOT_FOUND,
+                ""
+        );
+    }
+
+    public String getAccountNumber() {
+        return accountNumber;
+    }
+
+    public String getDocumentClass() {
+        return documentClass;
+    }
+
+    public String getDocumentGuid() {
+        return documentGuid;
+    }
+
+    public String getCis() {
+        return cis;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public String getComments() {
+        return comments;
+    }
+
+    public String getUpdateStatus() {
+        return updateStatus;
+    }
+
+    public void setUpdateStatus(String updateStatus) {
+        this.updateStatus = updateStatus;
+    }
+
+    public void setComments(String comments) {
+        this.comments = comments;
+    }
+
+    public void appendComment(String additionalComment) {
+        if (additionalComment == null || additionalComment.trim().isEmpty()) {
+            return;
+        }
+        if (comments == null || comments.trim().isEmpty()) {
+            comments = additionalComment.trim();
+        } else {
+            comments = comments + " - " + additionalComment.trim();
+        }
+    }
+}
+
+
+
+
+package com.cnb.updater.model;
+
+public final class UpdateResultRecord {
+
+    public static final String UPDATE_STATUS_UPDATED = "UPDATED";
+    public static final String UPDATE_STATUS_SKIPPED = "SKIPPED_ALREADY_EXISTS";
+    public static final String UPDATE_STATUS_FAILED = "FAILED";
+
+    private final int totalRows;
+    private final int eligibleRows;
+    private final int updatedRows;
+    private final int skippedRows;
+    private final int failedRows;
+    private final int ignoredRows;
+
+    public UpdateResultRecord(int totalRows,
+                              int eligibleRows,
+                              int updatedRows,
+                              int skippedRows,
+                              int failedRows,
+                              int ignoredRows) {
+        this.totalRows = totalRows;
+        this.eligibleRows = eligibleRows;
+        this.updatedRows = updatedRows;
+        this.skippedRows = skippedRows;
+        this.failedRows = failedRows;
+        this.ignoredRows = ignoredRows;
+    }
+
+    public int getTotalRows() {
+        return totalRows;
+    }
+
+    public int getEligibleRows() {
+        return eligibleRows;
+    }
+
+    public int getUpdatedRows() {
+        return updatedRows;
+    }
+
+    public int getSkippedRows() {
+        return skippedRows;
+    }
+
+    public int getFailedRows() {
+        return failedRows;
+    }
+
+    public int getIgnoredRows() {
+        return ignoredRows;
+    }
+}
+
+
+
+
+package com.cnb.updater.service;
+
+import com.cnb.updater.config.AppConfig;
+import com.cnb.updater.config.PropertyDefinition;
+import com.cnb.updater.config.TargetCisConfig;
+import com.cnb.updater.filenet.FileNetConnectionManager;
+import com.cnb.updater.model.InputRecord;
+import com.cnb.updater.model.SearchResultRecord;
+import com.cnb.updater.util.FileNetPropertyHelper;
+import com.filenet.api.collection.IndependentObjectSet;
+import com.filenet.api.collection.PageIterator;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.Properties;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public final class DocumentSearchService {
+
+    private static final Logger LOGGER = LogManager.getLogger(DocumentSearchService.class);
+
+    private final FileNetConnectionManager connectionManager;
+    private final AppConfig config;
+
+    public DocumentSearchService(FileNetConnectionManager connectionManager) {
+        this.connectionManager = connectionManager;
+        this.config = connectionManager.getConfig();
+    }
+
+    public List<SearchResultRecord> searchAndBuildResults(List<InputRecord> inputRecords) throws Exception {
+        List<SearchResultRecord> results = new ArrayList<>();
+        ObjectStore objectStore = connectionManager.getObjectStore();
+
+        for (InputRecord inputRecord : inputRecords) {
+            LOGGER.info("Searching FileNet documents for account number {}", inputRecord.getAccountNumber());
+
+            Map<String, FoundDocument> foundDocuments = new LinkedHashMap<>();
+
+            for (String documentClass : config.getDocumentClasses()) {
+                List<FoundDocument> classMatches = searchDocuments(
+                        objectStore,
+                        documentClass,
+                        inputRecord.getAccountNumber()
+                );
+                LOGGER.info("Found {} document(s) in class {} for account number {}",
+                        classMatches.size(), documentClass, inputRecord.getAccountNumber());
+
+                for (FoundDocument foundDocument : classMatches) {
+                    foundDocuments.putIfAbsent(foundDocument.getDocumentGuid(), foundDocument);
+                }
+            }
+
+            if (foundDocuments.isEmpty()) {
+                results.add(SearchResultRecord.documentNotFound(inputRecord.getAccountNumber()));
+                continue;
+            }
+
+            for (FoundDocument foundDocument : foundDocuments.values()) {
+                results.add(buildResultRecord(inputRecord, foundDocument));
+            }
+        }
+
+        return results;
+    }
+
+    private List<FoundDocument> searchDocuments(ObjectStore objectStore,
+                                                String documentClass,
+                                                String accountNumber) throws Exception {
+        TargetCisConfig targetCis = config.getTargetCis();
+        PropertyDefinition targetProperty = targetCis.getPropertyDefinition();
+        String whereClause = FileNetPropertyHelper.buildAndWhereClause(config.getSearchCriteria(), accountNumber);
+        Set<String> selectProperties = FileNetPropertyHelper.collectSelectProperties(
+                config.getSearchCriteria(),
+                targetProperty
+        );
+
+        StringBuilder selectList = new StringBuilder("[This], Id");
+        for (String propertyName : selectProperties) {
+            selectList.append(", ").append(propertyName);
+        }
+
+        String sql = "SELECT " + selectList + " FROM " + documentClass + " WHERE " + whereClause;
+        LOGGER.info("Executing search SQL: {}", sql);
+
+        SearchSQL searchSQL = new SearchSQL(sql);
+        SearchScope searchScope = new SearchScope(objectStore);
+
+        PropertyFilter propertyFilter = new PropertyFilter();
+        propertyFilter.addIncludeProperty(0, null, null, "Id", null);
+        for (String propertyName : selectProperties) {
+            propertyFilter.addIncludeProperty(0, null, null, propertyName, null);
+        }
+
+        IndependentObjectSet resultSet = searchScope.fetchObjects(
+                searchSQL,
+                config.getSearchBatchSize(),
+                propertyFilter,
+                Boolean.TRUE
+        );
+
+        List<FoundDocument> foundDocuments = new ArrayList<>();
+        PageIterator pageIterator = resultSet.pageIterator();
+        while (pageIterator.nextPage()) {
+            Object[] page = pageIterator.getCurrentPage();
+            if (page == null) {
+                continue;
+            }
+            for (Object item : page) {
+                if (!(item instanceof Document)) {
+                    continue;
+                }
+                Document document = (Document) item;
+                foundDocuments.add(toFoundDocument(document, documentClass, targetProperty));
+            }
+        }
+
+        return foundDocuments;
+    }
+
+    private FoundDocument toFoundDocument(Document document,
+                                          String documentClass,
+                                          PropertyDefinition targetProperty) {
+        Properties properties = document.getProperties();
+        List<String> cisValues = FileNetPropertyHelper.readStringValues(properties, targetProperty);
+        return new FoundDocument(
+                document.get_Id().toString(),
+                documentClass,
+                cisValues
+        );
+    }
+
+    private SearchResultRecord buildResultRecord(InputRecord inputRecord, FoundDocument foundDocument) {
+        TargetCisConfig targetCis = config.getTargetCis();
+        boolean cisExists = targetCis.getExistenceCheck().isExisting(
+                foundDocument.getCurrentCisValues(),
+                inputRecord.getCis()
+        );
+
+        if (cisExists) {
+            return new SearchResultRecord(
+                    inputRecord.getAccountNumber(),
+                    foundDocument.getDocumentClass(),
+                    foundDocument.getDocumentGuid(),
+                    FileNetPropertyHelper.formatValuesForCsv(foundDocument.getCurrentCisValues()),
+                    SearchResultRecord.STATUS_EXIST,
+                    SearchResultRecord.COMMENT_EXIST,
+                    ""
+            );
+        }
+
+        return new SearchResultRecord(
+                inputRecord.getAccountNumber(),
+                foundDocument.getDocumentClass(),
+                foundDocument.getDocumentGuid(),
+                inputRecord.getCis(),
+                SearchResultRecord.STATUS_DOES_NOT_EXIST,
+                SearchResultRecord.COMMENT_DOES_NOT_EXIST,
+                ""
+        );
+    }
+
+    private static final class FoundDocument {
+        private final String documentGuid;
+        private final String documentClass;
+        private final List<String> currentCisValues;
+
+        private FoundDocument(String documentGuid, String documentClass, List<String> currentCisValues) {
+            this.documentGuid = documentGuid;
+            this.documentClass = documentClass;
+            this.currentCisValues = currentCisValues;
+        }
+
+        private String getDocumentGuid() {
+            return documentGuid;
+        }
+
+        private String getDocumentClass() {
+            return documentClass;
+        }
+
+        private List<String> getCurrentCisValues() {
+            return currentCisValues;
+        }
+    }
+}
+
+
+
+
+
+package com.cnb.updater.service;
+
+import com.cnb.updater.config.AppConfig;
+import com.cnb.updater.config.PropertyDefinition;
+import com.cnb.updater.config.TargetCisConfig;
+import com.cnb.updater.filenet.FileNetConnectionManager;
+import com.cnb.updater.model.SearchResultRecord;
+import com.cnb.updater.model.UpdateResultRecord;
+import com.cnb.updater.util.FileNetPropertyHelper;
+import com.filenet.api.constants.PropertyNames;
+import com.filenet.api.constants.RefreshMode;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.core.VersionSeries;
+import com.filenet.api.property.Properties;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.util.Id;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.List;
+
+public final class DocumentUpdateService {
+
+    private static final Logger LOGGER = LogManager.getLogger(DocumentUpdateService.class);
+
+    private final FileNetConnectionManager connectionManager;
+    private final AppConfig config;
+
+    public DocumentUpdateService(FileNetConnectionManager connectionManager) {
+        this.connectionManager = connectionManager;
+        this.config = connectionManager.getConfig();
+    }
+
+    public UpdateResultRecord processUpdates(List<SearchResultRecord> records) {
+        ObjectStore objectStore = connectionManager.getObjectStore();
+
+        int totalRows = records.size();
+        int eligibleRows = 0;
+        int updatedRows = 0;
+        int skippedRows = 0;
+        int failedRows = 0;
+        int ignoredRows = 0;
+
+        for (SearchResultRecord record : records) {
+            if (!SearchResultRecord.STATUS_DOES_NOT_EXIST.equals(record.getStatus())) {
+                ignoredRows++;
+                continue;
+            }
+
+            eligibleRows++;
+
+            if (StringUtils.isBlank(record.getDocumentGuid())) {
+                record.setUpdateStatus(UpdateResultRecord.UPDATE_STATUS_FAILED);
+                record.appendComment("Document GUID is missing");
+                failedRows++;
+                continue;
+            }
+
+            try {
+                UpdateOutcome outcome = updateDocument(objectStore, record);
+                record.setUpdateStatus(outcome.getUpdateStatus());
+
+                if (UpdateResultRecord.UPDATE_STATUS_UPDATED.equals(outcome.getUpdateStatus())) {
+                    updatedRows++;
+                    LOGGER.info("Updated CIS for document GUID {}", record.getDocumentGuid());
+                } else if (UpdateResultRecord.UPDATE_STATUS_SKIPPED.equals(outcome.getUpdateStatus())) {
+                    skippedRows++;
+                    LOGGER.info("Skipped update for document GUID {} because CIS already exists",
+                            record.getDocumentGuid());
+                }
+            } catch (Exception ex) {
+                record.setUpdateStatus(UpdateResultRecord.UPDATE_STATUS_FAILED);
+                record.appendComment(ex.getMessage());
+                failedRows++;
+                LOGGER.error("Failed to update document GUID {}: {}", record.getDocumentGuid(), ex.getMessage(), ex);
+            }
+        }
+
+        return new UpdateResultRecord(totalRows, eligibleRows, updatedRows, skippedRows, failedRows, ignoredRows);
+    }
+
+    private UpdateOutcome updateDocument(ObjectStore objectStore, SearchResultRecord record) throws Exception {
+        TargetCisConfig targetCis = config.getTargetCis();
+        PropertyDefinition targetProperty = targetCis.getPropertyDefinition();
+
+        Document document = fetchCurrentVersionDocument(objectStore, record.getDocumentGuid(), targetProperty);
+        Properties properties = document.getProperties();
+        List<String> currentCisValues = FileNetPropertyHelper.readStringValues(properties, targetProperty);
+
+        if (targetCis.getExistenceCheck().isExisting(currentCisValues, record.getCis())) {
+            return new UpdateOutcome(UpdateResultRecord.UPDATE_STATUS_SKIPPED);
+        }
+
+        if (StringUtils.isBlank(record.getCis())) {
+            throw new IllegalStateException("CSV CIS value is blank");
+        }
+
+        FileNetPropertyHelper.setStringValue(properties, targetProperty, record.getCis());
+        document.save(RefreshMode.REFRESH);
+        return new UpdateOutcome(UpdateResultRecord.UPDATE_STATUS_UPDATED);
+    }
+
+    private Document fetchCurrentVersionDocument(ObjectStore objectStore,
+                                                 String documentGuid,
+                                                 PropertyDefinition targetProperty) {
+        PropertyFilter filter = new PropertyFilter();
+        filter.addIncludeProperty(0, null, null, PropertyNames.ID, null);
+        filter.addIncludeProperty(0, null, null, PropertyNames.VERSION_SERIES, null);
+        filter.addIncludeProperty(0, null, null, targetProperty.getSymbolicName(), null);
+
+        Document document = Factory.Document.fetchInstance(objectStore, new Id(documentGuid), filter);
+        VersionSeries versionSeries = document.get_VersionSeries();
+        if (versionSeries != null) {
+            Object currentVersion = versionSeries.get_CurrentVersion();
+            if (currentVersion instanceof Document) {
+                Document currentDocument = (Document) currentVersion;
+                if (!documentGuid.equals(currentDocument.get_Id().toString())) {
+                    return fetchDocumentByGuid(objectStore, currentDocument.get_Id().toString(), targetProperty);
+                }
+            }
+        }
+        return document;
+    }
+
+    private Document fetchDocumentByGuid(ObjectStore objectStore,
+                                         String documentGuid,
+                                         PropertyDefinition targetProperty) {
+        PropertyFilter filter = new PropertyFilter();
+        filter.addIncludeProperty(0, null, null, PropertyNames.ID, null);
+        filter.addIncludeProperty(0, null, null, targetProperty.getSymbolicName(), null);
+        return Factory.Document.fetchInstance(objectStore, new Id(documentGuid), filter);
+    }
+
+    private static final class UpdateOutcome {
+        private final String updateStatus;
+
+        private UpdateOutcome(String updateStatus) {
+            this.updateStatus = updateStatus;
+        }
+
+        private String getUpdateStatus() {
+            return updateStatus;
+        }
+    }
+}
+
+
+
+
+
+package com.cnb.updater.util;
+
+import com.cnb.updater.config.PropertyDefinition;
+import com.cnb.updater.config.PropertyCardinality;
+import com.cnb.updater.config.PropertyDataType;
+import com.filenet.api.collection.StringList;
+import com.filenet.api.core.Factory;
+import com.filenet.api.property.Properties;
+import org.apache.commons.lang3.StringUtils;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+
+public final class FileNetPropertyHelper {
+
+    public static final String MULTI_VALUE_CSV_DELIMITER = ";";
+
+    private FileNetPropertyHelper() {
+    }
+
+    public static String buildAndWhereClause(List<PropertyDefinition> searchCriteria, String searchValue) {
+        if (searchCriteria == null || searchCriteria.isEmpty()) {
+            throw new IllegalArgumentException("At least one search criterion must be configured.");
+        }
+
+        List<String> conditions = new ArrayList<>();
+        String escapedValue = escapeSqlLiteral(searchValue);
+
+        for (PropertyDefinition criterion : searchCriteria) {
+            validateSearchCriterion(criterion);
+            conditions.add(buildSearchCondition(criterion, escapedValue));
+        }
+
+        return String.join(" AND ", conditions);
+    }
+
+    private static String buildSearchCondition(PropertyDefinition criterion, String escapedValue) {
+        String propertyReference = bracketPropertyName(criterion.getSymbolicName());
+        if (criterion.getCardinality() == PropertyCardinality.MULTI) {
+            // FileNet CE SQL requires constant-on-left for LIST properties: 'value' IN [PropertyName]
+            return "'" + escapedValue + "' IN " + propertyReference;
+        }
+        return propertyReference + " = '" + escapedValue + "'";
+    }
+
+    private static String bracketPropertyName(String propertyName) {
+        if (propertyName.startsWith("[") && propertyName.endsWith("]")) {
+            return propertyName;
+        }
+        return "[" + propertyName + "]";
+    }
+
+    public static List<String> readStringValues(Properties properties, PropertyDefinition propertyDefinition) {
+        List<String> values = new ArrayList<>();
+        if (properties == null || propertyDefinition == null) {
+            return values;
+        }
+
+        String propertyName = propertyDefinition.getSymbolicName();
+        if (!properties.isPropertyPresent(propertyName)) {
+            return values;
+        }
+
+        if (propertyDefinition.getCardinality() == PropertyCardinality.MULTI) {
+            StringList stringList = properties.getStringListValue(propertyName);
+            if (stringList != null) {
+                for (Object item : stringList) {
+                    addIfNotBlank(values, item);
+                }
+            }
+            return values;
+        }
+
+        Object value = properties.getObjectValue(propertyName);
+        addIfNotBlank(values, value);
+        return values;
+    }
+
+    public static String formatValuesForCsv(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return "";
+        }
+        return String.join(MULTI_VALUE_CSV_DELIMITER, values);
+    }
+
+    public static boolean hasAnyValue(List<String> values) {
+        return values != null && !values.isEmpty();
+    }
+
+    public static void setStringValue(Properties properties, PropertyDefinition propertyDefinition, String value) {
+        if (propertyDefinition.getDataType() != PropertyDataType.STRING) {
+            throw new IllegalArgumentException("Unsupported property data type: " + propertyDefinition.getDataType());
+        }
+
+        String propertyName = propertyDefinition.getSymbolicName();
+        if (propertyDefinition.getCardinality() == PropertyCardinality.MULTI) {
+            StringList stringList = Factory.StringList.createList();
+            if (StringUtils.isNotBlank(value)) {
+                stringList.add(value.trim());
+            }
+            properties.putValue(propertyName, stringList);
+            return;
+        }
+
+        properties.putValue(propertyName, value == null ? "" : value.trim());
+    }
+
+    public static Set<String> collectSelectProperties(List<PropertyDefinition> searchCriteria,
+                                                      PropertyDefinition targetProperty) {
+        Set<String> propertyNames = new LinkedHashSet<>();
+        for (PropertyDefinition criterion : searchCriteria) {
+            propertyNames.add(criterion.getSymbolicName());
+        }
+        propertyNames.add(targetProperty.getSymbolicName());
+        return propertyNames;
+    }
+
+    private static void validateSearchCriterion(PropertyDefinition criterion) {
+        if (criterion.getDataType() != PropertyDataType.STRING) {
+            throw new IllegalArgumentException("Search criteria currently support STRING data type only: "
+                    + criterion.getSymbolicName());
+        }
+    }
+
+    private static void addIfNotBlank(List<String> values, Object rawValue) {
+        if (rawValue == null) {
+            return;
+        }
+        String text = String.valueOf(rawValue).trim();
+        if (!text.isEmpty()) {
+            values.add(text);
+        }
+    }
+
+    public static String escapeSqlLiteral(String value) {
+        return value == null ? "" : value.replace("'", "''");
+    }
+}
+
+
+
+
+
+
+package com.cnb.updater.util;
+
+import com.cnb.updater.config.AppConfig;
+import com.cnb.updater.config.CisExistenceCheck;
+import com.cnb.updater.config.ExcelColumnConfig;
+import com.cnb.updater.config.PropertyCardinality;
+import com.cnb.updater.config.PropertyDataType;
+import com.cnb.updater.config.PropertyDefinition;
+import com.cnb.updater.config.TargetCisConfig;
+import org.apache.commons.lang3.StringUtils;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Properties;
+import java.util.stream.Collectors;
+
+public final class PropertyLoader {
+
+    public static final String CONFIG_FILE_SYSTEM_PROPERTY = "config.file";
+    public static final String DEFAULT_CONFIG_FILE = "config/CISNumberUpdateUtility.properties";
+
+    private PropertyLoader() {
+    }
+
+    public static String resolveConfigPath(String[] args) {
+        String configFromSystemProperty = System.getProperty(CONFIG_FILE_SYSTEM_PROPERTY);
+        if (StringUtils.isNotBlank(configFromSystemProperty)) {
+            return configFromSystemProperty.trim();
+        }
+        if (args != null && args.length > 0 && StringUtils.isNotBlank(args[0])) {
+            return args[0].trim();
+        }
+        return DEFAULT_CONFIG_FILE;
+    }
+
+    public static AppConfig load() throws IOException {
+        return load(DEFAULT_CONFIG_FILE);
+    }
+
+    public static AppConfig load(String configFilePath) throws IOException {
+        Properties props = new Properties();
+        try (InputStream input = new FileInputStream(configFilePath)) {
+            props.load(input);
+        }
+
+        String logPath = props.getProperty("log.path", "logs/cis-update.log");
+        System.setProperty("log.path", logPath);
+
+        List<String> documentClasses = resolveDocumentClasses(props);
+        List<PropertyDefinition> searchCriteria = loadSearchCriteria(props);
+        TargetCisConfig targetCis = loadTargetCisConfig(props);
+
+        return new AppConfig(
+                trimTrailingSlash(require(props, "filenet.uri")),
+                require(props, "filenet.username"),
+                require(props, "filenet.password"),
+                require(props, "filenet.objectStore"),
+                documentClasses,
+                searchCriteria,
+                targetCis,
+                require(props, "input.excel"),
+                loadExcelColumnConfig(props),
+                require(props, "output.searchCsv"),
+                require(props, "output.updatedCsv"),
+                logPath,
+                parseInt(props, "search.batchSize", 500)
+        );
+    }
+
+    private static List<PropertyDefinition> loadSearchCriteria(Properties props) {
+        int count = parseInt(props, "search.criteria.count", -1);
+        if (count < 1) {
+            throw new IllegalArgumentException("search.criteria.count must be at least 1.");
+        }
+
+        List<PropertyDefinition> criteria = new ArrayList<>();
+        for (int index = 1; index <= count; index++) {
+            String prefix = "search.criteria." + index;
+            criteria.add(loadPropertyDefinition(props, prefix));
+        }
+        return criteria;
+    }
+
+    private static TargetCisConfig loadTargetCisConfig(Properties props) {
+        PropertyDefinition propertyDefinition = loadPropertyDefinition(props, "target.cis");
+        CisExistenceCheck existenceCheck = CisExistenceCheck.fromConfig(
+                require(props, "target.cis.existenceCheck"));
+        return new TargetCisConfig(propertyDefinition, existenceCheck);
+    }
+
+    private static ExcelColumnConfig loadExcelColumnConfig(Properties props) {
+        return new ExcelColumnConfig(
+                props.getProperty("input.excel.column.accountNumber", "ACCOUNT_NUMBER").trim(),
+                props.getProperty("input.excel.column.accountName", "ACCOUNT_NAME").trim(),
+                props.getProperty("input.excel.column.cis", "CIS").trim(),
+                props.getProperty("input.excel.column.cisName", "CIS_NAME").trim()
+        );
+    }
+
+    private static PropertyDefinition loadPropertyDefinition(Properties props, String prefix) {
+        return new PropertyDefinition(
+                require(props, prefix + ".symbolicName"),
+                PropertyDataType.fromConfig(require(props, prefix + ".dataType")),
+                PropertyCardinality.fromConfig(require(props, prefix + ".cardinality"))
+        );
+    }
+
+    private static List<String> resolveDocumentClasses(Properties props) {
+        String classes = props.getProperty("document.classes");
+        if (StringUtils.isNotBlank(classes)) {
+            return Arrays.stream(classes.split(","))
+                    .map(String::trim)
+                    .filter(StringUtils::isNotBlank)
+                    .collect(Collectors.toList());
+        }
+
+        String singleClass = props.getProperty("document.className");
+        if (StringUtils.isBlank(singleClass)) {
+            throw new IllegalArgumentException("Missing required property: document.className or document.classes");
+        }
+
+        List<String> result = new ArrayList<>();
+        result.add(singleClass.trim());
+        return result;
+    }
+
+    private static String require(Properties props, String key) {
+        String value = props.getProperty(key);
+        if (StringUtils.isBlank(value)) {
+            throw new IllegalArgumentException("Missing required property: " + key);
+        }
+        return value.trim();
+    }
+
+    private static int parseInt(Properties props, String key, int defaultValue) {
+        String value = props.getProperty(key);
+        if (StringUtils.isBlank(value)) {
+            return defaultValue;
+        }
+        return Integer.parseInt(value.trim());
+    }
+
+    private static String trimTrailingSlash(String uri) {
+        if (uri.endsWith("/")) {
+            return uri.substring(0, uri.length() - 1);
+        }
+        return uri;
+    }
+}
+
+
+
+
+
+
+package com.cnb.updater.util;
+
+import com.cnb.updater.config.AppConfig;
+import com.cnb.updater.config.PropertyDefinition;
+import org.apache.commons.lang3.StringUtils;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+public final class ValidationUtil {
+
+    private ValidationUtil() {
+    }
+
+    public static void validateForSearchUtility(AppConfig config) {
+        validateCommonConfig(config);
+        validateReadableFile(config.getInputExcel(), "input.excel");
+        validateWritableParent(config.getOutputSearchCsv(), "output.searchCsv");
+    }
+
+    public static void validateForUpdateUtility(AppConfig config) {
+        validateCommonConfig(config);
+        validateReadableFile(config.getOutputSearchCsv(), "output.searchCsv");
+        validateWritableParent(config.getOutputUpdatedCsv(), "output.updatedCsv");
+    }
+
+    private static void validateCommonConfig(AppConfig config) {
+        if (config.getDocumentClasses().isEmpty()) {
+            throw new IllegalArgumentException("At least one document class must be configured.");
+        }
+        if (config.getSearchCriteria().isEmpty()) {
+            throw new IllegalArgumentException("At least one search criterion must be configured.");
+        }
+        for (PropertyDefinition criterion : config.getSearchCriteria()) {
+            if (StringUtils.isBlank(criterion.getSymbolicName())) {
+                throw new IllegalArgumentException("Search criterion symbolicName must be configured.");
+            }
+        }
+        if (config.getTargetCis() == null
+                || config.getTargetCis().getPropertyDefinition() == null
+                || StringUtils.isBlank(config.getTargetCis().getPropertyDefinition().getSymbolicName())) {
+            throw new IllegalArgumentException("target.cis.symbolicName must be configured.");
+        }
+    }
+
+    private static void validateReadableFile(String filePath, String propertyName) {
+        Path path = Paths.get(filePath);
+        if (!Files.isRegularFile(path)) {
+            throw new IllegalArgumentException("Configured file does not exist or is not readable: "
+                    + propertyName + "=" + filePath);
+        }
+    }
+
+    private static void validateWritableParent(String filePath, String propertyName) {
+        File file = new File(filePath);
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IllegalArgumentException("Unable to create output directory for "
+                    + propertyName + "=" + filePath);
+        }
+        if (parent != null && !parent.canWrite()) {
+            throw new IllegalArgumentException("Output directory is not writable for "
+                    + propertyName + "=" + filePath);
+        }
+    }
+}
+
+
+
+# IBM FileNet Connection
+filenet.uri=http://192.168.4.62:9080/wsi/FNCEWS40MTOM/
+filenet.username=p8admin
+filenet.password=Ebla1234
+filenet.objectStore=BankingOS
+
+# Document class
+document.className=CNBAccounts
+document.classes=
+
+# Search criteria (AND logic between configured criteria)
+# Set count=1 to search using one property only.
+# Set count=2 to require both criteria to match the Excel ACCOUNT_NUMBER.
+search.criteria.count=1
+#search.criteria.1.symbolicName=AccountNumber
+#search.criteria.1.dataType=String
+#search.criteria.1.cardinality=SINGLE
+search.criteria.1.symbolicName=AccountNum
+search.criteria.1.dataType=String
+search.criteria.1.cardinality=MULTI
+
+# Example second criterion (uncomment and set count=2 when confirmed with peers)
+# search.criteria.count=2
+# search.criteria.2.symbolicName=AccountNum
+# search.criteria.2.dataType=String
+# search.criteria.2.cardinality=MULTI
+
+# Target CIS property to evaluate and update
+target.cis.symbolicName=CISNumber
+target.cis.dataType=String
+target.cis.cardinality=MULTI
+
+# ANY_VALUE     = treat as EXIST when any CIS value is present (skip update)
+# VALUE_IN_LIST = treat as EXIST only when Excel CIS already exists in the list
+target.cis.existenceCheck=ANY_VALUE
+
+# Input / Output
+input.excel=D:/Rameshwar/CISNumberUpdateUtility/input/Book2.xlsx
+input.excel.column.accountNumber=ACCOUNT_NUMBER
+input.excel.column.accountName=ACCOUNT_NAME
+input.excel.column.cis=CIS_NUMBER
+input.excel.column.cisName=CIS_NAME
+output.searchCsv=D:/Rameshwar/CISNumberUpdateUtility/output/search-results.csv
+output.updatedCsv=D:/Rameshwar/CISNumberUpdateUtility/output/update-results.csv
+
+# Search batch size for FileNet result paging
+search.batchSize=500
+
+# Logging
+log.path=logs/cis-update.log
+
+
+
+
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="Console" target="SYSTEM_OUT">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
+        </Console>
+        <RollingFile name="CisUpdateLog"
+                     fileName="${sys:log.path:-logs/cis-update.log}"
+                     filePattern="logs/cis-update-%i.log">
+            <PatternLayout pattern="%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg%n"/>
+            <Policies>
+                <SizeBasedTriggeringPolicy size="10 MB"/>
+            </Policies>
+            <DefaultRolloverStrategy max="10"/>
+        </RollingFile>
+    </Appenders>
+
+    <Loggers>
+        <Root level="info">
+            <AppenderRef ref="Console"/>
+            <AppenderRef ref="CisUpdateLog"/>
+        </Root>
+    </Loggers>
+</Configuration>
+
+
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.cnb.updater</groupId>
+    <artifactId>CISPropertyUpdateUtility</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>CIS Property Update Utility</name>
+    <description>IBM FileNet utility for bulk CIS Number search and update</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
+        <commons-csv.version>1.10.0</commons-csv.version>
+        <commons-lang3.version>3.12.0</commons-lang3.version>
+        <log4j.version>2.20.0</log4j.version>
+        <poi.version>5.2.3</poi.version>
+        <filenet.jace.version>5.5.8</filenet.jace.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>jace</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>stax-api</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>xlxpScanner</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>xlxpScannerUtils</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>${commons-csv.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>${commons-lang3.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>1.8</source>
+                    <target>1.8</target>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>search-and-generate-csv</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <finalName>CISPropertyUpdateUtility-search</finalName>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.cnb.updater.main.SearchAndGenerateCsvMain</mainClass>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>update-cis-number</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <finalName>CISPropertyUpdateUtility-update</finalName>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.cnb.updater.main.UpdateCisNumberMain</mainClass>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
