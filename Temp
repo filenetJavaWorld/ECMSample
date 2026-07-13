@@ -1,1 +1,503 @@
-temp
+package com.cnb.filenet.utility;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Iterator;
+
+import javax.security.auth.Subject;
+
+import com.filenet.api.collection.PageIterator;
+import com.filenet.api.collection.RepositoryRowSet;
+import com.filenet.api.collection.StringList;
+import com.filenet.api.core.Connection;
+import com.filenet.api.core.Domain;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.Properties;
+import com.filenet.api.query.RepositoryRow;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import com.filenet.api.util.UserContext;
+
+/**
+ * Utility to identify CNB Accounts documents where:
+ *
+ * 1. AccountNumber, a single-value string, is populated.
+ * 2. The AccountNumber value does not exist in AccountNum,
+ *    a multi-value string property.
+ *
+ * The utility only generates a CSV report.
+ * It does not update FileNet documents.
+ */
+public class FindMissingAccountNumbers {
+
+    /*
+     * ============================================================
+     * FileNet connection configuration
+     * ============================================================
+     */
+
+    private static final String CE_URI =
+            "http://localhost:9080/wsi/FNCEWS40MTOM/";
+
+    private static final String USERNAME = "filenet_user";
+
+    private static final String PASSWORD = "filenet_password";
+
+    private static final String OBJECT_STORE_NAME = "CNBOS";
+
+    /*
+     * Use FileNetP8WSI for WSI connection.
+     * Change it if your environment uses a different JAAS stanza.
+     */
+    private static final String JAAS_STANZA = "FileNetP8WSI";
+
+    /*
+     * ============================================================
+     * FileNet class and property symbolic names
+     * ============================================================
+     */
+
+    // Replace with the actual symbolic name of the CNB Accounts class.
+    private static final String DOCUMENT_CLASS_SYMBOLIC_NAME =
+            "CNB_Accounts";
+
+    // Single-value string property.
+    private static final String ACCOUNT_NUMBER_PROPERTY =
+            "AccountNumber";
+
+    // Multi-value string property.
+    private static final String ACCOUNT_NUM_MULTI_PROPERTY =
+            "AccountNum";
+
+    /*
+     * ============================================================
+     * Output configuration
+     * ============================================================
+     */
+
+    // Change this folder path as required.
+    private static final String OUTPUT_FOLDER =
+            "D:\\CNBAccountUtility\\output";
+
+    private static final String OUTPUT_FILE_PREFIX =
+            "Missing_Account_Numbers";
+
+    /*
+     * Number of search results FileNet retrieves in each page.
+     */
+    private static final int PAGE_SIZE = 500;
+
+    /*
+     * When true, comparison ignores uppercase/lowercase differences.
+     *
+     * For account numbers, this usually does not make a difference,
+     * but it is useful if account values contain letters.
+     */
+    private static final boolean IGNORE_CASE = true;
+
+    public static void main(String[] args) {
+
+        UserContext userContext = UserContext.get();
+
+        try {
+            System.out.println("Starting CNB Account Number validation utility...");
+
+            Subject subject = UserContext.createSubject(
+                    null,
+                    USERNAME,
+                    PASSWORD,
+                    JAAS_STANZA
+            );
+
+            userContext.pushSubject(subject);
+
+            Connection connection = Factory.Connection.getConnection(CE_URI);
+
+            Domain domain = Factory.Domain.fetchInstance(
+                    connection,
+                    null,
+                    null
+            );
+
+            ObjectStore objectStore = Factory.ObjectStore.fetchInstance(
+                    domain,
+                    OBJECT_STORE_NAME,
+                    null
+            );
+
+            System.out.println(
+                    "Connected successfully to Object Store: "
+                            + objectStore.get_DisplayName()
+            );
+
+            File outputFile = createOutputFile();
+
+            generateMissingAccountNumberReport(objectStore, outputFile);
+
+            System.out.println();
+            System.out.println("Utility completed successfully.");
+            System.out.println(
+                    "CSV report location: " + outputFile.getAbsolutePath()
+            );
+
+        } catch (Exception exception) {
+            System.err.println("Utility failed.");
+            exception.printStackTrace();
+
+        } finally {
+            try {
+                userContext.popSubject();
+            } catch (Exception exception) {
+                System.err.println(
+                        "Unable to remove the FileNet subject from UserContext."
+                );
+                exception.printStackTrace();
+            }
+        }
+    }
+
+    /**
+     * Searches CNB Accounts documents and creates the CSV report.
+     */
+    private static void generateMissingAccountNumberReport(
+            ObjectStore objectStore,
+            File outputFile) throws Exception {
+
+        String query = buildSearchQuery();
+
+        System.out.println();
+        System.out.println("Executing query:");
+        System.out.println(query);
+        System.out.println();
+
+        SearchSQL searchSQL = new SearchSQL();
+        searchSQL.setQueryString(query);
+
+        SearchScope searchScope = new SearchScope(objectStore);
+
+        /*
+         * The fourth parameter enables continuable searches.
+         * This is important when a large number of documents exists.
+         */
+        RepositoryRowSet rowSet = searchScope.fetchObjects(
+                searchSQL,
+                Integer.valueOf(PAGE_SIZE),
+                null,
+                Boolean.TRUE
+        );
+
+        long documentsRetrieved = 0;
+        long missingAccountNumbers = 0;
+        long skippedBlankAccountNumbers = 0;
+        long processingErrors = 0;
+
+        try (
+                PrintWriter csvWriter = new PrintWriter(
+                        new BufferedWriter(
+                                new OutputStreamWriter(
+                                        new FileOutputStream(outputFile),
+                                        StandardCharsets.UTF_8
+                                )
+                        )
+                )
+        ) {
+            /*
+             * UTF-8 BOM helps Microsoft Excel correctly identify
+             * the CSV encoding.
+             */
+            csvWriter.write('\ufeff');
+
+            csvWriter.println("DocumentId,AccountNumber");
+
+            PageIterator pageIterator = rowSet.pageIterator();
+
+            int pageNumber = 0;
+
+            while (pageIterator.nextPage()) {
+
+                pageNumber++;
+
+                Object[] currentPage = pageIterator.getCurrentPage();
+
+                System.out.println(
+                        "Processing page " + pageNumber
+                                + ", records in page: "
+                                + currentPage.length
+                );
+
+                for (Object rowObject : currentPage) {
+
+                    documentsRetrieved++;
+
+                    try {
+                        RepositoryRow row = (RepositoryRow) rowObject;
+
+                        Properties properties = row.getProperties();
+
+                        String documentId = getDocumentId(properties);
+
+                        String accountNumber = getSingleAccountNumber(
+                                properties
+                        );
+
+                        /*
+                         * The query filters null values, but this additional
+                         * check protects against empty strings or spaces.
+                         */
+                        if (isBlank(accountNumber)) {
+                            skippedBlankAccountNumbers++;
+                            continue;
+                        }
+
+                        accountNumber = accountNumber.trim();
+
+                        StringList accountNumberList =
+                                getMultiValueAccountNumbers(properties);
+
+                        boolean accountNumberExists = containsAccountNumber(
+                                accountNumberList,
+                                accountNumber
+                        );
+
+                        if (!accountNumberExists) {
+
+                            csvWriter.println(
+                                    escapeCsv(documentId)
+                                            + ","
+                                            + escapeCsv(accountNumber)
+                            );
+
+                            missingAccountNumbers++;
+
+                            System.out.println(
+                                    "Missing account number found. "
+                                            + "Document ID: " + documentId
+                                            + ", Account Number: "
+                                            + accountNumber
+                            );
+                        }
+
+                    } catch (Exception documentException) {
+
+                        processingErrors++;
+
+                        System.err.println(
+                                "Error while processing record number: "
+                                        + documentsRetrieved
+                        );
+
+                        documentException.printStackTrace();
+                    }
+                }
+
+                /*
+                 * Write report data to disk after every page.
+                 */
+                csvWriter.flush();
+            }
+        }
+
+        System.out.println();
+        System.out.println("================ Utility Summary ================");
+        System.out.println(
+                "Documents retrieved          : " + documentsRetrieved
+        );
+        System.out.println(
+                "Missing account numbers      : " + missingAccountNumbers
+        );
+        System.out.println(
+                "Blank account numbers skipped: "
+                        + skippedBlankAccountNumbers
+        );
+        System.out.println(
+                "Processing errors            : " + processingErrors
+        );
+        System.out.println("=================================================");
+    }
+
+    /**
+     * Builds the FileNet Content Engine search query.
+     *
+     * Modify the query here if additional conditions are required.
+     */
+    private static String buildSearchQuery() {
+
+        return "SELECT "
+                + "[Id], "
+                + "[" + ACCOUNT_NUMBER_PROPERTY + "], "
+                + "[" + ACCOUNT_NUM_MULTI_PROPERTY + "] "
+                + "FROM [" + DOCUMENT_CLASS_SYMBOLIC_NAME + "] "
+                + "WHERE [" + ACCOUNT_NUMBER_PROPERTY + "] IS NOT NULL";
+    }
+
+    /**
+     * Retrieves the document GUID from the search result.
+     */
+    private static String getDocumentId(Properties properties) {
+
+        if (properties == null
+                || !properties.isPropertyPresent("Id")
+                || properties.get("Id").getObjectValue() == null) {
+
+            return "";
+        }
+
+        return properties.getIdValue("Id").toString();
+    }
+
+    /**
+     * Retrieves the single-value AccountNumber property.
+     */
+    private static String getSingleAccountNumber(Properties properties) {
+
+        if (properties == null
+                || !properties.isPropertyPresent(ACCOUNT_NUMBER_PROPERTY)
+                || properties.get(ACCOUNT_NUMBER_PROPERTY)
+                             .getObjectValue() == null) {
+
+            return null;
+        }
+
+        return properties.getStringValue(ACCOUNT_NUMBER_PROPERTY);
+    }
+
+    /**
+     * Retrieves the multi-value AccountNum property.
+     */
+    private static StringList getMultiValueAccountNumbers(
+            Properties properties) {
+
+        if (properties == null
+                || !properties.isPropertyPresent(
+                        ACCOUNT_NUM_MULTI_PROPERTY
+                )
+                || properties.get(ACCOUNT_NUM_MULTI_PROPERTY)
+                             .getObjectValue() == null) {
+
+            return null;
+        }
+
+        return properties.getStringListValue(
+                ACCOUNT_NUM_MULTI_PROPERTY
+        );
+    }
+
+    /**
+     * Checks whether the single account number already exists
+     * in the multi-value account-number property.
+     */
+    private static boolean containsAccountNumber(
+            StringList accountNumberList,
+            String targetAccountNumber) {
+
+        if (accountNumberList == null
+                || accountNumberList.isEmpty()
+                || isBlank(targetAccountNumber)) {
+
+            return false;
+        }
+
+        Iterator<?> iterator = accountNumberList.iterator();
+
+        while (iterator.hasNext()) {
+
+            Object valueObject = iterator.next();
+
+            if (valueObject == null) {
+                continue;
+            }
+
+            String existingAccountNumber =
+                    valueObject.toString().trim();
+
+            if (IGNORE_CASE) {
+                if (existingAccountNumber.equalsIgnoreCase(
+                        targetAccountNumber.trim())) {
+
+                    return true;
+                }
+            } else {
+                if (existingAccountNumber.equals(
+                        targetAccountNumber.trim())) {
+
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Creates the configurable output directory and CSV file.
+     */
+    private static File createOutputFile() throws Exception {
+
+        File outputDirectory = new File(OUTPUT_FOLDER);
+
+        if (!outputDirectory.exists()) {
+            boolean directoryCreated = outputDirectory.mkdirs();
+
+            if (!directoryCreated) {
+                throw new Exception(
+                        "Unable to create output directory: "
+                                + outputDirectory.getAbsolutePath()
+                );
+            }
+        }
+
+        if (!outputDirectory.isDirectory()) {
+            throw new Exception(
+                    "Configured output path is not a directory: "
+                            + outputDirectory.getAbsolutePath()
+            );
+        }
+
+        String timestamp = new SimpleDateFormat(
+                "yyyyMMdd_HHmmss"
+        ).format(new Date());
+
+        String fileName = OUTPUT_FILE_PREFIX
+                + "_"
+                + timestamp
+                + ".csv";
+
+        return new File(outputDirectory, fileName);
+    }
+
+    /**
+     * Escapes a value so that commas, quotes and line breaks do not
+     * corrupt the CSV structure.
+     */
+    private static String escapeCsv(String value) {
+
+        if (value == null) {
+            return "";
+        }
+
+        boolean requiresQuotes =
+                value.contains(",")
+                || value.contains("\"")
+                || value.contains("\n")
+                || value.contains("\r");
+
+        String escapedValue = value.replace("\"", "\"\"");
+
+        if (requiresQuotes) {
+            return "\"" + escapedValue + "\"";
+        }
+
+        return escapedValue;
+    }
+
+    private static boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+}
