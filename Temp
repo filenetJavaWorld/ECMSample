@@ -1,1 +1,3181 @@
-temp
+package com.cnb.reports;
+
+import com.cnb.reports.config.AppConfig;
+import com.filenet.api.collection.ContentElementList;
+import com.filenet.api.constants.AutoClassify;
+import com.filenet.api.constants.CheckinType;
+import com.filenet.api.constants.PropertyNames;
+import com.filenet.api.constants.RefreshMode;
+import com.filenet.api.constants.ReservationType;
+import com.filenet.api.core.ContentTransfer;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.util.Id;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.nio.file.Path;
+import java.util.Date;
+
+/**
+ * Creates Version 2 of a ReportRequest with the generated Excel report as content.
+ * Version 1 retains the original request JSON for Copy / Reinitiate.
+ */
+public final class ReportAttachmentService {
+
+    private static final Logger LOGGER = LogManager.getLogger(ReportAttachmentService.class);
+    private static final String EXCEL_MIME =
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+
+    private final AppConfig config;
+    private final ObjectStore objectStore;
+
+    public ReportAttachmentService(AppConfig config, ObjectStore objectStore) {
+        this.config = config;
+        this.objectStore = objectStore;
+    }
+
+    public void attachExcelReport(String documentId, Path excelFile, String reportName,
+            ReportStatusService statusService, Date completedAt) throws Exception {
+        Document document = fetchDocument(documentId);
+        String currentStatus = document.getProperties().getStringValue(config.getStatusProperty());
+        LOGGER.info("Checking out ReportRequest {} for Excel attachment (current status={})", documentId, currentStatus);
+
+        document.checkout(ReservationType.EXCLUSIVE, null, null, null);
+        document.save(RefreshMode.REFRESH);
+
+        Document reservation = fetchReservation(document);
+        LOGGER.info("Using reservation {} for ReportRequest {}", reservation.get_Id(), documentId);
+
+        byte[] excelBytes;
+        try (InputStream inputStream = new FileInputStream(excelFile.toFile());
+                ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
+            inputStream.transferTo(buffer);
+            excelBytes = buffer.toByteArray();
+        }
+
+        ContentTransfer excelTransfer = Factory.ContentTransfer.createInstance();
+        excelTransfer.setCaptureSource(new ByteArrayInputStream(excelBytes));
+        excelTransfer.set_ContentType(EXCEL_MIME);
+        excelTransfer.set_RetrievalName(buildExcelRetrievalName(reportName));
+
+        ContentElementList contentElements = Factory.ContentElement.createList();
+        contentElements.add(excelTransfer);
+
+        reservation.set_ContentElements(contentElements);
+        reservation.set_MimeType(EXCEL_MIME);
+        statusService.applyCompletedStatus(reservation, completedAt);
+        reservation.checkin(AutoClassify.DO_NOT_AUTO_CLASSIFY, CheckinType.MAJOR_VERSION);
+        reservation.save(RefreshMode.REFRESH);
+
+        LOGGER.info("Checked in ReportRequest {} with Excel-only content {}", documentId, excelFile);
+    }
+
+    private Document fetchReservation(Document document) {
+        Document reservation = (Document) document.get_Reservation();
+        if (reservation == null) {
+            throw new IllegalStateException("Reservation was not created for document " + document.get_Id());
+        }
+
+        PropertyFilter filter = new PropertyFilter();
+        filter.addIncludeProperty(0, null, null, PropertyNames.ID, null);
+        filter.addIncludeProperty(0, null, null, config.getStatusProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getStartDateProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getEndDateProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getLastExecutionDateProperty(), null);
+        filter.addIncludeProperty(0, null, null, PropertyNames.CONTENT_ELEMENTS, null);
+        filter.addIncludeProperty(0, null, null, PropertyNames.MIME_TYPE, null);
+        filter.addIncludeProperty(0, null, null, PropertyNames.RESERVATION, null);
+        filter.addIncludeProperty(0, null, null, PropertyNames.VERSION_SERIES, null);
+        return Factory.Document.fetchInstance(objectStore, reservation.get_Id(), filter);
+    }
+
+    private Document fetchDocument(String documentId) {
+        PropertyFilter filter = new PropertyFilter();
+        filter.addIncludeProperty(0, null, null, PropertyNames.ID, null);
+        filter.addIncludeProperty(0, null, null, config.getStatusProperty(), null);
+        filter.addIncludeProperty(0, null, null, PropertyNames.RESERVATION, null);
+        filter.addIncludeProperty(0, null, null, PropertyNames.VERSION_SERIES, null);
+        return Factory.Document.fetchInstance(objectStore, new Id(documentId), filter);
+    }
+
+    private String buildExcelRetrievalName(String reportName) {
+        String safeName = reportName == null ? "report" : reportName.replaceAll("[\\\\/:*?\"<>|]", "_").trim();
+        if (safeName.isEmpty()) {
+            safeName = "report";
+        }
+        return safeName.endsWith(".xlsx") ? safeName : safeName + ".xlsx";
+    }
+}
+
+
+
+
+package com.cnb.reports;
+
+import com.cnb.reports.config.AppConfig;
+import com.cnb.reports.email.EmailService;
+import com.cnb.reports.email.ReportRequestEmailContext;
+import com.cnb.reports.email.ReportRequestEmailContextFactory;
+import com.cnb.reports.model.ReportExecutionResult;
+import com.cnb.reports.model.ReportRequestPayload;
+import com.cnb.reports.model.ReportRequestSummary;
+import com.cnb.reports.model.ResultColumn;
+import com.cnb.reports.util.CePropertyMetadataResolver;
+import com.cnb.reports.util.SqlValidationUtil;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Date;
+import java.util.concurrent.Callable;
+
+/**
+ * Processes a single claimed ReportRequest end-to-end.
+ */
+public final class ReportExecutionWorker implements Callable<ReportExecutionResult> {
+
+    private static final Logger LOGGER = LogManager.getLogger(ReportExecutionWorker.class);
+    private static final DateTimeFormatter FILE_TS = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+
+    private final AppConfig config;
+    private final FileNetConnectionManager connectionManager;
+    private final ReportRequestSummary summary;
+    private final EmailService emailService;
+
+    public ReportExecutionWorker(AppConfig config, FileNetConnectionManager connectionManager,
+            ReportRequestSummary summary) {
+        this.config = config;
+        this.connectionManager = connectionManager;
+        this.summary = summary;
+        this.emailService = new EmailService(config);
+    }
+
+    @Override
+    public ReportExecutionResult call() {
+        String documentId = summary.getDocumentId();
+        connectionManager.ensureSubjectOnCurrentThread();
+        ReportRequestSummary latestSummary = null;
+        ReportRequestPayload payload = null;
+        try {
+            ReportRequestClaimService claimService =
+                    new ReportRequestClaimService(config, connectionManager.getObjectStore());
+            if (!claimService.tryClaim(documentId)) {
+                return ReportExecutionResult.builder(documentId)
+                        .success(false)
+                        .message("ReportRequest was not claimed.")
+                        .build();
+            }
+
+            ReportRequestPayloadReader payloadReader =
+                    new ReportRequestPayloadReader(config, connectionManager.getObjectStore());
+            latestSummary = payloadReader.readSummary(documentId);
+            String jsonPayload = payloadReader.readJsonPayload(documentId);
+
+            ReportRequestPayloadParser parser = new ReportRequestPayloadParser();
+            payload = parser.parse(jsonPayload, latestSummary);
+
+            if (!SqlValidationUtil.isUsableSql(payload.getSqlQuery())) {
+                payload.setSqlQuery(latestSummary.getSqlQuery());
+            }
+
+            LOGGER.info(
+                    "Executing ReportRequest documentId={}, reportRequestId={}, reportName={}, objectStore={}, "
+                            + "class={}, includeSubclasses={}, searchScope={}, folderId={}, folderPath={}, "
+                            + "criteriaCount={}, resultColumnCount={}",
+                    documentId,
+                    payload.getReportRequestId(),
+                    payload.getReportName(),
+                    firstNonBlank(payload.getObjectStoreName(), payload.getRepositoryName()),
+                    payload.getTargetClassSymbolicName(),
+                    payload.isIncludeSubclasses(),
+                    payload.getSearchScope(),
+                    payload.getFolderId(),
+                    payload.getFolderPath(),
+                    payload.getCriteria().size(),
+                    payload.getResultColumns().size());
+
+            CePropertyMetadataResolver metadataResolver =
+                    new CePropertyMetadataResolver(connectionManager.getObjectStore());
+            FileNetQueryBuilder queryBuilder = new FileNetQueryBuilder(metadataResolver);
+            final String sql = queryBuilder.buildQuery(payload);
+            LOGGER.info("ReportRequest {} generated SQL: {}", documentId, sql);
+
+            FileNetQueryExecutor queryExecutor = new FileNetQueryExecutor(connectionManager.getObjectStore());
+
+            Path excelPath = buildExcelOutputPath(documentId, payload.getReportName());
+            ExcelReportWriter excelWriter = new ExcelReportWriter(config);
+            final java.util.List<ResultColumn> resultColumns = payload.getResultColumns();
+            ExcelReportWriter.WriteResult writeResult =
+                    excelWriter.writeReport(excelPath, payload.getReportName(), resultColumns,
+                            rowConsumer -> {
+                                try {
+                                    queryExecutor.execute(sql, resultColumns, rowConsumer);
+                                } catch (Exception ex) {
+                                    throw new RuntimeException(ex);
+                                }
+                            });
+            long rowCount = writeResult.getRowCount();
+
+            Date completedAt = new Date();
+            ReportStatusService statusService = new ReportStatusService(config, connectionManager.getObjectStore());
+            ReportAttachmentService attachmentService =
+                    new ReportAttachmentService(config, connectionManager.getObjectStore());
+            // Version 2 = Excel + Completed. Version 1 keeps request JSON.
+            attachmentService.attachExcelReport(documentId, writeResult.getOutputFile(), payload.getReportName(),
+                    statusService, completedAt);
+
+            ReportOutputArchiveService archiveService = new ReportOutputArchiveService(config);
+            Path archivedCopy = archiveService.archiveCompletedReport(writeResult.getOutputFile());
+
+            ReportRequestSummary postSummary = payloadReader.readSummary(documentId);
+            ReportRequestEmailContext emailContext = ReportRequestEmailContextFactory.from(
+                    config, connectionManager.getObjectStore(), postSummary, payload, config.getCompletedStatus());
+            emailService.sendCompletionEmail(emailContext);
+
+            LOGGER.info("Completed ReportRequest {} with {} rows. Excel={} archived={}",
+                    documentId, rowCount, excelPath, archivedCopy);
+            return ReportExecutionResult.builder(documentId)
+                    .success(true)
+                    .message("Report execution completed.")
+                    .generatedSql(sql)
+                    .rowCount(rowCount)
+                    .excelFilePath(archivedCopy.toString())
+                    .build();
+        } catch (Exception ex) {
+            LOGGER.error("Failed processing ReportRequest {}", documentId, ex);
+            try {
+                ReportStatusService statusService = new ReportStatusService(config, connectionManager.getObjectStore());
+                statusService.markFailed(documentId, new Date());
+                sendFailureEmail(documentId, latestSummary, payload);
+            } catch (Exception statusEx) {
+                LOGGER.error("Failed to update failed status for ReportRequest {}", documentId, statusEx);
+            }
+            return ReportExecutionResult.builder(documentId)
+                    .success(false)
+                    .message(ex.getMessage())
+                    .error(ex)
+                    .build();
+        } finally {
+            connectionManager.clearSubjectOnCurrentThread();
+        }
+    }
+
+    private void sendFailureEmail(String documentId, ReportRequestSummary latestSummary, ReportRequestPayload payload) {
+        try {
+            ReportRequestPayloadReader payloadReader =
+                    new ReportRequestPayloadReader(config, connectionManager.getObjectStore());
+            ReportRequestSummary failedSummary = payloadReader.readSummary(documentId);
+            ReportRequestPayload emailPayload = payload;
+            if (emailPayload == null && latestSummary != null) {
+                try {
+                    String jsonPayload = payloadReader.readJsonPayload(documentId);
+                    emailPayload = new ReportRequestPayloadParser().parse(jsonPayload, failedSummary);
+                } catch (Exception readEx) {
+                    LOGGER.warn("Unable to read JSON payload for failure email on ReportRequest {}", documentId, readEx);
+                }
+            }
+            ReportRequestEmailContext emailContext = ReportRequestEmailContextFactory.from(
+                    config, connectionManager.getObjectStore(), failedSummary, emailPayload, config.getFailedStatus());
+            emailService.sendFailureEmail(emailContext);
+        } catch (Exception emailEx) {
+            LOGGER.error("Failed to send failure email for ReportRequest {}", documentId, emailEx);
+        }
+    }
+
+    private Path buildExcelOutputPath(String documentId, String reportName) {
+        String safeName = reportName == null ? "report" : reportName.replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (safeName.trim().isEmpty()) {
+            safeName = "report";
+        }
+        String fileName = safeName + "-" + documentId + "-" + LocalDateTime.now().format(FILE_TS) + ".xlsx";
+        return config.getOutputTempFolder().resolve(fileName);
+    }
+
+    private static String firstNonBlank(String first, String second) {
+        if (first != null && !first.trim().isEmpty()) {
+            return first.trim();
+        }
+        return second;
+    }
+}
+
+
+package com.cnb.reports;
+
+import com.cnb.reports.config.AppConfig;
+import com.filenet.api.constants.AutoClassify;
+import com.filenet.api.constants.CheckinType;
+import com.filenet.api.constants.PropertyNames;
+import com.filenet.api.constants.RefreshMode;
+import com.filenet.api.constants.ReservationType;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.core.VersionSeries;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.util.Id;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.Date;
+
+/**
+ * Updates ReportRequest status and execution date properties.
+ */
+public final class ReportStatusService {
+
+    private static final Logger LOGGER = LogManager.getLogger(ReportStatusService.class);
+
+    private final AppConfig config;
+    private final ObjectStore objectStore;
+
+    public ReportStatusService(AppConfig config, ObjectStore objectStore) {
+        this.config = config;
+        this.objectStore = objectStore;
+    }
+
+    public void markInProgress(String documentId, Date startDate) throws Exception {
+        updateStatus(fetchCurrentVersionDocument(documentId), config.getInProgressStatus(), startDate, null, null);
+    }
+
+    public void markCompleted(String documentId, Date endDate) throws Exception {
+        updateStatus(fetchCurrentVersionDocument(documentId), config.getCompletedStatus(), null, endDate, endDate);
+    }
+
+    /**
+     * Creates Version 2 for a failed execution (keeps Version 1 request JSON intact for Copy/Reinitiate).
+     * Existing content is preserved on the reservation; only status/dates are updated before major checkin.
+     */
+    public void markFailed(String documentId, Date endDate) throws Exception {
+        Document document = fetchCurrentVersionDocument(documentId);
+        if (Boolean.TRUE.equals(document.get_IsReserved())) {
+            throw new IllegalStateException("ReportRequest is already checked out: " + documentId);
+        }
+
+        document.checkout(ReservationType.EXCLUSIVE, null, null, null);
+        document.save(RefreshMode.REFRESH);
+
+        Document reservation = (Document) document.get_Reservation();
+        if (reservation == null) {
+            throw new IllegalStateException("Reservation was not created for failed ReportRequest " + documentId);
+        }
+        reservation = Factory.Document.fetchInstance(objectStore, reservation.get_Id(), statusPropertyFilter());
+
+        applyFailedStatus(reservation, endDate);
+        reservation.checkin(AutoClassify.DO_NOT_AUTO_CLASSIFY, CheckinType.MAJOR_VERSION);
+        reservation.save(RefreshMode.REFRESH);
+        LOGGER.info("Checked in Failed Version 2 for ReportRequest {}", documentId);
+    }
+
+    public void applyFailedStatus(Document document, Date endDate) {
+        if (endDate != null) {
+            document.getProperties().putValue(config.getEndDateProperty(), endDate);
+            document.getProperties().putValue(config.getLastExecutionDateProperty(), endDate);
+        }
+        document.getProperties().putValue(config.getStatusProperty(), config.getFailedStatus());
+    }
+
+    public void markCompletedOnDocument(Document document, Date endDate) throws Exception {
+        applyCompletedStatus(document, endDate);
+        document.save(RefreshMode.REFRESH);
+    }
+
+    public void applyCompletedStatus(Document document, Date endDate) {
+        if (endDate != null) {
+            document.getProperties().putValue(config.getEndDateProperty(), endDate);
+            document.getProperties().putValue(config.getLastExecutionDateProperty(), endDate);
+        }
+        document.getProperties().putValue(config.getStatusProperty(), config.getCompletedStatus());
+    }
+
+    private void updateStatus(Document document, String status, Date startDate, Date endDate, Date lastExecutionDate)
+            throws Exception {
+        if (startDate != null) {
+            document.getProperties().putValue(config.getStartDateProperty(), startDate);
+        }
+        if (endDate != null) {
+            document.getProperties().putValue(config.getEndDateProperty(), endDate);
+        }
+        if (lastExecutionDate != null) {
+            document.getProperties().putValue(config.getLastExecutionDateProperty(), lastExecutionDate);
+        }
+        document.getProperties().putValue(config.getStatusProperty(), status);
+        document.save(RefreshMode.REFRESH);
+        LOGGER.info("Updated ReportRequest {} status to {}", document.get_Id(), status);
+    }
+
+    public String readStatus(String documentId) {
+        Document document = fetchDocument(documentId);
+        return document.getProperties().getStringValue(config.getStatusProperty());
+    }
+
+    private Document fetchCurrentVersionDocument(String documentId) {
+        Document document = fetchDocument(documentId);
+        VersionSeries versionSeries = document.get_VersionSeries();
+        if (versionSeries != null) {
+            Object currentVersion = versionSeries.get_CurrentVersion();
+            if (currentVersion instanceof Document) {
+                return fetchDocument(((Document) currentVersion).get_Id().toString());
+            }
+        }
+        return document;
+    }
+
+    private Document fetchDocument(String documentId) {
+        return Factory.Document.fetchInstance(objectStore, new Id(documentId), statusPropertyFilter());
+    }
+
+    private PropertyFilter statusPropertyFilter() {
+        PropertyFilter filter = new PropertyFilter();
+        filter.addIncludeProperty(0, null, null, PropertyNames.ID, null);
+        filter.addIncludeProperty(0, null, null, config.getStatusProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getStartDateProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getEndDateProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getLastExecutionDateProperty(), null);
+        filter.addIncludeProperty(0, null, null, PropertyNames.VERSION_SERIES, null);
+        filter.addIncludeProperty(0, null, null, PropertyNames.RESERVATION, null);
+        filter.addIncludeProperty(0, null, null, PropertyNames.IS_RESERVED, null);
+        filter.addIncludeProperty(0, null, null, PropertyNames.CONTENT_ELEMENTS, null);
+        return filter;
+    }
+}
+
+
+
+package com.cnb.reports;
+
+import com.cnb.reports.config.AppConfig;
+import com.cnb.reports.model.ReportRequestSummary;
+import com.cnb.reports.util.P8PropertyReader;
+import com.cnb.reports.util.SqlValidationUtil;
+import com.filenet.api.collection.IndependentObjectSet;
+import com.filenet.api.collection.PageIterator;
+import com.filenet.api.collection.StringList;
+import com.filenet.api.constants.PropertyNames;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.Properties;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * Finds processable ReportRequest documents in FileNet.
+ */
+public final class ReportRequestFinder {
+
+    private static final Logger LOGGER = LogManager.getLogger(ReportRequestFinder.class);
+
+    private final AppConfig config;
+    private final ObjectStore objectStore;
+
+    public ReportRequestFinder(AppConfig config, ObjectStore objectStore) {
+        this.config = config;
+        this.objectStore = objectStore;
+    }
+
+    public List<ReportRequestSummary> findProcessableRequests() throws Exception {
+        String sql = buildFindSql(config.getProcessableStatuses());
+        LOGGER.info("Searching for processable ReportRequest documents using SQL: {}", sql);
+
+        SearchSQL searchSQL = new SearchSQL(sql);
+        SearchScope scope = new SearchScope(objectStore);
+        PropertyFilter filter = buildPropertyFilter();
+        IndependentObjectSet resultSet = scope.fetchObjects(searchSQL, config.getPollBatchSize(), filter, Boolean.TRUE);
+
+        List<ReportRequestSummary> summaries = new ArrayList<>();
+        PageIterator pageIterator = resultSet.pageIterator();
+        if (pageIterator.nextPage()) {
+            Object[] page = pageIterator.getCurrentPage();
+            if (page != null) {
+                for (Object item : page) {
+                    if (item instanceof Document) {
+                        summaries.add(toSummary((Document) item));
+                    }
+                }
+            }
+        }
+        LOGGER.info("Found {} processable ReportRequest documents", summaries.size());
+        return summaries;
+    }
+
+    private String buildFindSql(Set<String> statuses) {
+        String statusClause;
+        if (statuses.size() == 1) {
+            statusClause = config.getStatusProperty() + " = '"
+                    + SqlValidationUtil.escapeSqlString(statuses.iterator().next()) + "'";
+        } else {
+            statusClause = config.getStatusProperty() + " IN ("
+                    + statuses.stream()
+                            .map(status -> "'" + SqlValidationUtil.escapeSqlString(status) + "'")
+                            .collect(Collectors.joining(", "))
+                    + ")";
+        }
+
+        return "SELECT [This], Id, DocumentTitle, DateCreated, "
+                + config.getStatusProperty() + ", "
+                + config.getTargetClassProperty() + ", "
+                + config.getRepositoryNameProperty() + ", "
+                + config.getCriteriaProperty() + ", "
+                + config.getResultColumnsProperty() + ", "
+                + config.getSqlQueryProperty() + ", "
+                + config.getSendEmailToProperty() + ", "
+                + config.getSendEmailCcProperty() + ", "
+                + config.getStartDateProperty() + ", "
+                + config.getEndDateProperty()
+                + " FROM " + config.getReportClass()
+                + " WHERE " + statusClause
+                + " AND IsCurrentVersion = TRUE"
+                + " ORDER BY DateCreated ASC";
+    }
+
+    private PropertyFilter buildPropertyFilter() {
+        PropertyFilter filter = new PropertyFilter();
+        filter.addIncludeProperty(0, null, null, PropertyNames.ID, null);
+        filter.addIncludeProperty(0, null, null, "DocumentTitle", null);
+        filter.addIncludeProperty(0, null, null, config.getStatusProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getTargetClassProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getRepositoryNameProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getCriteriaProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getResultColumnsProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getSqlQueryProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getSendEmailToProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getSendEmailCcProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getStartDateProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getEndDateProperty(), null);
+        return filter;
+    }
+
+    private ReportRequestSummary toSummary(Document document) {
+        Properties props = document.getProperties();
+        return new ReportRequestSummary(
+                document.get_Id().toString(),
+                P8PropertyReader.asString(props, "DocumentTitle"),
+                P8PropertyReader.asString(props, config.getStatusProperty()),
+                P8PropertyReader.asString(props, config.getTargetClassProperty()),
+                P8PropertyReader.asString(props, config.getRepositoryNameProperty()),
+                "",
+                readStringList(props, config.getCriteriaProperty()),
+                readStringList(props, config.getResultColumnsProperty()),
+                P8PropertyReader.asString(props, config.getSqlQueryProperty()),
+                readStringList(props, config.getSendEmailToProperty()),
+                readStringList(props, config.getSendEmailCcProperty()),
+                P8PropertyReader.formatDateTime(P8PropertyReader.asDate(props, config.getStartDateProperty())),
+                P8PropertyReader.formatDateTime(P8PropertyReader.asDate(props, config.getEndDateProperty())));
+    }
+
+    private List<String> readStringList(Properties props, String propertyName) {
+        List<String> values = new ArrayList<>();
+        if (!props.isPropertyPresent(propertyName)) {
+            return values;
+        }
+        try {
+            StringList list = props.getStringListValue(propertyName);
+            if (list != null) {
+                for (Object item : list) {
+                    if (item != null) {
+                        String text = String.valueOf(item).trim();
+                        if (!text.isEmpty()) {
+                            values.add(text);
+                        }
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            String single = P8PropertyReader.asString(props, propertyName);
+            if (!single.isEmpty()) {
+                values.add(single);
+            }
+        }
+        return values;
+    }
+}
+
+
+
+
+package com.cnb.reports.util;
+
+import com.filenet.api.property.Properties;
+
+import java.lang.reflect.Method;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Date;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
+import java.util.TimeZone;
+
+public final class P8PropertyReader {
+
+    private static final String MULTI_VALUE_SEPARATOR = " | ";
+
+    private P8PropertyReader() {
+    }
+
+    public static String asString(Properties props, String name) {
+        if (props == null || !props.isPropertyPresent(name)) {
+            return "";
+        }
+        try {
+            String value = props.getStringValue(name);
+            return value != null ? value : "";
+        } catch (Exception ex) {
+            try {
+                Object value = props.getObjectValue(name);
+                return value != null ? String.valueOf(formatDisplayValue(value)) : "";
+            } catch (Exception ignored) {
+                return "";
+            }
+        }
+    }
+
+    public static Date asDate(Properties props, String name) {
+        if (props == null || !props.isPropertyPresent(name)) {
+            return null;
+        }
+        try {
+            return props.getDateTimeValue(name);
+        } catch (Exception ex) {
+            try {
+                Object value = props.getObjectValue(name);
+                if (value instanceof Date) {
+                    return (Date) value;
+                }
+            } catch (Exception ignored) {
+                // ignore
+            }
+            return null;
+        }
+    }
+
+    public static String formatDateTime(Date date) {
+        if (date == null) {
+            return "";
+        }
+        SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+        fmt.setTimeZone(TimeZone.getDefault());
+        return fmt.format(date);
+    }
+
+    public static Object readPropertyValue(Properties props, String propertyName) {
+        if (props == null || !props.isPropertyPresent(propertyName)) {
+            return "";
+        }
+        try {
+            return props.getObjectValue(propertyName);
+        } catch (Exception ex) {
+            return asString(props, propertyName);
+        }
+    }
+
+    /**
+     * Converts a FileNet property value into a report-friendly display value.
+     * Multi-valued lists become pipe-separated text (e.g. {@code a | b | c}).
+     */
+    public static Object formatDisplayValue(Object value) {
+        if (value == null) {
+            return "";
+        }
+        if (value instanceof Date) {
+            return formatDateTime((Date) value);
+        }
+        if (value instanceof Number || value instanceof Boolean) {
+            return value;
+        }
+        if (value instanceof CharSequence) {
+            return value.toString();
+        }
+        if (value.getClass().isArray()) {
+            return joinValues(arrayToList(value));
+        }
+        List<Object> multiValues = extractMultiValues(value);
+        if (multiValues != null) {
+            return joinValues(multiValues);
+        }
+        String asText = String.valueOf(value);
+        String fromEngineToString = extractCurrentListFromEngineToString(asText);
+        return fromEngineToString != null ? fromEngineToString : asText;
+    }
+
+    private static List<Object> extractMultiValues(Object value) {
+        if (value instanceof Map) {
+            return null;
+        }
+        if (value instanceof Collection) {
+            return new ArrayList<Object>((Collection<?>) value);
+        }
+        if (value instanceof Iterable) {
+            List<Object> values = new ArrayList<>();
+            for (Object item : (Iterable<?>) value) {
+                values.add(item);
+            }
+            return values;
+        }
+        if (value instanceof Iterator) {
+            List<Object> values = new ArrayList<>();
+            Iterator<?> iterator = (Iterator<?>) value;
+            while (iterator.hasNext()) {
+                values.add(iterator.next());
+            }
+            return values;
+        }
+        try {
+            Method iteratorMethod = value.getClass().getMethod("iterator");
+            Object iteratorObj = iteratorMethod.invoke(value);
+            if (iteratorObj instanceof Iterator) {
+                List<Object> values = new ArrayList<>();
+                Iterator<?> iterator = (Iterator<?>) iteratorObj;
+                while (iterator.hasNext()) {
+                    values.add(iterator.next());
+                }
+                return values;
+            }
+        } catch (Exception ignored) {
+            // Not a FileNet-style list collection.
+        }
+        return null;
+    }
+
+    private static List<Object> arrayToList(Object array) {
+        int length = java.lang.reflect.Array.getLength(array);
+        List<Object> values = new ArrayList<>(length);
+        for (int i = 0; i < length; i++) {
+            values.add(java.lang.reflect.Array.get(array, i));
+        }
+        return values;
+    }
+
+    private static String joinValues(List<Object> values) {
+        if (values == null || values.isEmpty()) {
+            return "";
+        }
+        List<String> parts = new ArrayList<>(values.size());
+        for (Object item : values) {
+            if (item == null) {
+                continue;
+            }
+            if (item instanceof Date) {
+                parts.add(formatDateTime((Date) item));
+            } else {
+                String text = String.valueOf(item).trim();
+                if (!text.isEmpty()) {
+                    parts.add(text);
+                }
+            }
+        }
+        return String.join(MULTI_VALUE_SEPARATOR, parts);
+    }
+
+    /**
+     * Fallback for FileNet list implementations whose {@code toString()} looks like:
+     * {@code Class=... CurrentList=[a, b, c] DeletedList=[] ...}
+     */
+    private static String extractCurrentListFromEngineToString(String text) {
+        if (text == null || !text.contains("CurrentList=[")) {
+            return null;
+        }
+        int start = text.indexOf("CurrentList=[");
+        if (start < 0) {
+            return null;
+        }
+        start += "CurrentList=[".length();
+        int end = text.indexOf(']', start);
+        if (end < start) {
+            return null;
+        }
+        String inner = text.substring(start, end).trim();
+        if (inner.isEmpty()) {
+            return "";
+        }
+        String[] parts = inner.split("\\s*,\\s*");
+        List<String> cleaned = new ArrayList<>();
+        for (String part : parts) {
+            if (part != null && !part.trim().isEmpty()) {
+                cleaned.add(part.trim());
+            }
+        }
+        return String.join(MULTI_VALUE_SEPARATOR, cleaned);
+    }
+}
+
+
+package com.cnb.reports.util;
+
+import org.junit.jupiter.api.Test;
+
+import java.util.Arrays;
+import java.util.Date;
+import java.util.LinkedHashSet;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class P8PropertyReaderTest {
+
+    @Test
+    void formatsMultiValueCollectionsAsPipeSeparated() {
+        Object formatted = P8PropertyReader.formatDisplayValue(
+                Arrays.asList("1000005002", "1000005102", "1000005202"));
+        assertEquals("1000005002 | 1000005102 | 1000005202", formatted);
+    }
+
+    @Test
+    void formatsEngineListToStringFallback() {
+        String engineToString = "Class=com.filenet.apiimpl.collection.StringListImpl IsDirty=false "
+                + "IsReadOnly=false CurrentList=[1000005002, 1000005102, 1000005202] DeletedList=[] "
+                + "InternalClassType=java.lang.String OriginalList=[1000005002, 1000005102, 1000005202]";
+        Object formatted = P8PropertyReader.formatDisplayValue(engineToString);
+        assertEquals("1000005002 | 1000005102 | 1000005202", formatted);
+    }
+
+    @Test
+    void formatsSetAndDateValues() {
+        Object multi = P8PropertyReader.formatDisplayValue(new LinkedHashSet<>(Arrays.asList(1, 2, 3)));
+        assertEquals("1 | 2 | 3", multi);
+
+        Date date = new Date(0L);
+        Object formattedDate = P8PropertyReader.formatDisplayValue(date);
+        assertTrue(String.valueOf(formattedDate).matches("\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}"));
+    }
+}
+
+
+
+package com.cnb.reports;
+
+import com.cnb.reports.config.AppConfig;
+import com.cnb.reports.model.ResultColumn;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.poi.ss.usermodel.BorderStyle;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellStyle;
+import org.apache.poi.ss.usermodel.FillPatternType;
+import org.apache.poi.ss.usermodel.Font;
+import org.apache.poi.ss.usermodel.IndexedColors;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.util.CellRangeAddress;
+import org.apache.poi.xssf.streaming.SXSSFSheet;
+import org.apache.poi.xssf.streaming.SXSSFWorkbook;
+
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+
+/**
+ * Streams query results into an Excel workbook using Apache POI SXSSF.
+ */
+public final class ExcelReportWriter {
+
+    private static final Logger LOGGER = LogManager.getLogger(ExcelReportWriter.class);
+
+    private final AppConfig config;
+
+    public ExcelReportWriter(AppConfig config) {
+        this.config = config;
+    }
+
+    public WriteResult writeReport(Path outputFile, String reportName, List<ResultColumn> columns,
+            Consumer<Consumer<Map<String, Object>>> rowSource) throws Exception {
+        Files.createDirectories(outputFile.getParent());
+        int maxRowsPerSheet = config.getExcelMaxRowsPerSheet();
+        AtomicLong totalRows = new AtomicLong();
+        AtomicInteger sheetIndex = new AtomicInteger(1);
+        AtomicInteger rowsOnSheet = new AtomicInteger(0);
+        AtomicReference<Sheet> currentSheet = new AtomicReference<>();
+
+        try (SXSSFWorkbook workbook = new SXSSFWorkbook(200);
+                OutputStream out = Files.newOutputStream(outputFile)) {
+            CellStyle headerStyle = createHeaderStyle(workbook);
+            CellStyle dataStyle = createDataStyle(workbook);
+
+            currentSheet.set(createSheet(workbook, sheetIndex.get()));
+            writeHeader(currentSheet.get(), columns, headerStyle);
+            rowsOnSheet.set(0);
+
+            rowSource.accept(row -> {
+                if (rowsOnSheet.get() >= maxRowsPerSheet) {
+                    finalizeSheet(currentSheet.get(), columns.size(), rowsOnSheet.get());
+                    sheetIndex.incrementAndGet();
+                    currentSheet.set(createSheet(workbook, sheetIndex.get()));
+                    writeHeader(currentSheet.get(), columns, headerStyle);
+                    rowsOnSheet.set(0);
+                }
+                writeRow(currentSheet.get(), columns, row, rowsOnSheet.get() + 1, dataStyle);
+                rowsOnSheet.incrementAndGet();
+                totalRows.incrementAndGet();
+            });
+
+            finalizeSheet(currentSheet.get(), columns.size(), rowsOnSheet.get());
+            workbook.write(out);
+            workbook.dispose();
+        }
+
+        LOGGER.info("Excel report written to {} ({} rows, {} sheets)", outputFile, totalRows.get(), sheetIndex.get());
+        return new WriteResult(outputFile, totalRows.get(), sheetIndex.get());
+    }
+
+    private Sheet createSheet(SXSSFWorkbook workbook, int index) {
+        SXSSFSheet sheet = workbook.createSheet("Report Results " + index);
+        sheet.trackAllColumnsForAutoSizing();
+        return sheet;
+    }
+
+    private void writeHeader(Sheet sheet, List<ResultColumn> columns, CellStyle headerStyle) {
+        Row header = sheet.createRow(0);
+        for (int i = 0; i < columns.size(); i++) {
+            Cell cell = header.createCell(i);
+            cell.setCellValue(columns.get(i).displayHeader());
+            cell.setCellStyle(headerStyle);
+        }
+    }
+
+    private void writeRow(Sheet sheet, List<ResultColumn> columns, Map<String, Object> rowData, int rowIndex,
+            CellStyle dataStyle) {
+        Row row = sheet.createRow(rowIndex);
+        for (int i = 0; i < columns.size(); i++) {
+            Object value = rowData.get(columns.get(i).getPropertySymbolicName());
+            Cell cell = row.createCell(i);
+            cell.setCellStyle(dataStyle);
+            if (value == null) {
+                cell.setBlank();
+            } else if (value instanceof Number) {
+                cell.setCellValue(((Number) value).doubleValue());
+            } else if (value instanceof Boolean) {
+                cell.setCellValue((Boolean) value);
+            } else {
+                cell.setCellValue(String.valueOf(value));
+            }
+        }
+    }
+
+    private void finalizeSheet(Sheet sheet, int columnCount, int dataRowCount) {
+        if (sheet == null || columnCount <= 0) {
+            return;
+        }
+        int lastRow = Math.max(dataRowCount, 0);
+        sheet.setAutoFilter(new CellRangeAddress(0, lastRow, 0, columnCount - 1));
+        sheet.createFreezePane(0, 1);
+        if (sheet instanceof SXSSFSheet) {
+            SXSSFSheet sxssfSheet = (SXSSFSheet) sheet;
+            for (int i = 0; i < columnCount; i++) {
+                try {
+                    sxssfSheet.autoSizeColumn(i);
+                    int width = sxssfSheet.getColumnWidth(i);
+                    sxssfSheet.setColumnWidth(i, Math.min(Math.max(width + 512, 4000), 15000));
+                } catch (Exception ex) {
+                    LOGGER.debug("Unable to autosize column {}", i, ex);
+                }
+            }
+        }
+    }
+
+    private CellStyle createHeaderStyle(SXSSFWorkbook workbook) {
+        CellStyle style = workbook.createCellStyle();
+        style.setFillForegroundColor(IndexedColors.ROYAL_BLUE.getIndex());
+        style.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+        applyBorders(style);
+
+        Font font = workbook.createFont();
+        font.setBold(true);
+        font.setColor(IndexedColors.WHITE.getIndex());
+        style.setFont(font);
+        return style;
+    }
+
+    private CellStyle createDataStyle(SXSSFWorkbook workbook) {
+        CellStyle style = workbook.createCellStyle();
+        applyBorders(style);
+        style.setWrapText(true);
+        return style;
+    }
+
+    private void applyBorders(CellStyle style) {
+        style.setBorderTop(BorderStyle.THIN);
+        style.setBorderBottom(BorderStyle.THIN);
+        style.setBorderLeft(BorderStyle.THIN);
+        style.setBorderRight(BorderStyle.THIN);
+    }
+
+    public static final class WriteResult {
+        private final Path outputFile;
+        private final long rowCount;
+        private final int sheetCount;
+
+        public WriteResult(Path outputFile, long rowCount, int sheetCount) {
+            this.outputFile = outputFile;
+            this.rowCount = rowCount;
+            this.sheetCount = sheetCount;
+        }
+
+        public Path getOutputFile() {
+            return outputFile;
+        }
+
+        public long getRowCount() {
+            return rowCount;
+        }
+
+        public int getSheetCount() {
+            return sheetCount;
+        }
+    }
+}
+
+
+package com.cnb.reports;
+
+import com.cnb.reports.model.ResultColumn;
+import com.cnb.reports.util.P8PropertyReader;
+import com.filenet.api.collection.IndependentObjectSet;
+import com.filenet.api.collection.PageIterator;
+import com.filenet.api.core.IndependentObject;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.Properties;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.function.Consumer;
+
+/**
+ * Executes FileNet Search SQL and streams result rows.
+ */
+public final class FileNetQueryExecutor {
+
+    private static final Logger LOGGER = LogManager.getLogger(FileNetQueryExecutor.class);
+    private static final int PAGE_SIZE = 500;
+
+    private final ObjectStore objectStore;
+
+    public FileNetQueryExecutor(ObjectStore objectStore) {
+        this.objectStore = objectStore;
+    }
+
+    public long execute(String sql, List<ResultColumn> columns, Consumer<Map<String, Object>> rowConsumer)
+            throws Exception {
+        LOGGER.info("Executing FileNet query: {}", sql);
+        SearchSQL searchSQL = new SearchSQL(sql);
+        SearchScope scope = new SearchScope(objectStore);
+        PropertyFilter propertyFilter = buildPropertyFilter(columns);
+        IndependentObjectSet resultSet = scope.fetchObjects(searchSQL, PAGE_SIZE, propertyFilter, Boolean.TRUE);
+
+        long rowCount = 0;
+        PageIterator pageIterator = resultSet.pageIterator();
+        while (pageIterator.nextPage()) {
+            Object[] page = pageIterator.getCurrentPage();
+            if (page == null) {
+                continue;
+            }
+            for (Object item : page) {
+                if (!(item instanceof IndependentObject)) {
+                    continue;
+                }
+                Properties properties = ((IndependentObject) item).getProperties();
+                Map<String, Object> row = new LinkedHashMap<>();
+                for (ResultColumn column : columns) {
+                    String propertyName = column.getPropertySymbolicName();
+                    row.put(propertyName,
+                            P8PropertyReader.formatDisplayValue(
+                                    P8PropertyReader.readPropertyValue(properties, propertyName)));
+                }
+                rowConsumer.accept(row);
+                rowCount++;
+            }
+        }
+        LOGGER.info("Query returned {} rows", rowCount);
+        return rowCount;
+    }
+
+    private PropertyFilter buildPropertyFilter(List<ResultColumn> columns) {
+        PropertyFilter filter = new PropertyFilter();
+        for (ResultColumn column : columns) {
+            filter.addIncludeProperty(0, null, null, column.getPropertySymbolicName(), null);
+        }
+        filter.addIncludeProperty(0, null, null, "Id", null);
+        return filter;
+    }
+}
+
+
+package com.cnb.reports;
+
+import com.cnb.reports.model.PropertyCardinality;
+import com.cnb.reports.model.ReportRequestPayload;
+import com.cnb.reports.model.ResultColumn;
+import com.cnb.reports.model.SearchCriterion;
+import com.cnb.reports.model.SortOption;
+import com.cnb.reports.util.FileNetSqlValueFormatter;
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+class FileNetQueryBuilderTest {
+
+    @Test
+    void buildsQueryWithOperatorsAndSort() {
+        ReportRequestPayload payload = new ReportRequestPayload();
+        payload.setTargetClassSymbolicName("Document");
+        payload.setIncludeSubclasses(true);
+        payload.setResultColumns(Arrays.asList(
+                new ResultColumn("DocumentTitle", "Document Title"),
+                new ResultColumn("Amount", "Amount")));
+
+        SearchCriterion title = new SearchCriterion();
+        title.setPropertySymbolicName("DocumentTitle");
+        title.setOperator("STARTSWITH");
+        title.setDataType("xs:string");
+        title.setCardinality(PropertyCardinality.SINGLE);
+        title.setValues(List.of("abc"));
+
+        SearchCriterion amount = new SearchCriterion();
+        amount.setPropertySymbolicName("Amount");
+        amount.setOperator("GREATERTHAN");
+        amount.setDataType("xs:double");
+        amount.setCardinality(PropertyCardinality.SINGLE);
+        amount.setValues(List.of("10"));
+
+        payload.setCriteria(Arrays.asList(title, amount));
+        payload.setSortOptions(List.of(new SortOption("DocumentTitle", "DESC")));
+
+        String sql = new FileNetQueryBuilder().buildFromPayload(payload);
+        assertTrue(sql.contains("[DocumentTitle] LIKE 'abc%'"));
+        assertTrue(sql.contains("[Amount] > 10"));
+        assertTrue(sql.contains("FROM [Document]"));
+        assertFalse(sql.contains("WITH EXCLUDESUBCLASSES"));
+        assertTrue(sql.contains("ORDER BY [DocumentTitle] DESC"));
+    }
+
+    @Test
+    void usesConfiguredSqlWhenPresent() {
+        ReportRequestPayload payload = new ReportRequestPayload();
+        payload.setTargetClassSymbolicName("Document");
+        payload.setSqlQuery("SELECT Id FROM Document WHERE DocumentTitle = 'x'");
+        payload.setResultColumns(List.of(new ResultColumn("Id", "Id")));
+
+        String sql = new FileNetQueryBuilder().buildQuery(payload);
+        assertEquals("SELECT Id FROM Document WHERE DocumentTitle = 'x'", sql);
+    }
+
+    @Test
+    void buildsInOperatorForSingleAndListProperties() {
+        ReportRequestPayload payload = new ReportRequestPayload();
+        payload.setTargetClassSymbolicName("ClaimDocument");
+        payload.setIncludeSubclasses(false);
+        payload.setResultColumns(List.of(new ResultColumn("DocumentTitle", "Name")));
+        payload.setVersionOption("RELEASEDVERSION");
+
+        SearchCriterion singleIn = new SearchCriterion();
+        singleIn.setPropertySymbolicName("StatusCode");
+        singleIn.setOperator("IN");
+        singleIn.setDataType("xs:string");
+        singleIn.setCardinality(PropertyCardinality.SINGLE);
+        singleIn.setValues(List.of("A", "B"));
+
+        SearchCriterion listInOne = new SearchCriterion();
+        listInOne.setPropertySymbolicName("PageNumberCountList");
+        listInOne.setOperator("IN");
+        listInOne.setDataType("xs:integer");
+        listInOne.setCardinality(PropertyCardinality.LIST);
+        listInOne.setValues(List.of("77"));
+
+        SearchCriterion listInMany = new SearchCriterion();
+        listInMany.setPropertySymbolicName("AmountM");
+        listInMany.setOperator("IN");
+        listInMany.setDataType("xs:double");
+        listInMany.setCardinality(PropertyCardinality.LIST);
+        listInMany.setValues(List.of("1.5", "2.5"));
+
+        payload.setCriteria(Arrays.asList(singleIn, listInOne, listInMany));
+
+        String sql = new FileNetQueryBuilder().buildFromPayload(payload);
+        assertTrue(sql.contains("FROM [ClaimDocument] WITH EXCLUDESUBCLASSES"));
+        assertTrue(sql.contains("[StatusCode] IN ('A', 'B')"));
+        assertTrue(sql.contains("77 IN [PageNumberCountList]"));
+        assertTrue(sql.contains("[AmountM] INTERSECTS (1.5, 2.5)"));
+        assertTrue(sql.contains("VersionStatus = 1"));
+    }
+
+    @Test
+    void buildsFolderScopeWhenRequested() {
+        ReportRequestPayload payload = new ReportRequestPayload();
+        payload.setTargetClassSymbolicName("Document");
+        payload.setIncludeSubclasses(true);
+        payload.setSearchScope("FOLDER");
+        payload.setFolderPath("/Claims/Incoming");
+        payload.setSearchSubfolders(true);
+        payload.setResultColumns(List.of(new ResultColumn("Id", "Id")));
+
+        String sql = new FileNetQueryBuilder().buildFromPayload(payload);
+        assertTrue(sql.contains("This INSUBFOLDER '/Claims/Incoming'"));
+    }
+
+    @Test
+    void buildsSampleComplexReportRequestSql() throws Exception {
+        Path sample = Paths.get("Sample",
+                "report-request-c47dfcd5-e46b-481b-b1af-a21bedc85ef7.json");
+        if (!Files.isRegularFile(sample)) {
+            sample = Paths.get("D:", "Workspaces", "RASystemsWorkspace", "ReportsExecutionTool", "Sample",
+                    "report-request-c47dfcd5-e46b-481b-b1af-a21bedc85ef7.json");
+        }
+        String json = new String(Files.readAllBytes(sample), StandardCharsets.UTF_8);
+        ReportRequestPayload payload = new ReportRequestPayloadParser().parse(json, null);
+
+        String sql = new FileNetQueryBuilder().buildFromPayload(payload);
+
+        assertTrue(sql.startsWith("SELECT [DocumentTitle], [ContentSize], [LastModifier], [DateLastModified], [MajorVersionNumber]"));
+        assertTrue(sql.contains("FROM [ClaimDocument]"));
+        assertFalse(sql.contains("WITH EXCLUDESUBCLASSES"));
+        assertTrue(sql.contains("[Author] LIKE 'User%'"));
+        assertTrue(sql.contains("[AccountNum] LIKE '%524%'"));
+        assertTrue(sql.contains("[BatchDocCount] = 58"));
+        assertTrue(sql.contains("77 IN [PageNumberCountList]"));
+        assertTrue(sql.contains("[Hidden] = FALSE"));
+        assertTrue(sql.contains("[Amount] = 13192.34"));
+        assertTrue(sql.contains("22426.34 IN [AmountM]"));
+        assertTrue(sql.contains("[OriginalDateCreated] = 20260610T030000Z"));
+        assertTrue(sql.contains("20180410T030000Z IN [OriginalHireDates]"));
+        assertTrue(sql.contains("VersionStatus = 1"));
+        assertTrue(sql.contains("ORDER BY [DocumentTitle] ASC"));
+        assertFalse(sql.contains("{ts"));
+        assertFalse(sql.contains("Unsupported operator"));
+        assertFalse(sql.contains(" INFOLDER "));
+    }
+
+    @Test
+    void rejectsMissingValuesForNonNullOperators() {
+        ReportRequestPayload payload = new ReportRequestPayload();
+        payload.setTargetClassSymbolicName("Document");
+        payload.setResultColumns(List.of(new ResultColumn("Id", "Id")));
+
+        SearchCriterion criterion = new SearchCriterion();
+        criterion.setPropertySymbolicName("DocumentTitle");
+        criterion.setOperator("EQUAL");
+        criterion.setDataType("xs:string");
+        criterion.setValues(List.of(" ", ""));
+        payload.setCriteria(List.of(criterion));
+
+        assertThrows(IllegalArgumentException.class, () -> new FileNetQueryBuilder().buildFromPayload(payload));
+    }
+
+    @Test
+    void formatsCommonLiteralTypes() {
+        assertEquals("'O''Brien'", FileNetSqlValueFormatter.formatLiteral("O'Brien", "xs:string"));
+        assertEquals("TRUE", FileNetSqlValueFormatter.formatLiteral("true", "xs:boolean"));
+        assertEquals("FALSE", FileNetSqlValueFormatter.formatLiteral("0", "xs:boolean"));
+        assertEquals("58", FileNetSqlValueFormatter.formatLiteral("58", "xs:integer"));
+        assertEquals("13192.34", FileNetSqlValueFormatter.formatLiteral("13192.34", "xs:double"));
+        assertEquals("20260610T030000Z",
+                FileNetSqlValueFormatter.formatLiteral("2026-06-10T00:00:00.000-03:00", "xs:timestamp"));
+        assertEquals("20180410T030000Z",
+                FileNetSqlValueFormatter.formatLiteral("2018-04-10T00:00:00.000-03:00", "xs:timestamp"));
+    }
+}
+
+
+package com.cnb.reports;
+
+import com.cnb.reports.model.PropertyCardinality;
+import com.cnb.reports.model.ReportRequestPayload;
+import com.cnb.reports.model.ResultColumn;
+import com.cnb.reports.model.SearchCriterion;
+import com.cnb.reports.model.SortOption;
+import com.cnb.reports.util.CePropertyMetadata;
+import com.cnb.reports.util.CePropertyMetadataResolver;
+import com.cnb.reports.util.CePropertyNameResolver;
+import com.cnb.reports.util.FileNetSqlValueFormatter;
+import com.cnb.reports.util.SqlValidationUtil;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.Set;
+
+/**
+ * Builds FileNet Content Engine Search SQL from report request payloads.
+ * <p>
+ * Handles single- and multi-valued properties using CE SQL rules:
+ * <ul>
+ *   <li>single-valued IN: {@code Property IN (v1, v2)}</li>
+ *   <li>list-valued includes: {@code v1 IN Property} or {@code Property INTERSECTS (v1, v2)}</li>
+ * </ul>
+ */
+public final class FileNetQueryBuilder {
+
+    private static final Logger LOGGER = LogManager.getLogger(FileNetQueryBuilder.class);
+
+    private final CePropertyMetadataResolver metadataResolver;
+
+    public FileNetQueryBuilder() {
+        this(new CePropertyMetadataResolver(null));
+    }
+
+    public FileNetQueryBuilder(CePropertyMetadataResolver metadataResolver) {
+        this.metadataResolver = metadataResolver != null
+                ? metadataResolver
+                : new CePropertyMetadataResolver(null);
+    }
+
+    public String buildQuery(ReportRequestPayload payload) {
+        if (payload == null) {
+            throw new IllegalArgumentException("Report request payload is required.");
+        }
+        if (SqlValidationUtil.isUsableSql(payload.getSqlQuery())) {
+            LOGGER.info("Using prebuilt SQLQuery from report request.");
+            return payload.getSqlQuery().trim();
+        }
+        return buildFromPayload(payload);
+    }
+
+    public String buildFromPayload(ReportRequestPayload payload) {
+        if (payload == null) {
+            throw new IllegalArgumentException("Report request payload is required.");
+        }
+        String targetClass = payload.getTargetClassSymbolicName();
+        if (StringUtils.isBlank(targetClass)) {
+            throw new IllegalArgumentException("Missing target class for report request.");
+        }
+        SqlValidationUtil.validateClassName(targetClass);
+
+        List<String> selectProperties = buildSelectProperties(payload);
+        if (selectProperties.isEmpty()) {
+            throw new IllegalArgumentException("At least one result column is required.");
+        }
+
+        logPayloadHeader(payload, targetClass, selectProperties);
+
+        StringBuilder sql = new StringBuilder();
+        sql.append("SELECT ").append(joinBracketed(selectProperties));
+        sql.append(" FROM ").append(bracket(targetClass));
+        // FileNet defaults to INCLUDESUBCLASSES; only emit EXCLUDESUBCLASSES when subclasses are excluded.
+        if (!payload.isIncludeSubclasses()) {
+            sql.append(" WITH EXCLUDESUBCLASSES");
+        }
+
+        List<String> conditions = new ArrayList<>();
+        conditions.addAll(buildConditions(payload, targetClass));
+        String folderCondition = buildFolderCondition(payload);
+        if (StringUtils.isNotBlank(folderCondition)) {
+            conditions.add(folderCondition);
+        }
+        String versionCondition = buildVersionCondition(payload.getVersionOption());
+        if (StringUtils.isNotBlank(versionCondition)) {
+            conditions.add(versionCondition);
+        }
+
+        if (!conditions.isEmpty()) {
+            sql.append(" WHERE ").append(String.join(" AND ", conditions));
+        }
+
+        String orderBy = buildOrderBy(payload.getSortOptions());
+        if (StringUtils.isNotBlank(orderBy)) {
+            sql.append(" ORDER BY ").append(orderBy);
+        }
+
+        String generated = sql.toString();
+        LOGGER.info("Final generated FileNet SQL: {}", generated);
+        return generated;
+    }
+
+    private void logPayloadHeader(ReportRequestPayload payload, String targetClass, List<String> selectProperties) {
+        LOGGER.info(
+                "Building FileNet query. reportRequestId={}, objectStore={}, class={}, includeSubclasses={}, "
+                        + "searchScope={}, folderId={}, folderPath={}, searchSubfolders={}, versionOption={}, "
+                        + "resultColumns={}, sort={}",
+                payload.getReportRequestId(),
+                firstNonBlank(payload.getObjectStoreName(), payload.getRepositoryName(), payload.getRepositoryId()),
+                targetClass,
+                payload.isIncludeSubclasses(),
+                payload.getSearchScope(),
+                payload.getFolderId(),
+                payload.getFolderPath(),
+                payload.isSearchSubfolders(),
+                payload.getVersionOption(),
+                selectProperties,
+                summarizeSort(payload.getSortOptions()));
+    }
+
+    private List<String> buildSelectProperties(ReportRequestPayload payload) {
+        Set<String> selected = new LinkedHashSet<>();
+        for (ResultColumn column : payload.getResultColumns()) {
+            if (column == null || StringUtils.isBlank(column.getPropertySymbolicName())) {
+                continue;
+            }
+            String resolved = CePropertyNameResolver.resolve(column.getPropertySymbolicName());
+            SqlValidationUtil.validatePropertyName(resolved);
+            selected.add(resolved);
+        }
+        for (SortOption sortOption : payload.getSortOptions()) {
+            if (sortOption == null || StringUtils.isBlank(sortOption.getPropertySymbolicName())) {
+                continue;
+            }
+            String resolved = CePropertyNameResolver.resolve(sortOption.getPropertySymbolicName());
+            SqlValidationUtil.validatePropertyName(resolved);
+            selected.add(resolved);
+        }
+        return new ArrayList<>(selected);
+    }
+
+    private List<String> buildConditions(ReportRequestPayload payload, String targetClass) {
+        List<String> conditions = new ArrayList<>();
+        for (SearchCriterion criterion : payload.getCriteria()) {
+            if (criterion == null) {
+                continue;
+            }
+            String condition = buildCondition(payload, targetClass, criterion);
+            if (StringUtils.isNotBlank(condition)) {
+                conditions.add(condition);
+            }
+        }
+        return conditions;
+    }
+
+    private String buildCondition(ReportRequestPayload payload, String targetClass, SearchCriterion criterion) {
+        if (StringUtils.isBlank(criterion.getPropertySymbolicName())) {
+            throw new IllegalArgumentException("Search criterion is missing propertySymbolicName.");
+        }
+        if (StringUtils.isBlank(criterion.getOperator())) {
+            throw new IllegalArgumentException("Search criterion is missing operator for property "
+                    + criterion.getPropertySymbolicName());
+        }
+
+        CePropertyMetadata metadata = metadataResolver.resolve(
+                targetClass,
+                criterion.getPropertySymbolicName(),
+                criterion.getDataType(),
+                criterion.getCardinality());
+        String property = bracket(metadata.getSymbolicName());
+        String operator = normalizeOperator(criterion.getOperator());
+        List<String> rawValues = FileNetSqlValueFormatter.normalizeRawValues(criterion.getValues());
+        String dataType = firstNonBlank(metadata.getDataType(), criterion.getDataType());
+        PropertyCardinality cardinality = resolveCardinalityForOperator(operator, metadata.getCardinality(), rawValues);
+
+        LOGGER.info(
+                "Criterion: property={}, displayName={}, dataType={}, cardinality={}, operator={}, rawValues={}, "
+                        + "normalizedValues={}, metadataFromRepository={}",
+                metadata.getSymbolicName(),
+                criterion.getPropertyDisplayName(),
+                dataType,
+                cardinality,
+                operator,
+                criterion.getValues(),
+                rawValues,
+                metadata.isResolvedFromRepository());
+
+        if ("NULL".equals(operator) || "ISNULL".equals(operator)) {
+            String fragment = property + " IS NULL";
+            LOGGER.info("Generated SQL fragment: {}", fragment);
+            return fragment;
+        }
+        if ("NOTNULL".equals(operator) || "ISNOTNULL".equals(operator)) {
+            String fragment = property + " IS NOT NULL";
+            LOGGER.info("Generated SQL fragment: {}", fragment);
+            return fragment;
+        }
+
+        if (rawValues.isEmpty()) {
+            throw new IllegalArgumentException("Missing required criterion values for property "
+                    + metadata.getSymbolicName() + " with operator " + criterion.getOperator());
+        }
+
+        List<String> literals = new ArrayList<>();
+        for (String raw : rawValues) {
+            literals.add(FileNetSqlValueFormatter.formatLiteral(raw, dataType));
+        }
+
+        String fragment;
+        switch (operator) {
+            case "STARTSWITH":
+                requireStringLikeOperator(operator, dataType, metadata.getSymbolicName());
+                fragment = property + " LIKE '" + SqlValidationUtil.escapeSqlString(rawValues.get(0)) + "%'";
+                break;
+            case "ENDSWITH":
+                requireStringLikeOperator(operator, dataType, metadata.getSymbolicName());
+                fragment = property + " LIKE '%" + SqlValidationUtil.escapeSqlString(rawValues.get(0)) + "'";
+                break;
+            case "LIKE":
+            case "CONTAINS":
+            case "NOTLIKE":
+                requireStringLikeOperator(operator, dataType, metadata.getSymbolicName());
+                String likeValue = rawValues.get(0);
+                if (!likeValue.contains("%") && !likeValue.contains("_")) {
+                    likeValue = "%" + likeValue + "%";
+                }
+                String likeExpr = property + " LIKE '" + SqlValidationUtil.escapeSqlString(likeValue) + "'";
+                fragment = "NOTLIKE".equals(operator) ? "NOT (" + likeExpr + ")" : likeExpr;
+                break;
+            case "EQUAL":
+            case "EQ":
+            case "=":
+                fragment = buildEquality(property, literals, cardinality, true);
+                break;
+            case "NOTEQUAL":
+            case "NE":
+            case "<>":
+            case "!=":
+                fragment = buildEquality(property, literals, cardinality, false);
+                break;
+            case "GREATERTHAN":
+            case "GREATER":
+            case "GT":
+                requireComparableOperator(operator, dataType, cardinality, metadata.getSymbolicName());
+                fragment = property + " > " + literals.get(0);
+                break;
+            case "GREATERTHANOREQUAL":
+            case "GREATEROREQUAL":
+            case "GTE":
+                requireComparableOperator(operator, dataType, cardinality, metadata.getSymbolicName());
+                fragment = property + " >= " + literals.get(0);
+                break;
+            case "LESSTHAN":
+            case "LESS":
+            case "LT":
+                requireComparableOperator(operator, dataType, cardinality, metadata.getSymbolicName());
+                fragment = property + " < " + literals.get(0);
+                break;
+            case "LESSTHANOREQUAL":
+            case "LESSOREQUAL":
+            case "LTE":
+                requireComparableOperator(operator, dataType, cardinality, metadata.getSymbolicName());
+                fragment = property + " <= " + literals.get(0);
+                break;
+            case "BETWEEN":
+                requireComparableOperator(operator, dataType, cardinality, metadata.getSymbolicName());
+                if (literals.size() < 2) {
+                    throw new IllegalArgumentException("BETWEEN operator requires two values for "
+                            + metadata.getSymbolicName());
+                }
+                fragment = property + " BETWEEN " + literals.get(0) + " AND " + literals.get(1);
+                break;
+            case "IN":
+            case "INANY":
+            case "INCLUDES":
+            case "INCLUDEANY":
+            case "ANY":
+            case "INTERSECTS":
+                fragment = buildIncludesAny(property, literals, cardinality, metadata.getSymbolicName());
+                break;
+            case "INALL":
+            case "INCLUDESALL":
+            case "INCLUDEALL":
+            case "ALL":
+                fragment = buildIncludesAll(property, literals, cardinality, metadata.getSymbolicName());
+                break;
+            case "NOTIN":
+            case "EXCLUDES":
+            case "EXCLUDE":
+                fragment = buildNotIn(property, literals, cardinality, metadata.getSymbolicName());
+                break;
+            default:
+                throw new IllegalArgumentException("Unsupported operator '" + criterion.getOperator()
+                        + "' for property " + metadata.getSymbolicName()
+                        + " (dataType=" + dataType + ", cardinality=" + cardinality + ")");
+        }
+
+        LOGGER.info("Generated SQL fragment: {}", fragment);
+        return fragment;
+    }
+
+    private String buildEquality(String property, List<String> literals, PropertyCardinality cardinality,
+            boolean equal) {
+        if (cardinality.isList()) {
+            if (literals.size() == 1) {
+                String includes = literals.get(0) + " IN " + property;
+                return equal ? includes : "NOT (" + includes + ")";
+            }
+            String intersects = property + " INTERSECTS (" + String.join(", ", literals) + ")";
+            return equal ? intersects : "NOT (" + intersects + ")";
+        }
+        if (literals.size() == 1) {
+            return property + (equal ? " = " : " <> ") + literals.get(0);
+        }
+        String inClause = property + " IN (" + String.join(", ", literals) + ")";
+        return equal ? inClause : "NOT (" + inClause + ")";
+    }
+
+    private String buildIncludesAny(String property, List<String> literals, PropertyCardinality cardinality,
+            String propertyName) {
+        if (cardinality.isList()) {
+            if (literals.size() == 1) {
+                return literals.get(0) + " IN " + property;
+            }
+            return property + " INTERSECTS (" + String.join(", ", literals) + ")";
+        }
+        // Single-valued (or unknown treated as single for classic IN lists)
+        return property + " IN (" + String.join(", ", literals) + ")";
+    }
+
+    private String buildIncludesAll(String property, List<String> literals, PropertyCardinality cardinality,
+            String propertyName) {
+        if (!cardinality.isList() && cardinality != PropertyCardinality.UNKNOWN) {
+            throw new IllegalArgumentException("Operator INCLUDES ALL is not supported for single-valued property "
+                    + propertyName);
+        }
+        List<String> parts = new ArrayList<>();
+        for (String literal : literals) {
+            parts.add(literal + " IN " + property);
+        }
+        if (parts.size() == 1) {
+            return parts.get(0);
+        }
+        return "(" + String.join(" AND ", parts) + ")";
+    }
+
+    private String buildNotIn(String property, List<String> literals, PropertyCardinality cardinality,
+            String propertyName) {
+        if (cardinality.isList()) {
+            if (literals.size() == 1) {
+                return "NOT (" + literals.get(0) + " IN " + property + ")";
+            }
+            return "NOT (" + property + " INTERSECTS (" + String.join(", ", literals) + "))";
+        }
+        return property + " NOT IN (" + String.join(", ", literals) + ")";
+    }
+
+    private String buildFolderCondition(ReportRequestPayload payload) {
+        String scope = normalizeScope(payload.getSearchScope());
+        if ("OBJECT_STORE".equals(scope) || "OBJECTSTORE".equals(scope) || "ENTIRE_OBJECT_STORE".equals(scope)) {
+            return null;
+        }
+
+        String folderRef = firstNonBlank(payload.getFolderId(), payload.getFolderPath());
+        boolean folderScopeRequested = "FOLDER".equals(scope)
+                || "CURRENT_FOLDER".equals(scope)
+                || "SELECTED_FOLDER".equals(scope)
+                || "SUBFOLDERS".equals(scope)
+                || "SUBTREE".equals(scope)
+                || "FOLDER_AND_SUBFOLDERS".equals(scope)
+                || payload.isSearchSubfolders()
+                || StringUtils.isNotBlank(folderRef);
+
+        if (!folderScopeRequested) {
+            return null;
+        }
+        if (StringUtils.isBlank(folderRef)) {
+            throw new IllegalArgumentException("Folder scope was requested but folderId/folderPath is missing.");
+        }
+
+        boolean includeSubfolders = payload.isSearchSubfolders()
+                || "SUBFOLDERS".equals(scope)
+                || "SUBTREE".equals(scope)
+                || "FOLDER_AND_SUBFOLDERS".equals(scope);
+        String operator = includeSubfolders ? "INSUBFOLDER" : "INFOLDER";
+        String fragment = "This " + operator + " '" + SqlValidationUtil.escapeSqlString(folderRef) + "'";
+        LOGGER.info("Generated folder SQL fragment: {}", fragment);
+        return fragment;
+    }
+
+    private String buildVersionCondition(String versionOption) {
+        if (StringUtils.isBlank(versionOption)) {
+            return null;
+        }
+        String normalized = versionOption.trim().toUpperCase(Locale.ROOT).replace("-", "").replace("_", "");
+        if ("RELEASEDVERSION".equals(normalized) || "RELEASED".equals(normalized)) {
+            return "VersionStatus = 1";
+        }
+        if ("CURRENTVERSION".equals(normalized) || "CURRENT".equals(normalized)) {
+            return "IsCurrentVersion = TRUE";
+        }
+        if ("ALLVERSIONS".equals(normalized) || "ALL".equals(normalized)) {
+            return null;
+        }
+        if ("INPROCESSVERSION".equals(normalized) || "INPROCESS".equals(normalized)) {
+            return "VersionStatus = 2";
+        }
+        if ("RESERVATION".equals(normalized) || "CHECKEDOUT".equals(normalized)) {
+            return "VersionStatus = 3";
+        }
+        LOGGER.warn("Unrecognized versionOption '{}'; no version filter applied.", versionOption);
+        return null;
+    }
+
+    private String buildOrderBy(List<SortOption> sortOptions) {
+        if (sortOptions == null || sortOptions.isEmpty()) {
+            return null;
+        }
+        List<String> parts = new ArrayList<>();
+        for (SortOption sortOption : sortOptions) {
+            if (sortOption == null || StringUtils.isBlank(sortOption.getPropertySymbolicName())) {
+                continue;
+            }
+            String property = CePropertyNameResolver.resolve(sortOption.getPropertySymbolicName());
+            SqlValidationUtil.validatePropertyName(property);
+            String direction = "DESC".equalsIgnoreCase(sortOption.getDirection()) ? "DESC" : "ASC";
+            parts.add(bracket(property) + " " + direction);
+        }
+        return parts.isEmpty() ? null : String.join(", ", parts);
+    }
+
+    private PropertyCardinality resolveCardinalityForOperator(String operator, PropertyCardinality resolved,
+            List<String> values) {
+        if (resolved != null && resolved != PropertyCardinality.UNKNOWN) {
+            return resolved;
+        }
+        // These operators are list-valued in ICN/FileNet search templates.
+        if ("INCLUDES".equals(operator) || "INCLUDEANY".equals(operator) || "INTERSECTS".equals(operator)
+                || "INALL".equals(operator) || "INCLUDESALL".equals(operator) || "INCLUDEALL".equals(operator)
+                || "ALL".equals(operator) || "ANY".equals(operator)) {
+            return PropertyCardinality.LIST;
+        }
+        return PropertyCardinality.UNKNOWN;
+    }
+
+    private void requireStringLikeOperator(String operator, String dataType, String propertyName) {
+        if (StringUtils.isNotBlank(dataType) && !FileNetSqlValueFormatter.isStringType(dataType)
+                && !dataType.toLowerCase(Locale.ROOT).contains("guid")) {
+            throw new IllegalArgumentException("Operator " + operator + " is not supported for property "
+                    + propertyName + " with data type " + dataType);
+        }
+    }
+
+    private void requireComparableOperator(String operator, String dataType, PropertyCardinality cardinality,
+            String propertyName) {
+        if (cardinality != null && cardinality.isList()) {
+            throw new IllegalArgumentException("Operator " + operator
+                    + " is not supported for multi-valued property " + propertyName);
+        }
+        if (StringUtils.isNotBlank(dataType) && FileNetSqlValueFormatter.isBooleanType(dataType)) {
+            throw new IllegalArgumentException("Operator " + operator
+                    + " is not supported for boolean property " + propertyName);
+        }
+    }
+
+    private String normalizeOperator(String operator) {
+        if (operator == null) {
+            return "";
+        }
+        String normalized = operator.trim().toUpperCase(Locale.ROOT);
+        normalized = normalized.replace(" ", "").replace("-", "").replace("_", "");
+        if ("INCLUDE".equals(normalized)) {
+            return "INCLUDES";
+        }
+        if ("ISNULL".equals(normalized)) {
+            return "NULL";
+        }
+        if ("ISNOTNULL".equals(normalized)) {
+            return "NOTNULL";
+        }
+        return normalized;
+    }
+
+    private String normalizeScope(String searchScope) {
+        if (searchScope == null) {
+            return "";
+        }
+        return searchScope.trim().toUpperCase(Locale.ROOT).replace(" ", "_");
+    }
+
+    private static String bracket(String propertyName) {
+        return "[" + propertyName + "]";
+    }
+
+    private static String joinBracketed(List<String> properties) {
+        List<String> parts = new ArrayList<>();
+        for (String property : properties) {
+            parts.add(bracket(property));
+        }
+        return String.join(", ", parts);
+    }
+
+    private static String summarizeSort(List<SortOption> sortOptions) {
+        if (sortOptions == null || sortOptions.isEmpty()) {
+            return "[]";
+        }
+        List<String> parts = new ArrayList<>();
+        for (SortOption option : sortOptions) {
+            if (option == null) {
+                continue;
+            }
+            parts.add(option.getPropertySymbolicName() + ":" + option.getDirection());
+        }
+        return parts.toString();
+    }
+
+    private static String firstNonBlank(String... values) {
+        if (values == null) {
+            return null;
+        }
+        for (String value : values) {
+            if (StringUtils.isNotBlank(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+}
+
+
+package com.cnb.reports.util;
+
+import org.apache.commons.lang3.StringUtils;
+
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.regex.Pattern;
+
+/**
+ * Converts JSON/Java criterion values into FileNet CE SQL literals.
+ * <p>
+ * Date/time literals use FileNet CE syntax (not JDBC {@code {ts ...}}):
+ * {@code YYYYMMDDThhmmssZ} in UTC, for example {@code 20260610T030000Z}.
+ */
+public final class FileNetSqlValueFormatter {
+
+    private static final DateTimeFormatter CE_ISO_UTC = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'")
+            .withZone(ZoneOffset.UTC);
+    private static final Pattern CE_ISO_DATETIME = Pattern.compile(
+            "^\\d{8}T\\d{6}(,\\d{1,4})?Z$", Pattern.CASE_INSENSITIVE);
+    private static final Pattern W3C_DATE = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
+    private static final Pattern LOCAL_DATE_TIME = Pattern.compile("^\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}:\\d{2}$");
+
+    private FileNetSqlValueFormatter() {
+    }
+
+    public static List<String> normalizeRawValues(List<String> rawValues) {
+        List<String> normalized = new ArrayList<>();
+        if (rawValues == null) {
+            return normalized;
+        }
+        for (String raw : rawValues) {
+            if (raw == null) {
+                continue;
+            }
+            String trimmed = raw.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            normalized.add(trimmed);
+        }
+        return normalized;
+    }
+
+    public static String formatLiteral(String rawValue, String dataType) {
+        if (rawValue == null) {
+            throw new IllegalArgumentException("Null value cannot be formatted as a FileNet literal.");
+        }
+        String value = rawValue.trim();
+        if (value.isEmpty()) {
+            throw new IllegalArgumentException("Blank value cannot be formatted as a FileNet literal.");
+        }
+
+        ResolvedType type = resolveType(dataType, value);
+        switch (type) {
+            case BOOLEAN:
+                return formatBoolean(value);
+            case INTEGER:
+                return formatInteger(value);
+            case FLOAT:
+                return formatNumeric(value);
+            case DATE:
+                return formatDateLiteral(value);
+            case STRING:
+            default:
+                return "'" + SqlValidationUtil.escapeSqlString(value) + "'";
+        }
+    }
+
+    public static String formatBoolean(String rawValue) {
+        String normalized = rawValue.trim().toLowerCase(Locale.ROOT);
+        if ("true".equals(normalized) || "1".equals(normalized) || "yes".equals(normalized) || "y".equals(normalized)) {
+            return "TRUE";
+        }
+        if ("false".equals(normalized) || "0".equals(normalized) || "no".equals(normalized) || "n".equals(normalized)) {
+            return "FALSE";
+        }
+        throw new IllegalArgumentException("Invalid boolean value: " + rawValue);
+    }
+
+    public static String formatInteger(String rawValue) {
+        String value = rawValue.trim();
+        try {
+            if (value.contains(".") || value.toLowerCase(Locale.ROOT).contains("e")) {
+                double parsed = Double.parseDouble(value);
+                if (parsed != Math.rint(parsed)) {
+                    throw new IllegalArgumentException("Invalid integer value: " + rawValue);
+                }
+                return Long.toString((long) parsed);
+            }
+            return Long.toString(Long.parseLong(value));
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("Invalid integer value: " + rawValue, ex);
+        }
+    }
+
+    public static String formatNumeric(String rawValue) {
+        String value = rawValue.trim();
+        try {
+            Double.parseDouble(value);
+            return value;
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("Invalid numeric value: " + rawValue, ex);
+        }
+    }
+
+    /**
+     * Formats a date/time value as a FileNet CE SQL datetime literal (no quotes), e.g. {@code 20260610T030000Z}.
+     */
+    public static String formatDateLiteral(String rawValue) {
+        String normalized = rawValue.trim();
+        if (CE_ISO_DATETIME.matcher(normalized).matches()) {
+            return normalized.toUpperCase(Locale.ROOT).replace(",000", "");
+        }
+
+        Instant instant = parseToInstant(normalized);
+        return CE_ISO_UTC.format(instant);
+    }
+
+    private static Instant parseToInstant(String normalized) {
+        try {
+            return OffsetDateTime.parse(normalized).toInstant();
+        } catch (DateTimeParseException ignored) {
+            // continue
+        }
+        try {
+            return ZonedDateTime.parse(normalized).toInstant();
+        } catch (DateTimeParseException ignored) {
+            // continue
+        }
+        if (W3C_DATE.matcher(normalized).matches()) {
+            return LocalDate.parse(normalized).atStartOfDay(ZoneOffset.UTC).toInstant();
+        }
+        if (LOCAL_DATE_TIME.matcher(normalized).matches()) {
+            String local = normalized.replace(' ', 'T');
+            return LocalDateTime.parse(local).atZone(ZoneId.systemDefault()).toInstant();
+        }
+        try {
+            return LocalDateTime.parse(normalized).atZone(ZoneId.systemDefault()).toInstant();
+        } catch (DateTimeParseException ignored) {
+            // continue
+        }
+        try {
+            // W3C datetime without zone, e.g. 2026-06-10T00:00:00.000
+            if (normalized.length() >= 19 && normalized.charAt(10) == 'T') {
+                String base = normalized.substring(0, 19);
+                return LocalDateTime.parse(base).atZone(ZoneId.systemDefault()).toInstant();
+            }
+        } catch (DateTimeParseException ignored) {
+            // continue
+        }
+        try {
+            return Instant.parse(normalized);
+        } catch (DateTimeParseException ex) {
+            throw new IllegalArgumentException("Invalid date value: " + normalized, ex);
+        }
+    }
+
+    public static boolean isBooleanType(String dataType) {
+        return resolveType(dataType, null) == ResolvedType.BOOLEAN;
+    }
+
+    public static boolean isNumericType(String dataType) {
+        ResolvedType type = resolveType(dataType, null);
+        return type == ResolvedType.INTEGER || type == ResolvedType.FLOAT;
+    }
+
+    public static boolean isDateType(String dataType) {
+        return resolveType(dataType, null) == ResolvedType.DATE;
+    }
+
+    public static boolean isStringType(String dataType) {
+        return resolveType(dataType, null) == ResolvedType.STRING;
+    }
+
+    private static ResolvedType resolveType(String dataType, String sampleValue) {
+        if (StringUtils.isNotBlank(dataType)) {
+            String lower = dataType.toLowerCase(Locale.ROOT);
+            if (lower.contains("boolean") || lower.contains("bool")) {
+                return ResolvedType.BOOLEAN;
+            }
+            if (lower.contains("date") || lower.contains("time") || lower.contains("timestamp")) {
+                return ResolvedType.DATE;
+            }
+            if (lower.contains("int") || lower.contains("long") || lower.contains("short")
+                    || "xs:integer".equals(lower) || "integer32".equals(lower) || "integer64".equals(lower)) {
+                return ResolvedType.INTEGER;
+            }
+            if (lower.contains("double") || lower.contains("float") || lower.contains("decimal")
+                    || lower.contains("number") || "float64".equals(lower)) {
+                return ResolvedType.FLOAT;
+            }
+            if (lower.contains("string") || lower.contains("guid") || lower.contains("id")) {
+                return ResolvedType.STRING;
+            }
+        }
+        if (sampleValue != null) {
+            if (looksLikeDate(sampleValue)) {
+                return ResolvedType.DATE;
+            }
+            if ("true".equalsIgnoreCase(sampleValue) || "false".equalsIgnoreCase(sampleValue)) {
+                return ResolvedType.BOOLEAN;
+            }
+        }
+        return ResolvedType.STRING;
+    }
+
+    private static boolean looksLikeDate(String value) {
+        return CE_ISO_DATETIME.matcher(value).matches()
+                || value.contains("T")
+                || value.matches("\\d{4}-\\d{2}-\\d{2}.*");
+    }
+
+    private enum ResolvedType {
+        STRING,
+        BOOLEAN,
+        INTEGER,
+        FLOAT,
+        DATE
+    }
+}
+
+
+package com.cnb.reports.util;
+
+import com.cnb.reports.model.PropertyCardinality;
+import com.filenet.api.collection.PropertyDescriptionList;
+import com.filenet.api.constants.Cardinality;
+import com.filenet.api.constants.TypeID;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.meta.ClassDescription;
+import com.filenet.api.meta.PropertyDescription;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.Iterator;
+import java.util.Locale;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Resolves property cardinality and data type from FileNet class descriptions.
+ */
+public final class CePropertyMetadataResolver {
+
+    private static final Logger LOGGER = LogManager.getLogger(CePropertyMetadataResolver.class);
+
+    private final ObjectStore objectStore;
+    private final Map<String, Map<String, CePropertyMetadata>> cacheByClass = new ConcurrentHashMap<>();
+
+    public CePropertyMetadataResolver(ObjectStore objectStore) {
+        this.objectStore = objectStore;
+    }
+
+    public CePropertyMetadata resolve(String classSymbolicName, String propertySymbolicName, String jsonDataType,
+            PropertyCardinality jsonCardinality) {
+        String property = CePropertyNameResolver.resolve(propertySymbolicName);
+        SqlValidationUtil.validatePropertyName(property);
+
+        CePropertyMetadata fromRepository = lookupFromRepository(classSymbolicName, property);
+        PropertyCardinality cardinality = jsonCardinality != null && jsonCardinality != PropertyCardinality.UNKNOWN
+                ? jsonCardinality
+                : (fromRepository != null ? fromRepository.getCardinality() : PropertyCardinality.UNKNOWN);
+        String dataType = StringUtils.isNotBlank(jsonDataType)
+                ? jsonDataType
+                : (fromRepository != null ? fromRepository.getDataType() : null);
+
+        if (cardinality == PropertyCardinality.UNKNOWN && fromRepository == null) {
+            cardinality = inferCardinalityHeuristic(property);
+        }
+
+        boolean fromRepo = fromRepository != null;
+        return new CePropertyMetadata(property, cardinality, dataType, fromRepo);
+    }
+
+    private CePropertyMetadata lookupFromRepository(String classSymbolicName, String propertySymbolicName) {
+        if (objectStore == null || StringUtils.isBlank(classSymbolicName)) {
+            return null;
+        }
+        try {
+            Map<String, CePropertyMetadata> classCache = cacheByClass.computeIfAbsent(
+                    classSymbolicName, this::loadClassProperties);
+            return classCache.get(propertySymbolicName.toLowerCase(Locale.ROOT));
+        } catch (Exception ex) {
+            LOGGER.warn("Unable to resolve FileNet metadata for class {} property {}: {}",
+                    classSymbolicName, propertySymbolicName, ex.getMessage());
+            return null;
+        }
+    }
+
+    private Map<String, CePropertyMetadata> loadClassProperties(String classSymbolicName) {
+        Map<String, CePropertyMetadata> map = new ConcurrentHashMap<>();
+        ClassDescription classDescription = Factory.ClassDescription.fetchInstance(objectStore, classSymbolicName, null);
+        PropertyDescriptionList propertyDescriptions = classDescription.get_PropertyDescriptions();
+        if (propertyDescriptions == null) {
+            return map;
+        }
+        @SuppressWarnings("unchecked")
+        Iterator<PropertyDescription> iterator = propertyDescriptions.iterator();
+        while (iterator.hasNext()) {
+            PropertyDescription propertyDescription = iterator.next();
+            if (propertyDescription == null || propertyDescription.get_SymbolicName() == null) {
+                continue;
+            }
+            String symbolicName = propertyDescription.get_SymbolicName();
+            PropertyCardinality cardinality = toCardinality(propertyDescription.get_Cardinality());
+            String dataType = toDataType(propertyDescription.get_DataType());
+            map.put(symbolicName.toLowerCase(Locale.ROOT),
+                    new CePropertyMetadata(symbolicName, cardinality, dataType, true));
+        }
+        LOGGER.debug("Loaded {} property descriptions for class {}", map.size(), classSymbolicName);
+        return map;
+    }
+
+    private static PropertyCardinality toCardinality(Cardinality cardinality) {
+        if (cardinality == null) {
+            return PropertyCardinality.UNKNOWN;
+        }
+        if (Cardinality.LIST.equals(cardinality)) {
+            return PropertyCardinality.LIST;
+        }
+        if (Cardinality.SINGLE.equals(cardinality)) {
+            return PropertyCardinality.SINGLE;
+        }
+        return PropertyCardinality.UNKNOWN;
+    }
+
+    private static String toDataType(TypeID typeId) {
+        if (typeId == null) {
+            return null;
+        }
+        if (TypeID.STRING.equals(typeId)) {
+            return "xs:string";
+        }
+        if (TypeID.LONG.equals(typeId)) {
+            return "xs:integer";
+        }
+        if (TypeID.DOUBLE.equals(typeId)) {
+            return "xs:double";
+        }
+        if (TypeID.BOOLEAN.equals(typeId)) {
+            return "xs:boolean";
+        }
+        if (TypeID.DATE.equals(typeId)) {
+            return "xs:timestamp";
+        }
+        if (TypeID.GUID.equals(typeId)) {
+            return "xs:string";
+        }
+        return typeId.toString();
+    }
+
+    /**
+     * Last-resort heuristic when CE metadata is unavailable (offline unit tests / lookup failure).
+     */
+    private static PropertyCardinality inferCardinalityHeuristic(String propertySymbolicName) {
+        String lower = propertySymbolicName.toLowerCase(Locale.ROOT);
+        if (lower.endsWith("list")
+                || lower.endsWith("lists")
+                || lower.contains("multivalue")
+                || lower.contains("multi_value")
+                || (lower.startsWith("amount") && lower.endsWith("m"))
+                || lower.equals("originalhiredates")
+                || lower.endsWith("dates")
+                || lower.endsWith("values")
+                || lower.endsWith("ids") && !lower.equals("id")) {
+            return PropertyCardinality.LIST;
+        }
+        return PropertyCardinality.UNKNOWN;
+    }
+}
+
+
+
+package com.cnb.reports.model;
+
+public final class ResultColumn {
+
+    private String propertySymbolicName;
+    private String propertyDisplayName;
+
+    public ResultColumn() {
+    }
+
+    public ResultColumn(String propertySymbolicName, String propertyDisplayName) {
+        this.propertySymbolicName = propertySymbolicName;
+        this.propertyDisplayName = propertyDisplayName;
+    }
+
+    public String getPropertySymbolicName() {
+        return propertySymbolicName;
+    }
+
+    public void setPropertySymbolicName(String propertySymbolicName) {
+        this.propertySymbolicName = propertySymbolicName;
+    }
+
+    public String getPropertyDisplayName() {
+        return propertyDisplayName;
+    }
+
+    public void setPropertyDisplayName(String propertyDisplayName) {
+        this.propertyDisplayName = propertyDisplayName;
+    }
+
+    public String displayHeader() {
+        if (propertyDisplayName != null && !propertyDisplayName.trim().isEmpty()) {
+            return propertyDisplayName;
+        }
+        return propertySymbolicName;
+    }
+}
+
+
+
+package com.cnb.reports;
+
+import com.cnb.reports.email.EmailValidator;
+import com.cnb.reports.model.PropertyCardinality;
+import com.cnb.reports.model.ReportRequestPayload;
+import com.cnb.reports.model.ReportRequestSummary;
+import com.cnb.reports.model.ResultColumn;
+import com.cnb.reports.model.SearchCriterion;
+import com.cnb.reports.model.SortOption;
+import com.cnb.reports.util.CePropertyNameResolver;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.commons.lang3.StringUtils;
+
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Parses ReportRequest JSON payloads and metadata fallbacks into a normalized model.
+ */
+public final class ReportRequestPayloadParser {
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    public ReportRequestPayload parse(String jsonText, ReportRequestSummary summary) throws Exception {
+        ReportRequestPayload payload = new ReportRequestPayload();
+        if (summary != null) {
+            payload.setReportName(summary.getDocumentTitle());
+            payload.setTargetClassSymbolicName(summary.getTargetDocumentClass());
+            payload.setRepositoryName(summary.getRepositoryName());
+            payload.setRepositoryId(summary.getRepositoryId());
+            payload.setSqlQuery(StringUtils.trimToNull(summary.getSqlQuery()));
+            payload.setResultColumns(mapResultColumnsFromMetadata(summary.getResultSetColumns()));
+            payload.setCriteria(mapCriteriaFromMetadata(summary.getSearchCriteriaParams()));
+            payload.setSendEmailTo(summary.getSendEmailTo());
+            payload.setSendEmailCC(summary.getSendEmailCC());
+        }
+
+        if (StringUtils.isNotBlank(jsonText)) {
+            JsonNode root = MAPPER.readTree(jsonText);
+            mergeJsonPayload(payload, root);
+        }
+
+        if (StringUtils.isBlank(payload.getTargetClassSymbolicName())) {
+            throw new IllegalArgumentException("Target document class is missing from payload and metadata.");
+        }
+        if (payload.getResultColumns().isEmpty()) {
+            payload.setResultColumns(defaultResultColumns(payload.getTargetClassSymbolicName()));
+        }
+        payload.setResultColumns(normalizeResultColumns(payload.getResultColumns()));
+        return payload;
+    }
+
+    private List<ResultColumn> normalizeResultColumns(List<ResultColumn> columns) {
+        List<ResultColumn> normalized = new ArrayList<>();
+        for (ResultColumn column : columns) {
+            normalized.add(CePropertyNameResolver.toResultColumn(column.getPropertySymbolicName()));
+            if (StringUtils.isNotBlank(column.getPropertyDisplayName())
+                    && !column.getPropertyDisplayName().equals(column.getPropertySymbolicName())) {
+                normalized.set(normalized.size() - 1,
+                        new ResultColumn(normalized.get(normalized.size() - 1).getPropertySymbolicName(),
+                                column.getPropertyDisplayName()));
+            }
+        }
+        return normalized;
+    }
+
+    private void mergeJsonPayload(ReportRequestPayload payload, JsonNode root) {
+        if (root == null || root.isNull()) {
+            return;
+        }
+
+        setIfPresent(payload::setReportName, firstNonBlank(text(root, "reportName"), text(root, "name")));
+        setIfPresent(payload::setReportRequestId, text(root, "reportRequestId"));
+        setIfPresent(payload::setTargetClassSymbolicName,
+                firstNonBlank(text(root, "targetClassSymbolicName"), text(root, "template_name"), text(root, "className")));
+        setIfPresent(payload::setRepositoryName, text(root, "repositoryName"));
+        setIfPresent(payload::setRepositoryId, text(root, "repositoryId"));
+        setIfPresent(payload::setObjectStoreName,
+                firstNonBlank(text(root, "objectStoreName"), text(root, "objectStoreId")));
+        setIfPresent(payload::setSubmittedOn, text(root, "submittedOn"));
+        setIfPresent(payload::setSqlQuery, text(root, "sqlQuery"));
+        setIfPresent(payload::setSearchScope, text(root, "searchScope"));
+        setIfPresent(payload::setVersionOption, text(root, "versionOption"));
+        setIfPresent(payload::setFolderId, firstNonBlank(
+                text(root, "folderId"),
+                text(root, "selectedFolderId"),
+                text(root, "searchFolderId"),
+                text(root, "folderGUID"),
+                text(root, "folderGuid")));
+        setIfPresent(payload::setFolderPath, firstNonBlank(
+                text(root, "folderPath"),
+                text(root, "selectedFolderPath"),
+                text(root, "searchFolderPath"),
+                text(root, "folderName")));
+
+        if (root.has("includeSubclasses")) {
+            payload.setIncludeSubclasses(root.path("includeSubclasses").asBoolean(false));
+        } else if (root.has("searchSubclasses")) {
+            payload.setIncludeSubclasses(root.path("searchSubclasses").asBoolean(false));
+        }
+
+        if (root.has("searchSubfolders")) {
+            payload.setSearchSubfolders(root.path("searchSubfolders").asBoolean(false));
+        } else if (root.has("includeSubfolders")) {
+            payload.setSearchSubfolders(root.path("includeSubfolders").asBoolean(false));
+        }
+
+        JsonNode moreOptions = root.path("moreOptions");
+        if (!moreOptions.isMissingNode() && moreOptions.has("versionOption")) {
+            payload.setVersionOption(moreOptions.path("versionOption").asText(null));
+        }
+        if (!moreOptions.isMissingNode()) {
+            setIfPresent(payload::setFolderId, firstNonBlank(payload.getFolderId(),
+                    text(moreOptions, "folderId"), text(moreOptions, "selectedFolderId")));
+            setIfPresent(payload::setFolderPath, firstNonBlank(payload.getFolderPath(),
+                    text(moreOptions, "folderPath"), text(moreOptions, "selectedFolderPath")));
+            if (moreOptions.has("searchSubfolders")) {
+                payload.setSearchSubfolders(moreOptions.path("searchSubfolders").asBoolean(payload.isSearchSubfolders()));
+            }
+        }
+
+        if (root.has("criteria")) {
+            payload.setCriteria(parsePluginCriteria(root.path("criteria")));
+        } else if (root.has("searchCriteria")) {
+            payload.setCriteria(parseIcnCriteria(root.path("searchCriteria")));
+        }
+
+        if (root.has("resultDisplay")) {
+            payload.setResultColumns(parsePluginResultColumns(root.path("resultDisplay")));
+            payload.setSortOptions(parsePluginSort(root.path("resultDisplay")));
+        } else if (root.has("resultsDisplay")) {
+            payload.setResultColumns(parseIcnResultColumns(root.path("resultsDisplay")));
+            payload.setSortOptions(parseIcnSort(root.path("resultsDisplay")));
+        }
+
+        payload.setSendEmailTo(readEmailArray(root.get("sendEmailTo")));
+        payload.setSendEmailCC(readEmailArray(root.get("sendEmailCC")));
+        if (payload.getSendEmailCC().isEmpty()) {
+            payload.setSendEmailCC(readEmailArray(root.get("sendEmailCc")));
+        }
+    }
+
+    private List<String> readEmailArray(com.fasterxml.jackson.databind.JsonNode node) {
+        if (node == null || !node.isArray()) {
+            return List.of();
+        }
+        List<String> emails = new ArrayList<>();
+        for (com.fasterxml.jackson.databind.JsonNode value : node) {
+            if (value != null && !value.isNull()) {
+                emails.add(value.asText());
+            }
+        }
+        return EmailValidator.normalizeList(emails);
+    }
+
+    private List<SearchCriterion> parsePluginCriteria(JsonNode criteriaNode) {
+        List<SearchCriterion> criteria = new ArrayList<>();
+        if (!criteriaNode.isArray()) {
+            return criteria;
+        }
+        for (JsonNode node : criteriaNode) {
+            SearchCriterion criterion = new SearchCriterion();
+            criterion.setPropertySymbolicName(text(node, "propertySymbolicName"));
+            criterion.setPropertyDisplayName(text(node, "propertyDisplayName"));
+            criterion.setOperator(text(node, "operator"));
+            criterion.setDataType(text(node, "dataType"));
+            criterion.setCardinality(readCardinality(node));
+            criterion.setValues(readValues(node.path("values")));
+            if (StringUtils.isNotBlank(criterion.getPropertySymbolicName())
+                    && StringUtils.isNotBlank(criterion.getOperator())) {
+                criteria.add(criterion);
+            }
+        }
+        return criteria;
+    }
+
+    private List<SearchCriterion> parseIcnCriteria(JsonNode criteriaNode) {
+        List<SearchCriterion> criteria = new ArrayList<>();
+        if (!criteriaNode.isArray()) {
+            return criteria;
+        }
+        for (JsonNode node : criteriaNode) {
+            SearchCriterion criterion = new SearchCriterion();
+            criterion.setPropertySymbolicName(text(node, "id"));
+            criterion.setPropertyDisplayName(firstNonBlank(text(node, "name"), text(node, "label")));
+            criterion.setOperator(text(node, "selectedOperator"));
+            criterion.setDataType(text(node, "dataType"));
+            criterion.setCardinality(readCardinality(node));
+            criterion.setValues(readValues(node.path("values")));
+            if (StringUtils.isNotBlank(criterion.getPropertySymbolicName())
+                    && StringUtils.isNotBlank(criterion.getOperator())) {
+                criteria.add(criterion);
+            }
+        }
+        return criteria;
+    }
+
+    private PropertyCardinality readCardinality(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return PropertyCardinality.UNKNOWN;
+        }
+        if (node.has("multiValued")) {
+            return node.path("multiValued").asBoolean(false) ? PropertyCardinality.LIST : PropertyCardinality.SINGLE;
+        }
+        if (node.has("isList")) {
+            return node.path("isList").asBoolean(false) ? PropertyCardinality.LIST : PropertyCardinality.SINGLE;
+        }
+        if (node.has("list")) {
+            return node.path("list").asBoolean(false) ? PropertyCardinality.LIST : PropertyCardinality.SINGLE;
+        }
+        return PropertyCardinality.fromRaw(firstNonBlank(
+                text(node, "cardinality"),
+                text(node, "cardinalityName"),
+                text(node, "propertyCardinality")));
+    }
+
+    private List<ResultColumn> parsePluginResultColumns(JsonNode resultDisplay) {
+        List<ResultColumn> columns = new ArrayList<>();
+        JsonNode cols = resultDisplay.path("columns");
+        if (!cols.isArray()) {
+            return columns;
+        }
+        for (JsonNode col : cols) {
+            if (col.isObject()) {
+                columns.add(CePropertyNameResolver.toResultColumn(
+                        firstNonBlank(text(col, "propertySymbolicName"), text(col, "propertyDisplayName"))));
+            } else {
+                String symbolic = col.asText(null);
+                if (StringUtils.isNotBlank(symbolic)) {
+                    columns.add(CePropertyNameResolver.toResultColumn(symbolic));
+                }
+            }
+        }
+        return columns;
+    }
+
+    private List<ResultColumn> parseIcnResultColumns(JsonNode resultsDisplay) {
+        List<ResultColumn> columns = new ArrayList<>();
+        JsonNode cols = resultsDisplay.path("columns");
+        if (!cols.isArray()) {
+            return columns;
+        }
+        for (JsonNode col : cols) {
+            String symbolic = col.asText(null);
+            if (StringUtils.isNotBlank(symbolic)) {
+                columns.add(CePropertyNameResolver.toResultColumn(symbolic));
+            }
+        }
+        return columns;
+    }
+
+    private List<SortOption> parsePluginSort(JsonNode resultDisplay) {
+        List<SortOption> sortOptions = new ArrayList<>();
+        JsonNode sort = resultDisplay.path("sort");
+        if (!sort.isArray()) {
+            return sortOptions;
+        }
+        for (JsonNode node : sort) {
+            sortOptions.add(new SortOption(text(node, "propertySymbolicName"), text(node, "direction")));
+        }
+        return sortOptions;
+    }
+
+    private List<SortOption> parseIcnSort(JsonNode resultsDisplay) {
+        List<SortOption> sortOptions = new ArrayList<>();
+        String sortBy = text(resultsDisplay, "sortBy");
+        if (StringUtils.isNotBlank(sortBy)) {
+            String direction = resultsDisplay.path("sortAsc").asBoolean(true) ? "ASC" : "DESC";
+            sortOptions.add(new SortOption(sortBy, direction));
+        }
+        return sortOptions;
+    }
+
+    private List<SearchCriterion> mapCriteriaFromMetadata(List<String> encodedCriteria) {
+        List<SearchCriterion> criteria = new ArrayList<>();
+        for (String entry : encodedCriteria) {
+            String[] parts = entry.split("\\|", 3);
+            if (parts.length < 2) {
+                continue;
+            }
+            SearchCriterion criterion = new SearchCriterion();
+            criterion.setPropertySymbolicName(parts[0].trim());
+            criterion.setOperator(parts[1].trim());
+            if (parts.length == 3 && StringUtils.isNotBlank(parts[2])) {
+                List<String> values = new ArrayList<>();
+                for (String value : parts[2].split(",")) {
+                    if (StringUtils.isNotBlank(value)) {
+                        values.add(value.trim());
+                    }
+                }
+                criterion.setValues(values);
+            }
+            criteria.add(criterion);
+        }
+        return criteria;
+    }
+
+    private List<ResultColumn> mapResultColumnsFromMetadata(List<String> columns) {
+        List<ResultColumn> result = new ArrayList<>();
+        for (String column : columns) {
+            if (StringUtils.isNotBlank(column)) {
+                result.add(CePropertyNameResolver.toResultColumn(column.trim()));
+            }
+        }
+        return result;
+    }
+
+    private List<ResultColumn> defaultResultColumns(String targetClass) {
+        List<ResultColumn> columns = new ArrayList<>();
+        columns.add(new ResultColumn("Id", "Id"));
+        columns.add(new ResultColumn("DocumentTitle", "DocumentTitle"));
+        columns.add(new ResultColumn(targetClass, targetClass));
+        return columns;
+    }
+
+    private List<String> readValues(JsonNode valuesNode) {
+        List<String> values = new ArrayList<>();
+        if (!valuesNode.isArray()) {
+            return values;
+        }
+        for (JsonNode valueNode : valuesNode) {
+            if (valueNode == null || valueNode.isNull()) {
+                continue;
+            }
+            if (valueNode.isObject() && valueNode.has("value")) {
+                addIfPresent(values, valueNode.path("value").asText(null));
+            } else {
+                addIfPresent(values, valueNode.asText(null));
+            }
+        }
+        return values;
+    }
+
+    private void addIfPresent(List<String> values, String value) {
+        if (StringUtils.isNotBlank(value)) {
+            values.add(value.trim());
+        }
+    }
+
+    private String text(JsonNode node, String field) {
+        if (node == null || node.isMissingNode() || node.isNull()) {
+            return null;
+        }
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        String text = value.asText(null);
+        return StringUtils.isBlank(text) ? null : text.trim();
+    }
+
+    private String firstNonBlank(String... values) {
+        for (String value : values) {
+            if (StringUtils.isNotBlank(value)) {
+                return value.trim();
+            }
+        }
+        return null;
+    }
+
+    private void setIfPresent(java.util.function.Consumer<String> setter, String value) {
+        if (StringUtils.isNotBlank(value)) {
+            setter.accept(value.trim());
+        }
+    }
+}
+
+
+
+package com.cnb.reports.model;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/**
+ * Normalized report request payload used by query building and Excel export.
+ */
+public final class ReportRequestPayload {
+
+    private String reportName;
+    private String reportRequestId;
+    private String targetClassSymbolicName;
+    private String repositoryName;
+    private String repositoryId;
+    private String objectStoreName;
+    private String submittedOn;
+    private List<String> sendEmailTo = new ArrayList<>();
+    private List<String> sendEmailCC = new ArrayList<>();
+    private boolean includeSubclasses;
+    private String versionOption;
+    private String searchScope;
+    private String folderId;
+    private String folderPath;
+    private boolean searchSubfolders;
+    private List<SearchCriterion> criteria = new ArrayList<>();
+    private List<ResultColumn> resultColumns = new ArrayList<>();
+    private List<SortOption> sortOptions = new ArrayList<>();
+    private String sqlQuery;
+
+    public String getReportName() {
+        return reportName;
+    }
+
+    public void setReportName(String reportName) {
+        this.reportName = reportName;
+    }
+
+    public String getReportRequestId() {
+        return reportRequestId;
+    }
+
+    public void setReportRequestId(String reportRequestId) {
+        this.reportRequestId = reportRequestId;
+    }
+
+    public String getTargetClassSymbolicName() {
+        return targetClassSymbolicName;
+    }
+
+    public void setTargetClassSymbolicName(String targetClassSymbolicName) {
+        this.targetClassSymbolicName = targetClassSymbolicName;
+    }
+
+    public String getRepositoryName() {
+        return repositoryName;
+    }
+
+    public void setRepositoryName(String repositoryName) {
+        this.repositoryName = repositoryName;
+    }
+
+    public String getRepositoryId() {
+        return repositoryId;
+    }
+
+    public void setRepositoryId(String repositoryId) {
+        this.repositoryId = repositoryId;
+    }
+
+    public String getObjectStoreName() {
+        return objectStoreName;
+    }
+
+    public void setObjectStoreName(String objectStoreName) {
+        this.objectStoreName = objectStoreName;
+    }
+
+    public String getSubmittedOn() {
+        return submittedOn;
+    }
+
+    public void setSubmittedOn(String submittedOn) {
+        this.submittedOn = submittedOn;
+    }
+
+    public List<String> getSendEmailTo() {
+        return Collections.unmodifiableList(sendEmailTo);
+    }
+
+    public void setSendEmailTo(List<String> sendEmailTo) {
+        this.sendEmailTo = sendEmailTo != null ? new ArrayList<>(sendEmailTo) : new ArrayList<>();
+    }
+
+    public List<String> getSendEmailCC() {
+        return Collections.unmodifiableList(sendEmailCC);
+    }
+
+    public void setSendEmailCC(List<String> sendEmailCC) {
+        this.sendEmailCC = sendEmailCC != null ? new ArrayList<>(sendEmailCC) : new ArrayList<>();
+    }
+
+    public boolean isIncludeSubclasses() {
+        return includeSubclasses;
+    }
+
+    public void setIncludeSubclasses(boolean includeSubclasses) {
+        this.includeSubclasses = includeSubclasses;
+    }
+
+    public String getVersionOption() {
+        return versionOption;
+    }
+
+    public void setVersionOption(String versionOption) {
+        this.versionOption = versionOption;
+    }
+
+    public String getSearchScope() {
+        return searchScope;
+    }
+
+    public void setSearchScope(String searchScope) {
+        this.searchScope = searchScope;
+    }
+
+    public String getFolderId() {
+        return folderId;
+    }
+
+    public void setFolderId(String folderId) {
+        this.folderId = folderId;
+    }
+
+    public String getFolderPath() {
+        return folderPath;
+    }
+
+    public void setFolderPath(String folderPath) {
+        this.folderPath = folderPath;
+    }
+
+    public boolean isSearchSubfolders() {
+        return searchSubfolders;
+    }
+
+    public void setSearchSubfolders(boolean searchSubfolders) {
+        this.searchSubfolders = searchSubfolders;
+    }
+
+    public List<SearchCriterion> getCriteria() {
+        return Collections.unmodifiableList(criteria);
+    }
+
+    public void setCriteria(List<SearchCriterion> criteria) {
+        this.criteria = criteria != null ? new ArrayList<>(criteria) : new ArrayList<>();
+    }
+
+    public List<ResultColumn> getResultColumns() {
+        return Collections.unmodifiableList(resultColumns);
+    }
+
+    public void setResultColumns(List<ResultColumn> resultColumns) {
+        this.resultColumns = resultColumns != null ? new ArrayList<>(resultColumns) : new ArrayList<>();
+    }
+
+    public List<SortOption> getSortOptions() {
+        return Collections.unmodifiableList(sortOptions);
+    }
+
+    public void setSortOptions(List<SortOption> sortOptions) {
+        this.sortOptions = sortOptions != null ? new ArrayList<>(sortOptions) : new ArrayList<>();
+    }
+
+    public String getSqlQuery() {
+        return sqlQuery;
+    }
+
+    public void setSqlQuery(String sqlQuery) {
+        this.sqlQuery = sqlQuery;
+    }
+}
+
+
+
+package com.cnb.reports.model;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+public final class SearchCriterion {
+
+    private String propertySymbolicName;
+    private String propertyDisplayName;
+    private String operator;
+    private String dataType;
+    private PropertyCardinality cardinality = PropertyCardinality.UNKNOWN;
+    private List<String> values = new ArrayList<>();
+
+    public String getPropertySymbolicName() {
+        return propertySymbolicName;
+    }
+
+    public void setPropertySymbolicName(String propertySymbolicName) {
+        this.propertySymbolicName = propertySymbolicName;
+    }
+
+    public String getPropertyDisplayName() {
+        return propertyDisplayName;
+    }
+
+    public void setPropertyDisplayName(String propertyDisplayName) {
+        this.propertyDisplayName = propertyDisplayName;
+    }
+
+    public String getOperator() {
+        return operator;
+    }
+
+    public void setOperator(String operator) {
+        this.operator = operator;
+    }
+
+    public String getDataType() {
+        return dataType;
+    }
+
+    public void setDataType(String dataType) {
+        this.dataType = dataType;
+    }
+
+    public PropertyCardinality getCardinality() {
+        return cardinality;
+    }
+
+    public void setCardinality(PropertyCardinality cardinality) {
+        this.cardinality = cardinality != null ? cardinality : PropertyCardinality.UNKNOWN;
+    }
+
+    public List<String> getValues() {
+        return Collections.unmodifiableList(values);
+    }
+
+    public void setValues(List<String> values) {
+        this.values = values != null ? new ArrayList<>(values) : new ArrayList<>();
+    }
+}
+
+
+
+package com.cnb.reports.util;
+
+import com.cnb.reports.model.PropertyCardinality;
+
+/**
+ * Resolved FileNet property metadata used for SQL generation.
+ */
+public final class CePropertyMetadata {
+
+    private final String symbolicName;
+    private final PropertyCardinality cardinality;
+    private final String dataType;
+    private final boolean resolvedFromRepository;
+
+    public CePropertyMetadata(String symbolicName, PropertyCardinality cardinality, String dataType,
+            boolean resolvedFromRepository) {
+        this.symbolicName = symbolicName;
+        this.cardinality = cardinality != null ? cardinality : PropertyCardinality.UNKNOWN;
+        this.dataType = dataType;
+        this.resolvedFromRepository = resolvedFromRepository;
+    }
+
+    public String getSymbolicName() {
+        return symbolicName;
+    }
+
+    public PropertyCardinality getCardinality() {
+        return cardinality;
+    }
+
+    public String getDataType() {
+        return dataType;
+    }
+
+    public boolean isResolvedFromRepository() {
+        return resolvedFromRepository;
+    }
+
+    public boolean isList() {
+        return cardinality.isList();
+    }
+}
+
+
+
+
+package com.cnb.updater.config;
+
+public enum PropertyCardinality {
+    SINGLE,
+    MULTI;
+
+    public static PropertyCardinality fromConfig(String value) {
+        if (value == null) {
+            throw new IllegalArgumentException("Property cardinality is required.");
+        }
+        try {
+            return PropertyCardinality.valueOf(value.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("Unsupported property cardinality: " + value
+                    + ". Supported values: SINGLE, MULTI");
+        }
+    }
+}
+
+
+
+package com.cnb.reports.email;
+
+import com.cnb.reports.config.AppConfig;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class EmailValidatorTest {
+
+    @Test
+    void normalizesAndDeduplicatesEmails() {
+        List<String> normalized = EmailValidator.normalizeList(
+                List.of(" user1@test.com ", "user1@test.com", "user2@test.com", "bad"));
+        assertEquals(List.of("user1@test.com", "user2@test.com"), normalized);
+    }
+
+    @Test
+    void parsesSemicolonSeparatedValues() {
+        List<String> emails = EmailValidator.parseSemicolonSeparated("a@test.com; b@test.com ;a@test.com");
+        assertEquals(List.of("a@test.com", "b@test.com"), emails);
+    }
+}
+
+class BookmarkUrlBuilderTest {
+
+    @Test
+    void buildsBookmarkUrl(@TempDir Path tempDir) throws Exception {
+        Path configFile = tempDir.resolve("ReportsExecutionTool.properties");
+        String properties =
+                "filenet.uri=http://localhost/wsi/FNCEWS40MTOM/\n"
+                + "filenet.username=user\n"
+                + "filenet.password=pass\n"
+                + "filenet.objectStoreName=OBJ1\n"
+                + "icn.base.url=https://icn.example/navigator/\n"
+                + "icn.desktop.id=desktop1\n";
+        Files.write(configFile, properties.getBytes(StandardCharsets.UTF_8));
+
+        AppConfig config = new AppConfig(configFile.toString());
+        String url = BookmarkUrlBuilder.build(config, "repo-1", "doc-1");
+        assertEquals("https://icn.example/navigator/bookmark.jsp?desktop=desktop1&repositoryId=repo-1&docid=doc-1", url);
+    }
+
+    @Test
+    void returnsNullWhenRequiredValuesMissing(@TempDir Path tempDir) throws Exception {
+        Path configFile = tempDir.resolve("ReportsExecutionTool.properties");
+        String properties =
+                "filenet.uri=http://localhost\n"
+                + "filenet.username=u\n"
+                + "filenet.password=p\n"
+                + "filenet.objectStoreName=os";
+        Files.write(configFile, properties.getBytes(StandardCharsets.UTF_8));
+
+        AppConfig config = new AppConfig(configFile.toString());
+        assertNull(BookmarkUrlBuilder.build(config, "", "doc-1"));
+    }
+}
+
+class EmailTemplateRendererTest {
+
+    @Test
+    void replacesPlaceholders() {
+        ReportRequestEmailContext context = new ReportRequestEmailContext();
+        context.setReportName("Monthly Report");
+        context.setBookmarkUrl("https://icn/bookmark");
+
+        String rendered = EmailTemplateRenderer.applyPlaceholders(
+                "Report: ${reportName}\nLink: ${bookmarkUrl}", context);
+        assertTrue(rendered.contains("Monthly Report"));
+        assertTrue(rendered.contains("https://icn/bookmark"));
+    }
+}
+
+
+
+
+package com.cnb.reports.email;
+
+import com.cnb.reports.config.AppConfig;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+public final class EmailService {
+
+    private static final Logger LOGGER = LogManager.getLogger(EmailService.class);
+
+    private static final String DEFAULT_ACK_BODY =
+            "Hello,\n"
+            + "\n"
+            + "Your report request has been submitted successfully.\n"
+            + "\n"
+            + "Report Name: ${reportName}\n"
+            + "Target Document Class: ${targetDocumentClass}\n"
+            + "Repository Name: ${repositoryName}\n"
+            + "Status: ${status}\n"
+            + "Submitted On: ${submittedOn}\n"
+            + "\n"
+            + "You will receive another email once the report execution is completed.\n"
+            + "\n"
+            + "Thank you.\n";
+
+    private static final String DEFAULT_COMPLETION_BODY =
+            "Hello,\n"
+            + "\n"
+            + "Your report has been generated successfully.\n"
+            + "\n"
+            + "Report Name: ${reportName}\n"
+            + "Target Document Class: ${targetDocumentClass}\n"
+            + "Repository Name: ${repositoryName}\n"
+            + "Status: ${status}\n"
+            + "Execution Start Date: ${executionStartDate}\n"
+            + "Execution End Date: ${executionEndDate}\n"
+            + "\n"
+            + "Open Report Request:\n"
+            + "${bookmarkUrl}\n"
+            + "\n"
+            + "Please open the link and click Download to download the generated report.\n"
+            + "\n"
+            + "Thank you.\n";
+
+    private static final String DEFAULT_COMPLETION_BODY_NO_BOOKMARK =
+            "Hello,\n"
+            + "\n"
+            + "Your report has been generated successfully.\n"
+            + "\n"
+            + "Report Name: ${reportName}\n"
+            + "Target Document Class: ${targetDocumentClass}\n"
+            + "Repository Name: ${repositoryName}\n"
+            + "Status: ${status}\n"
+            + "Execution Start Date: ${executionStartDate}\n"
+            + "Execution End Date: ${executionEndDate}\n"
+            + "\n"
+            + "The report can be accessed from the ICN Reports Feature.\n"
+            + "\n"
+            + "Thank you.\n";
+
+    private static final String DEFAULT_FAILURE_BODY =
+            "Hello,\n"
+            + "\n"
+            + "Your report request could not be completed.\n"
+            + "\n"
+            + "Report Name: ${reportName}\n"
+            + "Target Document Class: ${targetDocumentClass}\n"
+            + "Repository Name: ${repositoryName}\n"
+            + "Status: ${status}\n"
+            + "Execution Start Date: ${executionStartDate}\n"
+            + "Execution End Date: ${executionEndDate}\n"
+            + "\n"
+            + "Please contact the support team for assistance.\n"
+            + "\n"
+            + "Thank you.\n";
+
+    private final AppConfig config;
+    private final SmtpEmailSender sender;
+
+    public EmailService(AppConfig config) {
+        this.config = config;
+        this.sender = new SmtpEmailSender(config);
+    }
+
+    public void sendAcknowledgementEmail(ReportRequestEmailContext context) {
+        sendSafely("acknowledgement", () -> {
+            String subject = "Report Request Submitted - " + safe(context.getReportName());
+            String body = EmailTemplateRenderer.render(
+                    config.getAcknowledgementTemplatePath(), DEFAULT_ACK_BODY, context);
+            sender.send(subject, body, context.getSendEmailTo(), context.getSendEmailCc(), null);
+        });
+    }
+
+    public void sendCompletionEmail(ReportRequestEmailContext context) {
+        sendSafely("completion", () -> {
+            String subject = "Report Completed - " + safe(context.getReportName());
+            String defaultBody = StringUtils.isBlank(context.getBookmarkUrl())
+                    ? DEFAULT_COMPLETION_BODY_NO_BOOKMARK
+                    : DEFAULT_COMPLETION_BODY;
+            String body = EmailTemplateRenderer.render(
+                    config.getCompletionTemplatePath(), defaultBody, context);
+            sender.send(subject, body, context.getSendEmailTo(), context.getSendEmailCc(), null);
+        });
+    }
+
+    public void sendFailureEmail(ReportRequestEmailContext context) {
+        sendSafely("failure", () -> {
+            String subject = "Report Failed - " + safe(context.getReportName());
+            String body = EmailTemplateRenderer.render(
+                    config.getFailureTemplatePath(), DEFAULT_FAILURE_BODY, context);
+            sender.send(subject, body, context.getSendEmailTo(), context.getSendEmailCc(), null);
+        });
+    }
+
+    private void sendSafely(String type, EmailAction action) {
+        try {
+            action.run();
+        } catch (Exception ex) {
+            LOGGER.error("Failed to send {} email.", type, ex);
+        }
+    }
+
+    private static String safe(String value) {
+        return value != null ? value : "Report Request";
+    }
+
+    @FunctionalInterface
+    private interface EmailAction {
+        void run() throws Exception;
+    }
+}
