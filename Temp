@@ -1,1 +1,66 @@
-temp
+# ============================================================
+# Report Execution Tool - Configuration
+# Location: D:/Rameshwar/ReportsExecutionTool/config/
+# ============================================================
+
+# Application paths
+app.base.path=D:/Rameshwar/ReportsExecutionTool/
+app.config.path=D:/Rameshwar/ReportsExecutionTool/config/
+
+# FileNet Content Engine connection
+filenet.uri=http://192.168.4.79:9080/wsi/FNCEWS40MTOM/
+filenet.username=p8admin
+filenet.password=Ebla1234
+filenet.objectStoreName=OBJ1
+filenet.stanza=FileNetP8WSI
+
+# ReportRequest document class and property names
+report.class=ReportRequest
+status.property=Status
+pending.status=Pending
+inprogress.status=InProgress
+completed.status=Completed
+failed.status=Failed
+rerun.status=Rerun
+hold.status=Hold
+cancelled.status=Cancelled
+
+target.class.property=TargetDocumentClass
+repository.name.property=RepositoryName
+criteria.property=SearchCriteriaParams
+result.columns.property=ResultSetColumns
+sql.query.property=SQLQuery
+start.date.property=ReportExecutionStartDate
+end.date.property=ReportExecutionEndDate
+last.execution.date.property=LastExecutionDate
+send.email.to.property=SendEmailTo
+send.email.cc.property=SendEmailCC
+
+# Email notification
+mail.enabled=true
+mail.smtp.host=
+mail.smtp.port=587
+mail.smtp.auth=true
+mail.smtp.starttls.enable=true
+mail.smtp.username=
+mail.smtp.password=
+mail.from.address=
+mail.from.name=Reports Notification
+mail.attach.excel=false
+
+# ICN bookmark URL for completion email
+icn.base.url=http://192.168.0.12:9080/navigator
+icn.desktop.id=MLife
+
+# Processing
+poll.batch.size=10
+worker.thread.count=5
+processable.statuses=Pending
+# Report output folders
+output.inprocess.folder=D:/Rameshwar/ReportsExecutionTool/reports/Inprocess
+output.completed.folder=D:/Rameshwar/ReportsExecutionTool/reports/Completed
+excel.max.rows.per.sheet=500000
+
+# Scheduling: false = single run (Windows Task Scheduler), true = internal polling loop
+polling.loop.enabled=false
+polling.interval.minutes=5
