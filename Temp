@@ -1,1 +1,1454 @@
-temp
+# IBM FileNet Connection
+filenet.uri=http://192.168.4.62:9080/wsi/FNCEWS40MTOM/
+filenet.username=p8admin
+filenet.password=Ebla1234
+filenet.objectStore=BankingOS
+
+# Document class
+document.className=CNBAccounts
+document.classes=
+
+# Search criteria (AND logic between configured criteria)
+# Set count=1 to search using one property only.
+search.criteria.count=1
+search.criteria.1.symbolicName=AccountNum
+search.criteria.1.dataType=String
+search.criteria.1.cardinality=MULTI
+
+# Target CIS property to evaluate and update
+target.cis.symbolicName=CISNumber
+target.cis.dataType=String
+target.cis.cardinality=MULTI
+
+# ANY_VALUE = skip update when CIS Number multi-value property has any value (recommended)
+target.cis.existenceCheck=ANY_VALUE
+
+# Input / Output
+input.excel=D:/Rameshwar/CISNumberUpdateUtility/input/Book2.xlsx
+input.excel.column.accountNumber=ACCOUNT_NUMBER
+input.excel.column.accountName=ACCOUNT_NAME
+input.excel.column.cis=CIS_NUMBER
+input.excel.column.cisName=CIS_NAME
+output.searchCsv=D:/Rameshwar/CISNumberUpdateUtility/output/search-results.csv
+output.updatedCsv=D:/Rameshwar/CISNumberUpdateUtility/output/update-results.csv
+
+# Search batch size for FileNet result paging
+search.batchSize=500
+
+# Performance tuning - adjust these values and re-run to test throughput
+# search.accountBatchSize: account numbers per batch FileNet CE query (INTERSECTS for MULTI, IN for SINGLE)
+search.accountBatchSize=250
+# processing.searchThreadPoolSize: parallel search workers for Utility 1
+processing.searchThreadPoolSize=6
+# processing.updateThreadPoolSize: parallel update workers for Utility 2 (increase for large volumes e.g. 16-32)
+processing.updateThreadPoolSize=16
+# processing.updateProgressLogInterval: log update progress every N eligible rows
+processing.updateProgressLogInterval=5000
+
+# Update performance options for Utility 2
+# update.resolveCurrentVersion=true fetches current document version before update (safer, slightly slower)
+update.resolveCurrentVersion=true
+# update.recheckCisBeforeUpdate=true re-checks CIS property before writing (safer, slightly slower)
+update.recheckCisBeforeUpdate=true
+# update.refreshMode=NO_REFRESH is faster; use REFRESH if you need server-refreshed object after save
+update.refreshMode=NO_REFRESH
+
+# Logging
+log.path=logs/cis-update.log
+
+
+
+
+
+package com.cnb.updater.service;
+
+import com.cnb.updater.config.AppConfig;
+import com.cnb.updater.config.PropertyDefinition;
+import com.cnb.updater.config.UpdateRefreshMode;
+import com.cnb.updater.filenet.FileNetConnectionManager;
+import com.cnb.updater.model.SearchResultRecord;
+import com.cnb.updater.model.UpdateResultRecord;
+import com.cnb.updater.util.FileNetPropertyHelper;
+import com.cnb.updater.util.ProcessingUtil;
+import com.filenet.api.constants.PropertyNames;
+import com.filenet.api.constants.RefreshMode;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.core.VersionSeries;
+import com.filenet.api.property.Properties;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.util.Id;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+
+public final class DocumentUpdateService {
+
+    private static final Logger LOGGER = LogManager.getLogger(DocumentUpdateService.class);
+
+    private final AppConfig config;
+
+    public DocumentUpdateService(FileNetConnectionManager connectionManager) {
+        this.config = connectionManager.getConfig();
+    }
+
+    public UpdateResultRecord processUpdates(List<SearchResultRecord> records) {
+        int totalRows = records.size();
+        AtomicInteger eligibleRows = new AtomicInteger();
+        AtomicInteger updatedRows = new AtomicInteger();
+        AtomicInteger skippedRows = new AtomicInteger();
+        AtomicInteger failedRows = new AtomicInteger();
+        AtomicInteger ignoredRows = new AtomicInteger();
+        AtomicInteger processedRows = new AtomicInteger();
+
+        List<SearchResultRecord> eligibleRecords = new ArrayList<>();
+        for (SearchResultRecord record : records) {
+            if (!SearchResultRecord.STATUS_DOES_NOT_EXIST.equals(record.getStatus())) {
+                ignoredRows.incrementAndGet();
+                continue;
+            }
+            eligibleRows.incrementAndGet();
+            eligibleRecords.add(record);
+        }
+
+        if (eligibleRecords.isEmpty()) {
+            return new UpdateResultRecord(
+                    totalRows,
+                    eligibleRows.get(),
+                    updatedRows.get(),
+                    skippedRows.get(),
+                    failedRows.get(),
+                    ignoredRows.get()
+            );
+        }
+
+        int threadPoolSize = Math.min(config.getUpdateThreadPoolSize(), eligibleRecords.size());
+        List<List<SearchResultRecord>> workerPartitions =
+                ProcessingUtil.partitionEvenly(eligibleRecords, threadPoolSize);
+
+        LOGGER.info("Starting parallel update for {} eligible row(s) using {} worker(s). "
+                        + "resolveCurrentVersion={}, recheckCisBeforeUpdate={}, refreshMode={}",
+                eligibleRecords.size(),
+                threadPoolSize,
+                config.isUpdateResolveCurrentVersion(),
+                config.isUpdateRecheckCisBeforeUpdate(),
+                config.getUpdateRefreshMode());
+
+        ExecutorService executorService = Executors.newFixedThreadPool(threadPoolSize);
+        try {
+            List<Future<?>> futures = new ArrayList<>();
+            for (int workerIndex = 0; workerIndex < workerPartitions.size(); workerIndex++) {
+                final List<SearchResultRecord> workerRecords = workerPartitions.get(workerIndex);
+                if (workerRecords.isEmpty()) {
+                    continue;
+                }
+                final int currentWorkerNumber = workerIndex + 1;
+                futures.add(executorService.submit(() -> runUpdateWorker(
+                        currentWorkerNumber,
+                        workerRecords,
+                        eligibleRecords.size(),
+                        updatedRows,
+                        skippedRows,
+                        failedRows,
+                        processedRows
+                )));
+            }
+
+            for (Future<?> future : futures) {
+                try {
+                    future.get();
+                } catch (ExecutionException ex) {
+                    Throwable cause = ex.getCause();
+                    if (cause instanceof RuntimeException) {
+                        throw (RuntimeException) cause;
+                    }
+                    throw new RuntimeException(cause == null ? ex : cause);
+                }
+            }
+        } finally {
+            ProcessingUtil.shutdownExecutor(executorService);
+        }
+
+        return new UpdateResultRecord(
+                totalRows,
+                eligibleRows.get(),
+                updatedRows.get(),
+                skippedRows.get(),
+                failedRows.get(),
+                ignoredRows.get()
+        );
+    }
+
+    private void runUpdateWorker(int workerNumber,
+                                 List<SearchResultRecord> workerRecords,
+                                 int totalEligibleRows,
+                                 AtomicInteger updatedRows,
+                                 AtomicInteger skippedRows,
+                                 AtomicInteger failedRows,
+                                 AtomicInteger processedRows) {
+        PropertyDefinition targetProperty = config.getTargetCis().getPropertyDefinition();
+        UpdateWorkerContext workerContext = new UpdateWorkerContext(targetProperty, config.getUpdateRefreshMode());
+
+        try (FileNetConnectionManager workerConnection = new FileNetConnectionManager(config)) {
+            ObjectStore objectStore = workerConnection.getObjectStore();
+            LOGGER.info("Update worker {} started with {} assigned row(s)", workerNumber, workerRecords.size());
+
+            for (SearchResultRecord record : workerRecords) {
+                processSingleUpdate(objectStore, workerContext, record, updatedRows, skippedRows, failedRows);
+
+                int completed = processedRows.incrementAndGet();
+                if (completed % config.getUpdateProgressLogInterval() == 0
+                        || completed == totalEligibleRows) {
+                    LOGGER.info("Update progress: processed {}/{} eligible row(s). updated={}, skipped={}, failed={}",
+                            completed,
+                            totalEligibleRows,
+                            updatedRows.get(),
+                            skippedRows.get(),
+                            failedRows.get());
+                }
+            }
+
+            LOGGER.info("Update worker {} completed {} row(s)", workerNumber, workerRecords.size());
+        } catch (Exception ex) {
+            throw new RuntimeException("Update worker " + workerNumber + " failed: " + ex.getMessage(), ex);
+        }
+    }
+
+    private void processSingleUpdate(ObjectStore objectStore,
+                                     UpdateWorkerContext workerContext,
+                                     SearchResultRecord record,
+                                     AtomicInteger updatedRows,
+                                     AtomicInteger skippedRows,
+                                     AtomicInteger failedRows) {
+        if (StringUtils.isBlank(record.getDocumentGuid())) {
+            record.setUpdateStatus(UpdateResultRecord.UPDATE_STATUS_FAILED);
+            record.appendComment("Document GUID is missing");
+            failedRows.incrementAndGet();
+            return;
+        }
+
+        try {
+            UpdateOutcome outcome = updateDocument(objectStore, workerContext, record);
+            record.setUpdateStatus(outcome.getUpdateStatus());
+
+            if (UpdateResultRecord.UPDATE_STATUS_UPDATED.equals(outcome.getUpdateStatus())) {
+                updatedRows.incrementAndGet();
+                LOGGER.debug("Updated CIS Number for document GUID {}", record.getDocumentGuid());
+            } else if (UpdateResultRecord.UPDATE_STATUS_SKIPPED.equals(outcome.getUpdateStatus())) {
+                skippedRows.incrementAndGet();
+                record.setComments(SearchResultRecord.COMMENT_SKIPPED_DURING_UPDATE);
+                LOGGER.debug("Skipped update for document GUID {} because CIS Number already exists",
+                        record.getDocumentGuid());
+            }
+        } catch (Exception ex) {
+            record.setUpdateStatus(UpdateResultRecord.UPDATE_STATUS_FAILED);
+            record.appendComment(ex.getMessage());
+            failedRows.incrementAndGet();
+            LOGGER.error("Failed to update document GUID {}: {}", record.getDocumentGuid(), ex.getMessage(), ex);
+        }
+    }
+
+    private UpdateOutcome updateDocument(ObjectStore objectStore,
+                                         UpdateWorkerContext workerContext,
+                                         SearchResultRecord record) throws Exception {
+        PropertyDefinition targetProperty = workerContext.getTargetProperty();
+        String cisPropertyName = targetProperty.getSymbolicName();
+
+        Document document = fetchDocumentForUpdate(objectStore, workerContext, record.getDocumentGuid());
+        Properties properties = document.getProperties();
+
+        if (config.isUpdateRecheckCisBeforeUpdate()
+                && FileNetPropertyHelper.hasAnyCisValue(properties, targetProperty)) {
+            return new UpdateOutcome(UpdateResultRecord.UPDATE_STATUS_SKIPPED);
+        }
+
+        if (StringUtils.isBlank(record.getCisNumber())) {
+            throw new IllegalStateException("CSV CIS Number value is blank");
+        }
+
+        FileNetPropertyHelper.setMultiValueCis(properties, cisPropertyName, record.getCisNumber());
+        document.save(workerContext.getRefreshMode());
+        return new UpdateOutcome(UpdateResultRecord.UPDATE_STATUS_UPDATED);
+    }
+
+    private Document fetchDocumentForUpdate(ObjectStore objectStore,
+                                            UpdateWorkerContext workerContext,
+                                            String documentGuid) {
+        if (!config.isUpdateResolveCurrentVersion()) {
+            return Factory.Document.fetchInstance(
+                    objectStore,
+                    new Id(documentGuid),
+                    workerContext.getDocumentPropertyFilter()
+            );
+        }
+
+        Document document = Factory.Document.fetchInstance(
+                objectStore,
+                new Id(documentGuid),
+                workerContext.getVersionSeriesPropertyFilter()
+        );
+        VersionSeries versionSeries = document.get_VersionSeries();
+        if (versionSeries != null) {
+            Object currentVersion = versionSeries.get_CurrentVersion();
+            if (currentVersion instanceof Document) {
+                Document currentDocument = (Document) currentVersion;
+                if (!documentGuid.equals(currentDocument.get_Id().toString())) {
+                    return Factory.Document.fetchInstance(
+                            objectStore,
+                            currentDocument.get_Id(),
+                            workerContext.getDocumentPropertyFilter()
+                    );
+                }
+            }
+        }
+        return document;
+    }
+
+    private static final class UpdateWorkerContext {
+        private final PropertyDefinition targetProperty;
+        private final RefreshMode refreshMode;
+        private final PropertyFilter documentPropertyFilter;
+        private final PropertyFilter versionSeriesPropertyFilter;
+
+        private UpdateWorkerContext(PropertyDefinition targetProperty, UpdateRefreshMode updateRefreshMode) {
+            this.targetProperty = targetProperty;
+            this.refreshMode = updateRefreshMode.toRefreshMode();
+            this.documentPropertyFilter = createDocumentPropertyFilter(targetProperty);
+            this.versionSeriesPropertyFilter = createVersionSeriesPropertyFilter(targetProperty);
+        }
+
+        private PropertyDefinition getTargetProperty() {
+            return targetProperty;
+        }
+
+        private RefreshMode getRefreshMode() {
+            return refreshMode;
+        }
+
+        private PropertyFilter getDocumentPropertyFilter() {
+            return documentPropertyFilter;
+        }
+
+        private PropertyFilter getVersionSeriesPropertyFilter() {
+            return versionSeriesPropertyFilter;
+        }
+
+        private static PropertyFilter createDocumentPropertyFilter(PropertyDefinition targetProperty) {
+            PropertyFilter filter = new PropertyFilter();
+            filter.addIncludeProperty(0, null, null, PropertyNames.ID, null);
+            filter.addIncludeProperty(0, null, null, targetProperty.getSymbolicName(), null);
+            return filter;
+        }
+
+        private static PropertyFilter createVersionSeriesPropertyFilter(PropertyDefinition targetProperty) {
+            PropertyFilter filter = createDocumentPropertyFilter(targetProperty);
+            filter.addIncludeProperty(0, null, null, PropertyNames.VERSION_SERIES, null);
+            return filter;
+        }
+    }
+
+    private static final class UpdateOutcome {
+        private final String updateStatus;
+
+        private UpdateOutcome(String updateStatus) {
+            this.updateStatus = updateStatus;
+        }
+
+        private String getUpdateStatus() {
+            return updateStatus;
+        }
+    }
+}
+
+
+
+
+package com.cnb.updater.util;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.TimeUnit;
+
+public final class ProcessingUtil {
+
+    private ProcessingUtil() {
+    }
+
+    public static <T> List<List<T>> partition(List<T> items, int batchSize) {
+        if (items == null || items.isEmpty()) {
+            return Collections.emptyList();
+        }
+        if (batchSize < 1) {
+            throw new IllegalArgumentException("Batch size must be at least 1.");
+        }
+
+        List<List<T>> batches = new ArrayList<>();
+        for (int index = 0; index < items.size(); index += batchSize) {
+            int end = Math.min(index + batchSize, items.size());
+            batches.add(new ArrayList<>(items.subList(index, end)));
+        }
+        return batches;
+    }
+
+    public static List<String> distinctAccountNumbers(List<String> accountNumbers) {
+        Set<String> uniqueAccountNumbers = new LinkedHashSet<>();
+        if (accountNumbers != null) {
+            for (String accountNumber : accountNumbers) {
+                if (accountNumber != null && !accountNumber.trim().isEmpty()) {
+                    uniqueAccountNumbers.add(accountNumber.trim());
+                }
+            }
+        }
+        return new ArrayList<>(uniqueAccountNumbers);
+    }
+
+    public static <T> List<List<T>> partitionEvenly(List<T> items, int partitionCount) {
+        if (items == null || items.isEmpty()) {
+            return Collections.emptyList();
+        }
+        if (partitionCount < 1) {
+            throw new IllegalArgumentException("Partition count must be at least 1.");
+        }
+
+        List<List<T>> partitions = new ArrayList<>();
+        for (int index = 0; index < partitionCount; index++) {
+            partitions.add(new ArrayList<>());
+        }
+
+        for (int index = 0; index < items.size(); index++) {
+            partitions.get(index % partitionCount).add(items.get(index));
+        }
+        return partitions;
+    }
+
+    public static void shutdownExecutor(ExecutorService executorService) {
+        executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(1, TimeUnit.HOURS)) {
+                executorService.shutdownNow();
+            }
+        } catch (InterruptedException ex) {
+            executorService.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+}
+
+
+
+
+package com.cnb.updater.util;
+
+import com.cnb.updater.config.AppConfig;
+import com.cnb.updater.config.PropertyDefinition;
+import org.apache.commons.lang3.StringUtils;
+
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+public final class ValidationUtil {
+
+    private ValidationUtil() {
+    }
+
+    public static void validateForSearchUtility(AppConfig config) {
+        validateCommonConfig(config);
+        validateReadableFile(config.getInputExcel(), "input.excel");
+        validateWritableParent(config.getOutputSearchCsv(), "output.searchCsv");
+    }
+
+    public static void validateForUpdateUtility(AppConfig config) {
+        validateCommonConfig(config);
+        validateReadableFile(config.getOutputSearchCsv(), "output.searchCsv");
+        validateWritableParent(config.getOutputUpdatedCsv(), "output.updatedCsv");
+    }
+
+    private static void validateCommonConfig(AppConfig config) {
+        if (config.getDocumentClasses().isEmpty()) {
+            throw new IllegalArgumentException("At least one document class must be configured.");
+        }
+        if (config.getSearchCriteria().isEmpty()) {
+            throw new IllegalArgumentException("At least one search criterion must be configured.");
+        }
+        for (PropertyDefinition criterion : config.getSearchCriteria()) {
+            if (StringUtils.isBlank(criterion.getSymbolicName())) {
+                throw new IllegalArgumentException("Search criterion symbolicName must be configured.");
+            }
+        }
+        if (config.getTargetCis() == null
+                || config.getTargetCis().getPropertyDefinition() == null
+                || StringUtils.isBlank(config.getTargetCis().getPropertyDefinition().getSymbolicName())) {
+            throw new IllegalArgumentException("target.cis.symbolicName must be configured.");
+        }
+        validatePositiveInt(config.getSearchBatchSize(), "search.batchSize");
+        validatePositiveInt(config.getSearchAccountBatchSize(), "search.accountBatchSize");
+        validatePositiveInt(config.getSearchThreadPoolSize(), "processing.searchThreadPoolSize");
+        validatePositiveInt(config.getUpdateThreadPoolSize(), "processing.updateThreadPoolSize");
+        validatePositiveInt(config.getUpdateProgressLogInterval(), "processing.updateProgressLogInterval");
+    }
+
+    private static void validatePositiveInt(int value, String propertyName) {
+        if (value < 1) {
+            throw new IllegalArgumentException(propertyName + " must be at least 1.");
+        }
+    }
+
+    private static void validateReadableFile(String filePath, String propertyName) {
+        Path path = Paths.get(filePath);
+        if (!Files.isRegularFile(path)) {
+            throw new IllegalArgumentException("Configured file does not exist or is not readable: "
+                    + propertyName + "=" + filePath);
+        }
+    }
+
+    private static void validateWritableParent(String filePath, String propertyName) {
+        File file = new File(filePath);
+        File parent = file.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs()) {
+            throw new IllegalArgumentException("Unable to create output directory for "
+                    + propertyName + "=" + filePath);
+        }
+        if (parent != null && !parent.canWrite()) {
+            throw new IllegalArgumentException("Output directory is not writable for "
+                    + propertyName + "=" + filePath);
+        }
+    }
+}
+
+
+
+
+
+package com.cnb.updater.util;
+
+import com.cnb.updater.config.AppConfig;
+import com.cnb.updater.config.CisExistenceCheck;
+import com.cnb.updater.config.ExcelColumnConfig;
+import com.cnb.updater.config.PropertyCardinality;
+import com.cnb.updater.config.PropertyDataType;
+import com.cnb.updater.config.PropertyDefinition;
+import com.cnb.updater.config.UpdateRefreshMode;
+import org.apache.commons.lang3.StringUtils;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Properties;
+import java.util.stream.Collectors;
+
+public final class PropertyLoader {
+
+    public static final String CONFIG_FILE_SYSTEM_PROPERTY = "config.file";
+    public static final String DEFAULT_CONFIG_FILE = "config/CISNumberUpdateUtility.properties";
+
+    private PropertyLoader() {
+    }
+
+    public static String resolveConfigPath(String[] args) {
+        String configFromSystemProperty = System.getProperty(CONFIG_FILE_SYSTEM_PROPERTY);
+        if (StringUtils.isNotBlank(configFromSystemProperty)) {
+            return configFromSystemProperty.trim();
+        }
+        if (args != null && args.length > 0 && StringUtils.isNotBlank(args[0])) {
+            return args[0].trim();
+        }
+        return DEFAULT_CONFIG_FILE;
+    }
+
+    public static AppConfig load() throws IOException {
+        return load(DEFAULT_CONFIG_FILE);
+    }
+
+    public static AppConfig load(String configFilePath) throws IOException {
+        Properties props = new Properties();
+        try (InputStream input = new FileInputStream(configFilePath)) {
+            props.load(input);
+        }
+
+        String logPath = props.getProperty("log.path", "logs/cis-update.log");
+        System.setProperty("log.path", logPath);
+
+        List<String> documentClasses = resolveDocumentClasses(props);
+        List<PropertyDefinition> searchCriteria = loadSearchCriteria(props);
+        TargetCisConfig targetCis = loadTargetCisConfig(props);
+
+        return new AppConfig(
+                trimTrailingSlash(require(props, "filenet.uri")),
+                require(props, "filenet.username"),
+                require(props, "filenet.password"),
+                require(props, "filenet.objectStore"),
+                documentClasses,
+                searchCriteria,
+                targetCis,
+                require(props, "input.excel"),
+                loadExcelColumnConfig(props),
+                require(props, "output.searchCsv"),
+                require(props, "output.updatedCsv"),
+                logPath,
+                parseRequiredInt(props, "search.batchSize"),
+                parseRequiredInt(props, "search.accountBatchSize"),
+                parseRequiredInt(props, "processing.searchThreadPoolSize"),
+                parseRequiredInt(props, "processing.updateThreadPoolSize"),
+                parseRequiredInt(props, "processing.updateProgressLogInterval"),
+                parseRequiredBoolean(props, "update.resolveCurrentVersion"),
+                parseRequiredBoolean(props, "update.recheckCisBeforeUpdate"),
+                UpdateRefreshMode.fromConfig(require(props, "update.refreshMode"))
+        );
+    }
+
+    private static List<PropertyDefinition> loadSearchCriteria(Properties props) {
+        int count = parseInt(props, "search.criteria.count", -1);
+        if (count < 1) {
+            throw new IllegalArgumentException("search.criteria.count must be at least 1.");
+        }
+
+        List<PropertyDefinition> criteria = new ArrayList<>();
+        for (int index = 1; index <= count; index++) {
+            String prefix = "search.criteria." + index;
+            criteria.add(loadPropertyDefinition(props, prefix));
+        }
+        return criteria;
+    }
+
+    private static TargetCisConfig loadTargetCisConfig(Properties props) {
+        PropertyDefinition propertyDefinition = loadPropertyDefinition(props, "target.cis");
+        CisExistenceCheck existenceCheck = CisExistenceCheck.fromConfig(
+                require(props, "target.cis.existenceCheck"));
+        return new TargetCisConfig(propertyDefinition, existenceCheck);
+    }
+
+    private static ExcelColumnConfig loadExcelColumnConfig(Properties props) {
+        return new ExcelColumnConfig(
+                props.getProperty("input.excel.column.accountNumber", "ACCOUNT_NUMBER").trim(),
+                props.getProperty("input.excel.column.accountName", "ACCOUNT_NAME").trim(),
+                props.getProperty("input.excel.column.cis", "CIS").trim(),
+                props.getProperty("input.excel.column.cisName", "CIS_NAME").trim()
+        );
+    }
+
+    private static PropertyDefinition loadPropertyDefinition(Properties props, String prefix) {
+        return new PropertyDefinition(
+                require(props, prefix + ".symbolicName"),
+                PropertyDataType.fromConfig(require(props, prefix + ".dataType")),
+                PropertyCardinality.fromConfig(require(props, prefix + ".cardinality"))
+        );
+    }
+
+    private static List<String> resolveDocumentClasses(Properties props) {
+        String classes = props.getProperty("document.classes");
+        if (StringUtils.isNotBlank(classes)) {
+            return Arrays.stream(classes.split(","))
+                    .map(String::trim)
+                    .filter(StringUtils::isNotBlank)
+                    .collect(Collectors.toList());
+        }
+
+        String singleClass = props.getProperty("document.className");
+        if (StringUtils.isBlank(singleClass)) {
+            throw new IllegalArgumentException("Missing required property: document.className or document.classes");
+        }
+
+        List<String> result = new ArrayList<>();
+        result.add(singleClass.trim());
+        return result;
+    }
+
+    private static String require(Properties props, String key) {
+        String value = props.getProperty(key);
+        if (StringUtils.isBlank(value)) {
+            throw new IllegalArgumentException("Missing required property: " + key);
+        }
+        return value.trim();
+    }
+
+    private static int parseInt(Properties props, String key, int defaultValue) {
+        String value = props.getProperty(key);
+        if (StringUtils.isBlank(value)) {
+            return defaultValue;
+        }
+        return Integer.parseInt(value.trim());
+    }
+
+    private static int parseRequiredInt(Properties props, String key) {
+        String value = require(props, key);
+        return Integer.parseInt(value);
+    }
+
+    private static boolean parseRequiredBoolean(Properties props, String key) {
+        String value = require(props, key);
+        if ("true".equalsIgnoreCase(value)) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(value)) {
+            return false;
+        }
+        throw new IllegalArgumentException("Property " + key + " must be true or false.");
+    }
+
+    private static String trimTrailingSlash(String uri) {
+        if (uri.endsWith("/")) {
+            return uri.substring(0, uri.length() - 1);
+        }
+        return uri;
+    }
+}
+
+
+
+
+
+package com.cnb.updater.config;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+public final class AppConfig {
+
+    private final String fileNetUri;
+    private final String fileNetUsername;
+    private final String fileNetPassword;
+    private final String fileNetObjectStore;
+    private final List<String> documentClasses;
+    private final List<PropertyDefinition> searchCriteria;
+    private final TargetCisConfig targetCis;
+    private final String inputExcel;
+    private final ExcelColumnConfig excelColumns;
+    private final String outputSearchCsv;
+    private final String outputUpdatedCsv;
+    private final String logPath;
+    private final int searchBatchSize;
+    private final int searchAccountBatchSize;
+    private final int searchThreadPoolSize;
+    private final int updateThreadPoolSize;
+    private final int updateProgressLogInterval;
+    private final boolean updateResolveCurrentVersion;
+    private final boolean updateRecheckCisBeforeUpdate;
+    private final UpdateRefreshMode updateRefreshMode;
+
+    public AppConfig(String fileNetUri,
+                     String fileNetUsername,
+                     String fileNetPassword,
+                     String fileNetObjectStore,
+                     List<String> documentClasses,
+                     List<PropertyDefinition> searchCriteria,
+                     TargetCisConfig targetCis,
+                     String inputExcel,
+                     ExcelColumnConfig excelColumns,
+                     String outputSearchCsv,
+                     String outputUpdatedCsv,
+                     String logPath,
+                     int searchBatchSize,
+                     int searchAccountBatchSize,
+                     int searchThreadPoolSize,
+                     int updateThreadPoolSize,
+                     int updateProgressLogInterval,
+                     boolean updateResolveCurrentVersion,
+                     boolean updateRecheckCisBeforeUpdate,
+                     UpdateRefreshMode updateRefreshMode) {
+        this.fileNetUri = fileNetUri;
+        this.fileNetUsername = fileNetUsername;
+        this.fileNetPassword = fileNetPassword;
+        this.fileNetObjectStore = fileNetObjectStore;
+        this.documentClasses = Collections.unmodifiableList(new ArrayList<>(documentClasses));
+        this.searchCriteria = Collections.unmodifiableList(new ArrayList<>(searchCriteria));
+        this.targetCis = targetCis;
+        this.inputExcel = inputExcel;
+        this.excelColumns = excelColumns;
+        this.outputSearchCsv = outputSearchCsv;
+        this.outputUpdatedCsv = outputUpdatedCsv;
+        this.logPath = logPath;
+        this.searchBatchSize = searchBatchSize;
+        this.searchAccountBatchSize = searchAccountBatchSize;
+        this.searchThreadPoolSize = searchThreadPoolSize;
+        this.updateThreadPoolSize = updateThreadPoolSize;
+        this.updateProgressLogInterval = updateProgressLogInterval;
+        this.updateResolveCurrentVersion = updateResolveCurrentVersion;
+        this.updateRecheckCisBeforeUpdate = updateRecheckCisBeforeUpdate;
+        this.updateRefreshMode = updateRefreshMode;
+    }
+
+    public String getFileNetUri() {
+        return fileNetUri;
+    }
+
+    public String getFileNetUsername() {
+        return fileNetUsername;
+    }
+
+    public String getFileNetPassword() {
+        return fileNetPassword;
+    }
+
+    public String getFileNetObjectStore() {
+        return fileNetObjectStore;
+    }
+
+    public List<String> getDocumentClasses() {
+        return documentClasses;
+    }
+
+    public List<PropertyDefinition> getSearchCriteria() {
+        return searchCriteria;
+    }
+
+    public TargetCisConfig getTargetCis() {
+        return targetCis;
+    }
+
+    public String getInputExcel() {
+        return inputExcel;
+    }
+
+    public ExcelColumnConfig getExcelColumns() {
+        return excelColumns;
+    }
+
+    public String getOutputSearchCsv() {
+        return outputSearchCsv;
+    }
+
+    public String getOutputUpdatedCsv() {
+        return outputUpdatedCsv;
+    }
+
+    public String getLogPath() {
+        return logPath;
+    }
+
+    public int getSearchBatchSize() {
+        return searchBatchSize;
+    }
+
+    public int getSearchAccountBatchSize() {
+        return searchAccountBatchSize;
+    }
+
+    public int getSearchThreadPoolSize() {
+        return searchThreadPoolSize;
+    }
+
+    public int getUpdateThreadPoolSize() {
+        return updateThreadPoolSize;
+    }
+
+    public int getUpdateProgressLogInterval() {
+        return updateProgressLogInterval;
+    }
+
+    public boolean isUpdateResolveCurrentVersion() {
+        return updateResolveCurrentVersion;
+    }
+
+    public boolean isUpdateRecheckCisBeforeUpdate() {
+        return updateRecheckCisBeforeUpdate;
+    }
+
+    public UpdateRefreshMode getUpdateRefreshMode() {
+        return updateRefreshMode;
+    }
+}
+
+
+
+
+
+
+package com.cnb.updater.service;
+
+import com.cnb.updater.config.AppConfig;
+import com.cnb.updater.config.PropertyDefinition;
+import com.cnb.updater.filenet.FileNetConnectionManager;
+import com.cnb.updater.model.InputRecord;
+import com.cnb.updater.model.SearchResultRecord;
+import com.cnb.updater.util.FileNetPropertyHelper;
+import com.cnb.updater.util.ProcessingUtil;
+import com.filenet.api.collection.IndependentObjectSet;
+import com.filenet.api.collection.PageIterator;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.Properties;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.stream.Collectors;
+
+public final class DocumentSearchService {
+
+    private static final Logger LOGGER = LogManager.getLogger(DocumentSearchService.class);
+
+    private final AppConfig config;
+
+    public DocumentSearchService(FileNetConnectionManager connectionManager) {
+        this.config = connectionManager.getConfig();
+    }
+
+    public List<SearchResultRecord> searchAndBuildResults(List<InputRecord> inputRecords) throws Exception {
+        if (inputRecords.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        List<String> uniqueAccountNumbers = ProcessingUtil.distinctAccountNumbers(
+                inputRecords.stream()
+                        .map(InputRecord::getAccountNumber)
+                        .collect(Collectors.toList())
+        );
+
+        LOGGER.info("Starting batch search for {} unique account number(s) from {} input row(s) "
+                        + "using accountBatchSize={}, threadPoolSize={}",
+                uniqueAccountNumbers.size(),
+                inputRecords.size(),
+                config.getSearchAccountBatchSize(),
+                config.getSearchThreadPoolSize());
+
+        Map<String, List<FoundDocument>> accountDocuments = executeBatchSearches(uniqueAccountNumbers);
+
+        List<SearchResultRecord> results = new ArrayList<>();
+        for (InputRecord inputRecord : inputRecords) {
+            List<FoundDocument> foundDocuments = accountDocuments.get(inputRecord.getAccountNumber());
+            if (foundDocuments == null || foundDocuments.isEmpty()) {
+                results.add(SearchResultRecord.documentNotFound(inputRecord.getAccountNumber()));
+                continue;
+            }
+
+            for (FoundDocument foundDocument : foundDocuments) {
+                results.add(buildResultRecord(inputRecord, foundDocument));
+            }
+        }
+
+        return results;
+    }
+
+    private Map<String, List<FoundDocument>> executeBatchSearches(List<String> uniqueAccountNumbers)
+            throws Exception {
+        List<List<String>> accountBatches = ProcessingUtil.partition(
+                uniqueAccountNumbers,
+                config.getSearchAccountBatchSize()
+        );
+
+        ConcurrentHashMap<String, Map<String, FoundDocument>> accountDocumentsByGuid =
+                new ConcurrentHashMap<>();
+
+        ExecutorService executorService = Executors.newFixedThreadPool(config.getSearchThreadPoolSize());
+        try {
+            List<Future<?>> futures = new ArrayList<>();
+            for (int batchIndex = 0; batchIndex < accountBatches.size(); batchIndex++) {
+                final List<String> accountBatch = accountBatches.get(batchIndex);
+                final int currentBatchNumber = batchIndex + 1;
+                futures.add(executorService.submit(() -> {
+                    try (FileNetConnectionManager workerConnection = new FileNetConnectionManager(config)) {
+                        Map<String, List<FoundDocument>> batchResults = searchAccountBatch(
+                                workerConnection.getObjectStore(),
+                                accountBatch
+                        );
+                        mergeBatchResults(accountDocumentsByGuid, batchResults);
+                        LOGGER.info("Completed search batch {}/{} with {} account number(s)",
+                                currentBatchNumber,
+                                accountBatches.size(),
+                                accountBatch.size());
+                    } catch (Exception ex) {
+                        throw new RuntimeException(
+                                "Search batch " + currentBatchNumber + " failed: " + ex.getMessage(), ex);
+                    }
+                }));
+            }
+
+            for (Future<?> future : futures) {
+                try {
+                    future.get();
+                } catch (ExecutionException ex) {
+                    Throwable cause = ex.getCause();
+                    if (cause instanceof RuntimeException) {
+                        throw (RuntimeException) cause;
+                    }
+                    throw new Exception(cause == null ? ex : cause);
+                }
+            }
+        } finally {
+            ProcessingUtil.shutdownExecutor(executorService);
+        }
+
+        Map<String, List<FoundDocument>> accountDocuments = new LinkedHashMap<>();
+        for (Map.Entry<String, Map<String, FoundDocument>> entry : accountDocumentsByGuid.entrySet()) {
+            accountDocuments.put(entry.getKey(), new ArrayList<>(entry.getValue().values()));
+        }
+        return accountDocuments;
+    }
+
+    private void mergeBatchResults(ConcurrentHashMap<String, Map<String, FoundDocument>> accountDocumentsByGuid,
+                                   Map<String, List<FoundDocument>> batchResults) {
+        for (Map.Entry<String, List<FoundDocument>> entry : batchResults.entrySet()) {
+            accountDocumentsByGuid.compute(entry.getKey(), (accountNumber, documentsByGuid) -> {
+                Map<String, FoundDocument> mergedDocuments = documentsByGuid;
+                if (mergedDocuments == null) {
+                    mergedDocuments = new LinkedHashMap<>();
+                }
+                for (FoundDocument foundDocument : entry.getValue()) {
+                    mergedDocuments.putIfAbsent(foundDocument.getDocumentGuid(), foundDocument);
+                }
+                return mergedDocuments;
+            });
+        }
+    }
+
+    private Map<String, List<FoundDocument>> searchAccountBatch(ObjectStore objectStore,
+                                                                List<String> accountNumbers) throws Exception {
+        Set<String> batchAccountNumbers = new HashSet<>(accountNumbers);
+        Map<String, Map<String, FoundDocument>> accountDocumentsByGuid = new LinkedHashMap<>();
+
+        for (String documentClass : config.getDocumentClasses()) {
+            List<FoundDocument> classMatches = searchDocumentsBatch(objectStore, documentClass, accountNumbers);
+            LOGGER.debug("Batch search found {} document(s) in class {} for {} account number(s)",
+                    classMatches.size(), documentClass, accountNumbers.size());
+
+            for (FoundDocument foundDocument : classMatches) {
+                for (String matchedAccountNumber : foundDocument.getMatchedAccountNumbers(
+                        batchAccountNumbers,
+                        config.getSearchCriteria())) {
+                    accountDocumentsByGuid
+                            .computeIfAbsent(matchedAccountNumber, key -> new LinkedHashMap<>())
+                            .putIfAbsent(foundDocument.getDocumentGuid(), foundDocument);
+                }
+            }
+        }
+
+        Map<String, List<FoundDocument>> accountDocuments = new LinkedHashMap<>();
+        for (Map.Entry<String, Map<String, FoundDocument>> entry : accountDocumentsByGuid.entrySet()) {
+            accountDocuments.put(entry.getKey(), new ArrayList<>(entry.getValue().values()));
+        }
+        return accountDocuments;
+    }
+
+    private List<FoundDocument> searchDocumentsBatch(ObjectStore objectStore,
+                                                     String documentClass,
+                                                     List<String> accountNumbers) throws Exception {
+        PropertyDefinition targetProperty = config.getTargetCis().getPropertyDefinition();
+        String whereClause = FileNetPropertyHelper.buildBatchWhereClause(
+                config.getSearchCriteria(),
+                accountNumbers
+        );
+        Set<String> selectProperties = FileNetPropertyHelper.collectSelectProperties(
+                config.getSearchCriteria(),
+                targetProperty
+        );
+
+        StringBuilder selectList = new StringBuilder("[This], Id");
+        for (String propertyName : selectProperties) {
+            selectList.append(", ").append(propertyName);
+        }
+
+        String sql = "SELECT " + selectList + " FROM " + documentClass + " WHERE " + whereClause;
+        LOGGER.debug("Executing batch search SQL: {}", sql);
+
+        SearchSQL searchSQL = new SearchSQL(sql);
+        SearchScope searchScope = new SearchScope(objectStore);
+
+        PropertyFilter propertyFilter = new PropertyFilter();
+        propertyFilter.addIncludeProperty(0, null, null, "Id", null);
+        for (String propertyName : selectProperties) {
+            propertyFilter.addIncludeProperty(0, null, null, propertyName, null);
+        }
+
+        IndependentObjectSet resultSet = searchScope.fetchObjects(
+                searchSQL,
+                config.getSearchBatchSize(),
+                propertyFilter,
+                Boolean.TRUE
+        );
+
+        List<FoundDocument> foundDocuments = new ArrayList<>();
+        PageIterator pageIterator = resultSet.pageIterator();
+        while (pageIterator.nextPage()) {
+            Object[] page = pageIterator.getCurrentPage();
+            if (page == null) {
+                continue;
+            }
+            for (Object item : page) {
+                if (!(item instanceof Document)) {
+                    continue;
+                }
+                Document document = (Document) item;
+                foundDocuments.add(toFoundDocument(document, documentClass, targetProperty));
+            }
+        }
+
+        return foundDocuments;
+    }
+
+    private FoundDocument toFoundDocument(Document document,
+                                          String documentClass,
+                                          PropertyDefinition targetProperty) {
+        Properties properties = document.getProperties();
+        List<String> cisValues = FileNetPropertyHelper.readStringValues(properties, targetProperty);
+
+        Map<String, List<String>> criterionValuesByName = new LinkedHashMap<>();
+        for (PropertyDefinition criterion : config.getSearchCriteria()) {
+            criterionValuesByName.put(
+                    criterion.getSymbolicName(),
+                    FileNetPropertyHelper.readStringValues(properties, criterion)
+            );
+        }
+
+        return new FoundDocument(
+                document.get_Id().toString(),
+                documentClass,
+                cisValues,
+                criterionValuesByName
+        );
+    }
+
+    private SearchResultRecord buildResultRecord(InputRecord inputRecord, FoundDocument foundDocument) {
+        if (FileNetPropertyHelper.hasAnyCisValue(foundDocument.getCurrentCisValues())) {
+            LOGGER.debug("Document GUID {} already has CIS Number value(s): {}",
+                    foundDocument.getDocumentGuid(),
+                    FileNetPropertyHelper.formatValuesForCsv(foundDocument.getCurrentCisValues()));
+
+            return new SearchResultRecord(
+                    inputRecord.getAccountNumber(),
+                    foundDocument.getDocumentClass(),
+                    foundDocument.getDocumentGuid(),
+                    FileNetPropertyHelper.formatValuesForCsv(foundDocument.getCurrentCisValues()),
+                    SearchResultRecord.STATUS_EXIST,
+                    SearchResultRecord.COMMENT_EXIST,
+                    ""
+            );
+        }
+
+        return new SearchResultRecord(
+                inputRecord.getAccountNumber(),
+                foundDocument.getDocumentClass(),
+                foundDocument.getDocumentGuid(),
+                inputRecord.getCis(),
+                SearchResultRecord.STATUS_DOES_NOT_EXIST,
+                SearchResultRecord.COMMENT_DOES_NOT_EXIST,
+                ""
+        );
+    }
+
+    private static final class FoundDocument {
+        private final String documentGuid;
+        private final String documentClass;
+        private final List<String> currentCisValues;
+        private final Map<String, List<String>> criterionValuesByName;
+
+        private FoundDocument(String documentGuid,
+                              String documentClass,
+                              List<String> currentCisValues,
+                              Map<String, List<String>> criterionValuesByName) {
+            this.documentGuid = documentGuid;
+            this.documentClass = documentClass;
+            this.currentCisValues = currentCisValues;
+            this.criterionValuesByName = criterionValuesByName;
+        }
+
+        private String getDocumentGuid() {
+            return documentGuid;
+        }
+
+        private String getDocumentClass() {
+            return documentClass;
+        }
+
+        private List<String> getCurrentCisValues() {
+            return currentCisValues;
+        }
+
+        private List<String> getMatchedAccountNumbers(Set<String> batchAccountNumbers,
+                                                      List<PropertyDefinition> searchCriteria) {
+            List<String> matchedAccountNumbers = new ArrayList<>();
+            for (String accountNumber : batchAccountNumbers) {
+                if (FileNetPropertyHelper.documentMatchesAccountNumber(
+                        accountNumber,
+                        searchCriteria,
+                        criterionValuesByName)) {
+                    matchedAccountNumbers.add(accountNumber);
+                }
+            }
+            return matchedAccountNumbers;
+        }
+    }
+}
+
+
+
+
+
+package com.cnb.updater.util;
+
+import com.cnb.updater.config.PropertyDefinition;
+import com.cnb.updater.config.PropertyCardinality;
+import com.cnb.updater.config.PropertyDataType;
+import com.filenet.api.collection.StringList;
+import com.filenet.api.core.Factory;
+import com.filenet.api.property.Properties;
+import org.apache.commons.lang3.StringUtils;
+
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+public final class FileNetPropertyHelper {
+
+    public static final String MULTI_VALUE_CSV_DELIMITER = "|";
+
+    private FileNetPropertyHelper() {
+    }
+
+    public static String buildAndWhereClause(List<PropertyDefinition> searchCriteria, String searchValue) {
+        if (searchCriteria == null || searchCriteria.isEmpty()) {
+            throw new IllegalArgumentException("At least one search criterion must be configured.");
+        }
+
+        List<String> conditions = new ArrayList<>();
+        String escapedValue = escapeSqlLiteral(searchValue);
+
+        for (PropertyDefinition criterion : searchCriteria) {
+            validateSearchCriterion(criterion);
+            conditions.add(buildSearchCondition(criterion, escapedValue));
+        }
+
+        return String.join(" AND ", conditions);
+    }
+
+    public static String buildBatchWhereClause(List<PropertyDefinition> searchCriteria, List<String> searchValues) {
+        if (searchCriteria == null || searchCriteria.isEmpty()) {
+            throw new IllegalArgumentException("At least one search criterion must be configured.");
+        }
+        if (searchValues == null || searchValues.isEmpty()) {
+            throw new IllegalArgumentException("Batch search requires at least one account number.");
+        }
+
+        if (searchCriteria.size() == 1) {
+            return buildBatchSearchCondition(searchCriteria.get(0), searchValues);
+        }
+
+        List<String> orClauses = new ArrayList<>();
+        for (String searchValue : searchValues) {
+            orClauses.add("(" + buildAndWhereClause(searchCriteria, searchValue) + ")");
+        }
+        return String.join(" OR ", orClauses);
+    }
+
+    public static String buildBatchSearchCondition(PropertyDefinition criterion, List<String> searchValues) {
+        validateSearchCriterion(criterion);
+
+        String propertyReference = bracketPropertyName(criterion.getSymbolicName());
+        String literalList = searchValues.stream()
+                .map(FileNetPropertyHelper::escapeSqlLiteral)
+                .map(value -> "'" + value + "'")
+                .collect(Collectors.joining(", "));
+
+        if (criterion.getCardinality() == PropertyCardinality.MULTI) {
+            return propertyReference + " INTERSECTS (" + literalList + ")";
+        }
+        return propertyReference + " IN (" + literalList + ")";
+    }
+
+    public static boolean documentMatchesAccountNumber(String accountNumber,
+                                                       List<PropertyDefinition> searchCriteria,
+                                                       Map<String, List<String>> criterionValuesByName) {
+        if (accountNumber == null || accountNumber.trim().isEmpty()) {
+            return false;
+        }
+
+        String normalizedAccountNumber = accountNumber.trim();
+        for (PropertyDefinition criterion : searchCriteria) {
+            List<String> propertyValues = criterionValuesByName.get(criterion.getSymbolicName());
+            if (propertyValues == null || propertyValues.isEmpty()) {
+                return false;
+            }
+
+            if (criterion.getCardinality() == PropertyCardinality.MULTI) {
+                boolean containsValue = false;
+                for (String propertyValue : propertyValues) {
+                    if (propertyValue != null && normalizedAccountNumber.equals(propertyValue.trim())) {
+                        containsValue = true;
+                        break;
+                    }
+                }
+                if (!containsValue) {
+                    return false;
+                }
+            } else if (!normalizedAccountNumber.equals(propertyValues.get(0).trim())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static String buildSearchCondition(PropertyDefinition criterion, String escapedValue) {
+        String propertyReference = bracketPropertyName(criterion.getSymbolicName());
+        if (criterion.getCardinality() == PropertyCardinality.MULTI) {
+            return "'" + escapedValue + "' IN " + propertyReference;
+        }
+        return propertyReference + " = '" + escapedValue + "'";
+    }
+
+    private static String bracketPropertyName(String propertyName) {
+        if (propertyName.startsWith("[") && propertyName.endsWith("]")) {
+            return propertyName;
+        }
+        return "[" + propertyName + "]";
+    }
+
+    public static boolean isMultiValueEmpty(Object value) {
+        if (value == null) {
+            return true;
+        }
+        if (value instanceof List) {
+            return ((List<?>) value).isEmpty();
+        }
+        if (value instanceof StringList) {
+            return ((StringList) value).isEmpty();
+        }
+        return false;
+    }
+
+    public static String joinExistingValues(StringList values) {
+        if (values == null || values.isEmpty()) {
+            return "";
+        }
+
+        List<String> normalizedValues = new ArrayList<>();
+        for (Object item : values) {
+            addIfNotBlank(normalizedValues, item);
+        }
+        return String.join(MULTI_VALUE_CSV_DELIMITER, normalizedValues);
+    }
+
+    public static List<String> readStringValues(Properties properties, PropertyDefinition propertyDefinition) {
+        List<String> values = new ArrayList<>();
+        if (properties == null || propertyDefinition == null) {
+            return values;
+        }
+
+        String propertyName = propertyDefinition.getSymbolicName();
+        if (!properties.isPropertyPresent(propertyName)) {
+            return values;
+        }
+
+        if (propertyDefinition.getCardinality() == PropertyCardinality.MULTI) {
+            StringList stringList = properties.getStringListValue(propertyName);
+            if (stringList != null) {
+                for (Object item : stringList) {
+                    addIfNotBlank(values, item);
+                }
+            }
+            return values;
+        }
+
+        Object value = properties.getObjectValue(propertyName);
+        addIfNotBlank(values, value);
+        return values;
+    }
+
+    public static boolean isCisPropertyEmpty(Properties properties, PropertyDefinition propertyDefinition) {
+        return readStringValues(properties, propertyDefinition).isEmpty();
+    }
+
+    public static boolean hasAnyCisValue(Properties properties, PropertyDefinition propertyDefinition) {
+        return !isCisPropertyEmpty(properties, propertyDefinition);
+    }
+
+    public static boolean hasAnyCisValue(List<String> cisValues) {
+        return cisValues != null && !cisValues.isEmpty();
+    }
+
+    public static String formatValuesForCsv(List<String> values) {
+        if (values == null || values.isEmpty()) {
+            return "";
+        }
+        return String.join(MULTI_VALUE_CSV_DELIMITER, values);
+    }
+
+    public static void setMultiValueCis(Properties properties, String propertyName, String cisValue) {
+        if (StringUtils.isBlank(cisValue)) {
+            throw new IllegalArgumentException("CIS Number value is blank.");
+        }
+
+        StringList cisList = Factory.StringList.createList();
+        cisList.add(cisValue.trim());
+        properties.putValue(propertyName, cisList);
+    }
+
+    public static void setStringValue(Properties properties, PropertyDefinition propertyDefinition, String value) {
+        if (propertyDefinition.getDataType() != PropertyDataType.STRING) {
+            throw new IllegalArgumentException("Unsupported property data type: " + propertyDefinition.getDataType());
+        }
+
+        String propertyName = propertyDefinition.getSymbolicName();
+        if (propertyDefinition.getCardinality() == PropertyCardinality.MULTI) {
+            setMultiValueCis(properties, propertyName, value);
+            return;
+        }
+
+        properties.putValue(propertyName, value == null ? "" : value.trim());
+    }
+
+    public static Set<String> collectSelectProperties(List<PropertyDefinition> searchCriteria,
+                                                      PropertyDefinition targetProperty) {
+        Set<String> propertyNames = new LinkedHashSet<>();
+        for (PropertyDefinition criterion : searchCriteria) {
+            propertyNames.add(criterion.getSymbolicName());
+        }
+        propertyNames.add(targetProperty.getSymbolicName());
+        return propertyNames;
+    }
+
+    private static void validateSearchCriterion(PropertyDefinition criterion) {
+        if (criterion.getDataType() != PropertyDataType.STRING) {
+            throw new IllegalArgumentException("Search criteria currently support STRING data type only: "
+                    + criterion.getSymbolicName());
+        }
+    }
+
+    private static void addIfNotBlank(List<String> values, Object rawValue) {
+        if (rawValue == null) {
+            return;
+        }
+        String text = String.valueOf(rawValue).trim();
+        if (!text.isEmpty()) {
+            values.add(text);
+        }
+    }
+
+    public static String escapeSqlLiteral(String value) {
+        return value == null ? "" : value.replace("'", "''");
+    }
+}
