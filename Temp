@@ -1,1 +1,457 @@
-temp
+_executeOotbDocumentSearch: function(def, state, onComplete) {
+
+			var self = this;
+
+			this._ensureSearchInBeforeExecute(state, function(ready) {
+
+				if (!ready) {
+
+					console.error(LOG, "Document search aborted — Search In folder not ready");
+
+					if (onComplete) {
+
+						onComplete(null, null);
+
+					}
+
+					return;
+
+				}
+
+				self._ensureOotbDocumentMoreOptionsBeforeExecute(def);
+
+				self._logSearchExecutionContext(state, "both");
+
+
+
+				def._metlifeAdvancedDeferButtonEnable = true;
+
+				def.onSearchStarted(def.keepSearchCriteriaExpanded.get("value"));
+
+				def.searchButton.set("disabled", true);
+
+
+
+				var template = def._prepareSearchTemplateForExecution();
+
+				if (def._displayAllProps && def._displayAllProps.get("value") && def._getAllPropertiesResultsDisplay) {
+
+					template.resultsDisplay = def._getAllPropertiesResultsDisplay();
+
+				}
+
+				self._applyDocumentRankSort(template);
+
+				self._logSearchPayload(state, "document", template);
+
+				console.log(LOG, "Document Search Started");
+
+				def.onSearchTemplatePrepared(template);
+
+
+
+				var request = template.search(lang.hitch(self, function(results) {
+
+					var newFolder = def.searchInDropDown ? def.searchInDropDown.getSelected() : null;
+
+					if (newFolder && def._isTeamspace && def._isTeamspace(newFolder) && def.teamspace && def.teamspace.id) {
+
+						results.teamspaceId = def.teamspace.id;
+
+					}
+
+					self._logSearchPhaseComplete("document", results);
+
+					if (onComplete) {
+
+						onComplete(results, template);
+
+					}
+
+				}), "Rank", true, def.teamspace, function(err) {
+
+					console.error(LOG, "Document Search request failed", err);
+
+					self._logSearchPhaseComplete("document", null);
+
+					if (onComplete) {
+
+						onComplete(null, template);
+
+					}
+
+				});
+
+				var signal = aspect.after(request, "onRequestCompleted", function() {
+
+					signal.remove();
+
+					if (!def._metlifeAdvancedDeferButtonEnable && def.searchButton && def.searchButton.set) {
+
+						def.searchButton.set("disabled", false);
+
+					}
+
+				});
+
+			});
+
+		},
+
+
+
+
+
+===============================
+
+
+
+_installAdvancedSearchExecutionHook: function(tab, state) {
+
+			var def = tab.searchDefinition;
+
+			if (!def || def._metlifeAdvancedExecuteHook) {
+
+				return;
+
+			}
+
+			var tabKey = this._getTabKey(tab);
+
+			def._metlifeAdvancedExecuteHook = true;
+
+			def._metlifeAdvancedTabKey = tabKey;
+
+			var self = this;
+
+			aspect.around(def, "_executeSearch", function(originalExecute) {
+
+				def._metlifeAdvancedOriginalExecute = originalExecute;
+
+				return function() {
+
+					var execState = self._resolveExecutionState(def, state);
+
+					if (!execState) {
+
+						console.warn(LOG, "No execution state — falling back to OOTB search");
+
+						return originalExecute.apply(def, arguments);
+
+					}
+
+					var searchType = execState.controlsWidget ?
+
+						execState.controlsWidget.getSearchType() : "both";
+
+					self._persistAdvancedState(execState);
+
+					console.log(LOG, "Search button clicked", { searchType: searchType, tabKey: tabKey });
+
+
+
+					var runSearch = function(ready) {
+
+						if (!ready) {
+
+							console.error(LOG, "Search aborted — slice Search In folder could not be applied");
+
+							return;
+
+						}
+
+						if (searchType === "documents") {
+
+							self._ensureOotbDocumentMoreOptionsBeforeExecute(def);
+
+							self._logSearchExecutionContext(execState, "documents");
+
+							var docPrepLog = aspect.after(def, "onSearchTemplatePrepared", function(template) {
+
+								docPrepLog.remove();
+
+								self._applyDocumentRankSort(template);
+
+								self._installOneShotDocumentRankSearchHook(template);
+
+								self._logSearchPayload(execState, "document", template);
+
+								console.log(LOG, "Document Search Started");
+
+							});
+
+							var docCompleteLog = aspect.after(def, "onSearchCompleted", function(results) {
+
+								docCompleteLog.remove();
+
+								self._logSearchPhaseComplete("document", results);
+
+								self._logTotalResults(results);
+
+							});
+
+							originalExecute.apply(def, arguments);
+
+							return;
+
+						}
+
+						if (searchType === "folders") {
+
+							self._ensureOotbFolderMoreOptionsBeforeExecute(def);
+
+							self._logSearchExecutionContext(execState, "folders");
+
+							var folderPrepLog = aspect.after(def, "onSearchTemplatePrepared", function(template) {
+
+								folderPrepLog.remove();
+
+								self._logSearchPayload(execState, "folder", template);
+
+								console.log(LOG, "Folder Search Started");
+
+							});
+
+							var folderCompleteLog = aspect.after(def, "onSearchCompleted", function(results) {
+
+								folderCompleteLog.remove();
+
+								self._logSearchPhaseComplete("folder", results);
+
+								self._logTotalResults(results);
+
+							});
+
+							originalExecute.apply(def, arguments);
+
+							return;
+
+						}
+
+						self._runAdvancedBothSearch(execState, def);
+
+					};
+
+
+
+					self._ensureSearchInBeforeExecute(execState, runSearch);
+
+				};
+
+			});
+
+		},
+
+
+
+
+
+
+
+======================================================
+
+_mergeAdvancedResults: function(documentResults, folderResults, state) {
+
+			if (!documentResults && !folderResults) {
+
+				return null;
+
+			}
+
+			if (!documentResults) {
+
+				return this._attachAdvancedRefreshHandler(folderResults, state);
+
+			}
+
+			if (!folderResults) {
+
+				return this._attachAdvancedRefreshHandler(documentResults, state);
+
+			}
+
+			var docItems = documentResults.items ? documentResults.items.slice() : [];
+
+			var folderItems = folderResults.items ? folderResults.items.slice() : [];
+
+			var merged = documentResults;
+
+			merged.items = docItems.concat(folderItems);
+
+			merged.continuationData = null;
+
+			merged.maxResultsReached = !!(documentResults.maxResultsReached || folderResults.maxResultsReached);
+
+			if (documentResults.totalCount || folderResults.totalCount) {
+
+				merged.totalCount = (documentResults.totalCount || 0) + (folderResults.totalCount || 0);
+
+			}
+
+			if (folderResults.structure && (!merged.structure || !merged.structure.cells)) {
+
+				merged.structure = lang.clone(folderResults.structure);
+
+			} else if (merged.structure) {
+
+				merged.structure = lang.clone(merged.structure);
+
+			}
+
+			// Document structures often omit FolderPath's EnterpriseLinkDecorator.
+
+			// Restore decorator metadata from the folder result structure so Both
+
+			// search renders the same Folder Path links as Folders-only search.
+
+			merged.structure = this._preserveFolderColumnDecoratorsOnMergedStructure(
+
+				merged.structure, folderResults.structure);
+
+			merged.searchTemplate = documentResults.searchTemplate || folderResults.searchTemplate;
+
+			if (merged.searchTemplate) {
+
+				merged.searchTemplate.name = "Search results";
+
+			}
+
+			return this._attachAdvancedRefreshHandler(merged, state);
+
+		},
+
+
+
+		/**
+
+		 * Copies missing grid cell decorators (e.g. FolderPath → EnterpriseLinkDecorator)
+
+		 * from the folder result structure onto the merged structure.
+
+		 */
+
+		_preserveFolderColumnDecoratorsOnMergedStructure: function(mergedStructure, folderStructure) {
+
+			if (!mergedStructure || !folderStructure) {
+
+				return mergedStructure;
+
+			}
+
+			var mergedCells = mergedStructure.cells && mergedStructure.cells[0];
+
+			var folderCells = folderStructure.cells && folderStructure.cells[0];
+
+			if (!mergedCells || !folderCells) {
+
+				return mergedStructure;
+
+			}
+
+			var folderDecoratorByField = {};
+
+			for (var i = 0; i < folderCells.length; i++) {
+
+				var folderCell = folderCells[i];
+
+				if (folderCell && folderCell.field && folderCell.decorator) {
+
+					folderDecoratorByField[folderCell.field] = folderCell.decorator;
+
+				}
+
+			}
+
+			for (var j = 0; j < mergedCells.length; j++) {
+
+				var cell = mergedCells[j];
+
+				if (!cell || !cell.field || cell.decorator) {
+
+					continue;
+
+				}
+
+				if (folderDecoratorByField[cell.field]) {
+
+					cell.decorator = folderDecoratorByField[cell.field];
+
+					console.log(LOG, "Restored column decorator from folder result structure", cell.field);
+
+				}
+
+			}
+
+			return mergedStructure;
+
+		},
+
+
+
+		/**
+
+		 * Document/text search must sort by Rank (not OOTB Name default).
+
+		 */
+
+		_applyDocumentRankSort: function(template) {
+
+			if (!template) {
+
+				return template;
+
+			}
+
+			if (!template.resultsDisplay) {
+
+				template.resultsDisplay = {};
+
+			}
+
+			template.resultsDisplay.sortBy = "Rank";
+
+			template.resultsDisplay.sortAsc = false;
+
+			console.log(LOG, "Document search sort set to Rank descending");
+
+			return template;
+
+		},
+
+
+
+		/**
+
+		 * One-shot wrap so the next template.search() call uses order_by=Rank.
+
+		 * Removed after first use so later folder searches on the same template are unaffected.
+
+		 */
+
+		_installOneShotDocumentRankSearchHook: function(template) {
+
+			if (!template || !template.search) {
+
+				return;
+
+			}
+
+			var searchHandle = aspect.around(template, "search", function(originalSearch) {
+
+				return function(callback, sortProperty, descending, teamspace, errorCallback, useCache) {
+
+					if (searchHandle) {
+
+						searchHandle.remove();
+
+						searchHandle = null;
+
+					}
+
+					return originalSearch.call(this, callback, "Rank", true, teamspace, errorCallback, useCache);
+
+				};
+
+			});
+
+		},
