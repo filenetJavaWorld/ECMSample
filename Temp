@@ -1,1 +1,473 @@
-temp
+_expandSearchResultsPane: function(tab) {
+			if (tab._searchResultsNode) {
+				domClass.remove(tab._searchResultsNode, "dijitHidden");
+			}
+			if (tab.searchResultsContainer && tab.searchResultsContainer.domNode) {
+				domClass.remove(tab.searchResultsContainer.domNode, "dijitHidden");
+			}
+			if (tab.searchResultsHeader) {
+				domClass.remove(tab.searchResultsHeader, "dijitClosed");
+				domClass.add(tab.searchResultsHeader, "dijitOpen");
+			}
+			if (tab.searchResultsHeaderTitleNode) {
+				domAttr.set(tab.searchResultsHeaderTitleNode, "aria-pressed", "true");
+			}
+			// Do not force Search Criteria open — users may collapse it to maximize results.
+		},
+
+		/**
+		 * Custom collapse/expand for left Search Criteria pane.
+		 * Expanded: full criteria panel with a clear collapse control in the header.
+		 * Collapsed: criteria content fully hidden; only a small [>] expand control remains.
+		 */
+		_installCriteriaCollapseSupport: function(tab) {
+			if (!tab || tab._metlifeCriteriaCollapseHook) {
+				return;
+			}
+			tab._metlifeCriteriaCollapseHook = true;
+			tab._metlifeCriteriaCollapsed = false;
+			var self = this;
+
+			this._ensureCriteriaCollapseControls(tab);
+
+			// Replace OOTB title-pane toggle (height-based) with our width-based collapse.
+			if (tab._toggleSearchCriteria) {
+				this.own(aspect.around(tab, "_toggleSearchCriteria", function() {
+					return function() {
+						self._setCriteriaCollapsed(tab, !self._isCriteriaCollapsed(tab));
+					};
+				}));
+			}
+			this._setCriteriaCollapsed(tab, false);
+		},
+
+		_ensureCriteriaCollapseControls: function(tab) {
+			if (!tab || !tab.searchCriteriaPane || !tab.searchCriteriaPane.domNode) {
+				return;
+			}
+			var self = this;
+			var headerHost = tab.searchCriteriaHeaderContentNode || tab.searchCriteriaHeader ||
+				tab.searchCriteriaHeaderTitleNode;
+
+			if (!tab._metlifeCriteriaCollapseBtn && headerHost) {
+				tab._metlifeCriteriaCollapseBtn = domConstruct.create("button", {
+					type: "button",
+					"class": "metlifeCriteriaCollapseBtn",
+					title: "Hide search criteria",
+					"aria-label": "Hide search criteria",
+					innerHTML: "&#x25C0;"
+				}, headerHost, "first");
+				this.own(on(tab._metlifeCriteriaCollapseBtn, "click", function(evt) {
+					if (evt) {
+						evt.preventDefault();
+						evt.stopPropagation();
+					}
+					self._setCriteriaCollapsed(tab, true);
+				}));
+			}
+
+			if (!tab._metlifeCriteriaExpandBtn) {
+				tab._metlifeCriteriaExpandBtn = domConstruct.create("button", {
+					type: "button",
+					"class": "metlifeCriteriaExpandBtn",
+					title: "Show search criteria",
+					"aria-label": "Show search criteria",
+					innerHTML: "&#x25B6;"
+				}, tab.searchCriteriaPane.domNode, "first");
+				this.own(on(tab._metlifeCriteriaExpandBtn, "click", function(evt) {
+					if (evt) {
+						evt.preventDefault();
+						evt.stopPropagation();
+					}
+					self._setCriteriaCollapsed(tab, false);
+				}));
+			}
+		},
+
+		_isCriteriaCollapsed: function(tab) {
+			return !!(tab && tab._metlifeCriteriaCollapsed);
+		},
+
+		_getCriteriaPaneWidth: function(tab) {
+			return this._isCriteriaCollapsed(tab) ? 28 : 340;
+		},
+
+		_setCriteriaCollapsed: function(tab, collapsed) {
+			if (!tab) {
+				return;
+			}
+			tab._metlifeCriteriaCollapsed = !!collapsed;
+			this._ensureCriteriaCollapseControls(tab);
+
+			if (!collapsed) {
+				if (tab._searchCriteriaNode) {
+					domClass.remove(tab._searchCriteriaNode, "dijitHidden");
+				}
+				if (tab.searchCriteriaHeader) {
+					domClass.remove(tab.searchCriteriaHeader, "dijitClosed");
+					domClass.add(tab.searchCriteriaHeader, "dijitOpen");
+				}
+				if (tab.searchCriteriaHeaderTitleNode) {
+					domAttr.set(tab.searchCriteriaHeaderTitleNode, "aria-pressed", "true");
+				}
+			}
+
+			this._syncCriteriaCollapsedLayout(tab);
+		},
+
+		_syncCriteriaCollapsedLayout: function(tab) {
+			if (!tab || !tab.searchContainerNode) {
+				return;
+			}
+			this._ensureCriteriaCollapseControls(tab);
+			var collapsed = this._isCriteriaCollapsed(tab);
+			domClass.toggle(tab.searchContainerNode, "metlifeCriteriaCollapsed", collapsed);
+			if (tab.searchCriteriaPane && tab.searchCriteriaPane.domNode) {
+				domClass.toggle(tab.searchCriteriaPane.domNode, "metlifeCriteriaCollapsed", collapsed);
+			}
+			if (tab._metlifeCriteriaCollapseBtn) {
+				domStyle.set(tab._metlifeCriteriaCollapseBtn, "display", collapsed ? "none" : "");
+			}
+			if (tab._metlifeCriteriaExpandBtn) {
+				domStyle.set(tab._metlifeCriteriaExpandBtn, "display", collapsed ? "" : "none");
+			}
+			this._fixVerticalSearchTabLayoutSizes(tab);
+			if (tab.mainContainer && tab.mainContainer.resize) {
+				try {
+					tab.mainContainer.resize();
+				} catch (e) {
+					console.warn("[MetlifeSearch] mainContainer resize after criteria toggle skipped", e);
+				}
+			}
+		},
+
+		_installVerticalSearchLayoutResize: function(tab) {
+			if (tab._metlifeVerticalLayoutResizeHook) {
+				return;
+			}
+			tab._metlifeVerticalLayoutResizeHook = true;
+			var self = this;
+			var fixSizes = lang.hitch(this, function() {
+				this._fixVerticalSearchTabLayoutSizes(tab);
+			});
+			this.own(aspect.after(tab, "resize", fixSizes));
+			if (tab.mainContainer) {
+				this.own(aspect.after(tab.mainContainer, "resize", fixSizes));
+			}
+			if (tab.searchCriteriaPane) {
+				this.own(aspect.after(tab.searchCriteriaPane, "resize", fixSizes));
+			}
+			if (tab.searchResultsPane) {
+				this.own(aspect.after(tab.searchResultsPane, "resize", fixSizes));
+			}
+			if (tab.searchDefinition && tab.searchDefinition.onSearchStarted) {
+				this.own(aspect.after(tab.searchDefinition, "onSearchStarted", lang.hitch(this, function() {
+					this._expandSearchResultsPane(tab);
+					this._syncCriteriaCollapsedLayout(tab);
+				})));
+			}
+			if (tab.resizeSearchResults) {
+				this.own(aspect.around(tab, "resizeSearchResults", function(original) {
+					return function() {
+						if (tab.searchContainerNode && domClass.contains(tab.searchContainerNode, "metlifeVerticalSearchLayout")) {
+							self._fixVerticalSearchTabLayoutSizes(tab);
+							return;
+						}
+						return original.apply(tab, arguments);
+					};
+				}));
+			}
+			this.own(aspect.around(tab, "resize", function(original) {
+				return function() {
+					if (tab.searchContainerNode && domClass.contains(tab.searchContainerNode, "metlifeVerticalSearchLayout")) {
+						var height = domGeometry.getMarginBox(tab.searchContainerNode).h;
+						var width = domGeometry.getMarginBox(tab.searchContainerNode).w;
+						if (height > 0 && width > 0) {
+							domGeometry.setMarginBox(tab.mainContainer.domNode, {
+								h: height,
+								w: width
+							});
+							self._hideSearchCriteriaSplitter(tab);
+							self._fixVerticalSearchTabLayoutSizes(tab);
+							if (tab.mainContainer.resize) {
+								tab.mainContainer.resize();
+							}
+						}
+						return;
+					}
+					return original.apply(tab, arguments);
+				};
+			}));
+		},
+
+		_applyVerticalSearchCriteriaOverflowFix: function(tab) {
+			if (!tab.searchCriteriaPane || !tab.searchCriteriaPane.domNode) {
+				return;
+			}
+			if (this._isCriteriaCollapsed(tab)) {
+				return;
+			}
+			domClass.add(tab.searchCriteriaPane.domNode, "metlifeSearchCriteriaPane");
+			var paneH = domGeometry.getContentBox(tab.searchCriteriaPane.domNode).h;
+			var headerH = tab.searchCriteriaHeader ? domGeometry.getMarginBox(tab.searchCriteriaHeader).h : 0;
+			var bodyH = Math.max(0, paneH - headerH - 2);
+			if (tab._searchCriteriaNode) {
+				domStyle.set(tab._searchCriteriaNode, {
+					height: bodyH + "px",
+					minHeight: bodyH + "px",
+					overflow: "visible",
+					maxHeight: "none",
+					boxSizing: "border-box"
+				});
+			}
+			if (tab.searchDefinition && tab.searchDefinition.domNode) {
+				domStyle.set(tab.searchDefinition.domNode, {
+					height: bodyH + "px",
+					minHeight: bodyH + "px",
+					overflow: "visible",
+					maxHeight: "none",
+					boxSizing: "border-box"
+				});
+			}
+			if (tab.searchDefinition && tab.searchDefinition.searchSection) {
+				domStyle.set(tab.searchDefinition.searchSection, {
+					overflow: "visible",
+					height: "100%",
+					minHeight: bodyH + "px",
+					boxSizing: "border-box"
+				});
+			}
+		},
+
+		_fixVerticalSearchTabLayoutSizes: function(tab) {
+			if (!tab || !tab.searchContainerNode || !tab.searchResultsContainer) {
+				return;
+			}
+			if (!tab.searchContainerNode.className || tab.searchContainerNode.className.indexOf("metlifeVerticalSearchLayout") < 0) {
+				return;
+			}
+			var containerBox = domGeometry.getContentBox(tab.searchContainerNode);
+			if (!containerBox.h || !containerBox.w) {
+				return;
+			}
+			this._relocateSearchCriteriaPaneToLeading(tab);
+			this._hideSearchCriteriaSplitter(tab);
+			this._applyVerticalSearchCriteriaOverflowFix(tab);
+			var collapsed = this._isCriteriaCollapsed(tab);
+			var criteriaWidth = this._getCriteriaPaneWidth(tab);
+			domClass.toggle(tab.searchContainerNode, "metlifeCriteriaCollapsed", collapsed);
+			if (tab.searchCriteriaPane && tab.searchCriteriaPane.domNode) {
+				domClass.toggle(tab.searchCriteriaPane.domNode, "metlifeCriteriaCollapsed", collapsed);
+			}
+			domGeometry.setMarginBox(tab.mainContainer.domNode, {
+				h: containerBox.h,
+				w: containerBox.w
+			});
+			if (tab.searchCriteriaPane && tab.searchCriteriaPane.domNode) {
+				var criteriaStyles = {
+					top: "0px",
+					left: "0px",
+					width: criteriaWidth + "px",
+					minWidth: collapsed ? "0px" : "280px",
+					maxWidth: collapsed ? criteriaWidth + "px" : "45%",
+					height: containerBox.h + "px",
+					overflow: "hidden",
+					boxSizing: "border-box",
+					visibility: "visible",
+					borderWidth: collapsed ? "0px" : "",
+					padding: collapsed ? "0px" : ""
+				};
+				domStyle.set(tab.searchCriteriaPane.domNode, criteriaStyles);
+			}
+			if (tab.searchResultsPane && tab.searchResultsPane.domNode) {
+				domStyle.set(tab.searchResultsPane.domNode, {
+					top: "0px",
+					height: containerBox.h + "px",
+					overflow: "hidden",
+					boxSizing: "border-box"
+				});
+			}
+			var resultsPaneBox = tab.searchResultsPane ? domGeometry.getContentBox(tab.searchResultsPane.domNode) : containerBox;
+			var resultsHeaderH = tab.searchResultsHeader ? domGeometry.getMarginBox(tab.searchResultsHeader).h : 0;
+			var resultsW = Math.max(200, resultsPaneBox.w - 2);
+			var resultsH = Math.max(120, resultsPaneBox.h - resultsHeaderH - 2);
+			domStyle.set(tab.searchResultsContainer.domNode, {
+				width: resultsW + "px",
+				height: resultsH + "px",
+				overflow: "hidden",
+				boxSizing: "border-box"
+			});
+			domGeometry.setMarginBox(tab.searchResultsContainer.domNode, {
+				w: resultsW,
+				h: resultsH
+			});
+			if (tab.searchResultsContainer.resize) {
+				tab.searchResultsContainer.resize();
+			}
+			if (tab.searchResults && tab.searchResults.domNode) {
+				domStyle.set(tab.searchResults.domNode, {
+					width: "100%",
+					height: "100%"
+				});
+			}
+		},
+
+		_getCustomPanelParentNode: function(tab, mode, criteriaNode) {
+			if (mode === "searchbuilder" && tab.searchDefinition && tab.searchDefinition.searchSection) {
+				return tab.searchDefinition.searchSection;
+			}
+			if (tab.searchToggleArea) {
+				return tab.searchToggleArea;
+			}
+			if (tab.searchCriteriaPane && tab.searchCriteriaPane.domNode) {
+				return tab.searchCriteriaPane.domNode;
+			}
+			return criteriaNode.parentNode;
+		},
+
+		_consumePendingSearchHereContext: function() {
+			var context = this._pendingSearchHereContext;
+			this._pendingSearchHereContext = null;
+			return context;
+		},
+		
+		
+		
+		
+		
+		
+		
+.metlifeVerticalSearchLayout .ecmSearchMainContainer .searchArea,
+.metlifeVerticalSearchLayout .ecmSearchMainContainer .metlifeSearchCriteriaPane {
+	width: 340px !important;
+	min-width: 280px !important;
+	max-width: 45% !important;
+	top: 0 !important;
+	left: 0 !important;
+	height: 100% !important;
+	min-height: 100% !important;
+	overflow: hidden !important;
+	box-sizing: border-box;
+	display: flex !important;
+	flex-direction: column !important;
+	border: 1px solid #ccc !important;
+	background-color: #fff;
+	position: relative;
+}
+
+/* Collapse control in Search Criteria header */
+.metlifeVerticalSearchLayout .metlifeCriteriaCollapseBtn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	margin: 0 8px 0 0;
+	padding: 0;
+	border: 1px solid #c7c7c7;
+	border-radius: 2px;
+	background: #f7f7f7;
+	color: #333;
+	font-size: 11px;
+	line-height: 1;
+	cursor: pointer;
+	vertical-align: middle;
+	flex: 0 0 auto;
+}
+
+.metlifeVerticalSearchLayout .metlifeCriteriaCollapseBtn:hover {
+	background: #eaeaea;
+	border-color: #999;
+}
+
+/* Expand control — only visible when criteria is collapsed */
+.metlifeVerticalSearchLayout .metlifeCriteriaExpandBtn {
+	display: none;
+	align-items: center;
+	justify-content: center;
+	width: 24px;
+	height: 28px;
+	margin: 6px auto 0;
+	padding: 0;
+	border: 1px solid #c7c7c7;
+	border-radius: 2px;
+	background: #f7f7f7;
+	color: #333;
+	font-size: 12px;
+	line-height: 1;
+	cursor: pointer;
+	z-index: 2;
+}
+
+.metlifeVerticalSearchLayout .metlifeCriteriaExpandBtn:hover {
+	background: #eaeaea;
+	border-color: #999;
+}
+
+/*
+ * Collapsed Search Criteria:
+ * hide panel content completely; keep only a thin strip with the expand button.
+ * No cut-off "Search Criteria" text.
+ */
+.metlifeVerticalSearchLayout.metlifeCriteriaCollapsed .ecmSearchMainContainer .searchArea,
+.metlifeVerticalSearchLayout.metlifeCriteriaCollapsed .ecmSearchMainContainer .metlifeSearchCriteriaPane,
+.metlifeVerticalSearchLayout .ecmSearchMainContainer .searchArea.metlifeCriteriaCollapsed,
+.metlifeVerticalSearchLayout .ecmSearchMainContainer .metlifeSearchCriteriaPane.metlifeCriteriaCollapsed {
+	width: 28px !important;
+	min-width: 0 !important;
+	max-width: 28px !important;
+	padding: 0 !important;
+	border-left: none !important;
+	border-top: none !important;
+	border-bottom: none !important;
+	border-right: 1px solid #ccc !important;
+	background-color: #f4f4f4 !important;
+}
+
+.metlifeVerticalSearchLayout.metlifeCriteriaCollapsed .ecmSearchMainContainer .searchArea > *:not(.metlifeCriteriaExpandBtn),
+.metlifeVerticalSearchLayout.metlifeCriteriaCollapsed .ecmSearchMainContainer .metlifeSearchCriteriaPane > *:not(.metlifeCriteriaExpandBtn) {
+	display: none !important;
+}
+
+.metlifeVerticalSearchLayout.metlifeCriteriaCollapsed .metlifeCriteriaCollapseBtn {
+	display: none !important;
+}
+
+.metlifeVerticalSearchLayout.metlifeCriteriaCollapsed .metlifeCriteriaExpandBtn {
+	display: inline-flex !important;
+}
+
+.metlifeVerticalSearchLayout .ecmSearchMainContainer .searchResultsPane {
+	top: 0 !important;
+	height: 100% !important;
+	min-height: 100% !important;
+	overflow: hidden !important;
+	box-sizing: border-box;
+}
+
+/* Header stays at top; body fills remaining height so border wraps full pane */
+.metlifeVerticalSearchLayout .ecmSearchMainContainer .searchArea .searchTopArea,
+.metlifeVerticalSearchLayout .ecmSearchMainContainer .searchArea .searchCriteriaHeader {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+}
+
+.metlifeVerticalSearchLayout .ecmSearchMainContainer .searchArea .titleHeaderContainer {
+	border: none !important;
+	border-bottom: 1px solid #e5e5e5 !important;
+	display: flex;
+	align-items: center;
+	width: 100%;
+	box-sizing: border-box;
+}
+
+.metlifeVerticalSearchLayout .ecmSearchMainContainer .searchArea .dijitTitlePaneContentOuter,
+.metlifeVerticalSearchLayout .ecmSearchMainContainer .searchArea .dijitTitlePaneContentInner {
+	overflow: visible !important;
+	flex: 1 1 auto !important;
+	height: auto !important;
+	min-height: 0 !important;
+	display: flex !important;
+	flex-direction: column !important;
+}
