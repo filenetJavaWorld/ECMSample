@@ -1,1 +1,271 @@
-temp
+@echo off
+setlocal EnableExtensions EnableDelayedExpansion
+
+REM ============================================================
+REM        CIS NUMBER SEARCH / UPDATE BATCH PROCESSOR
+REM ============================================================
+REM
+REM Files will be processed SEQUENTIALLY.
+REM The next file starts ONLY after the previous Java process exits.
+REM
+REM ============================================================
+
+
+REM ============================================================
+REM 1. JAVA
+REM ============================================================
+
+REM If Java is already configured in PATH, keep this:
+set "JAVA_EXE=java"
+
+REM Otherwise, comment above line and use full Java path:
+REM set "JAVA_EXE=C:\Program Files\Java\jdk1.8.0_202\bin\java.exe"
+
+
+REM ============================================================
+REM 2. APPLICATION PATHS
+REM ============================================================
+
+set "APP_HOME=C:\Rameshwar\CISNumberUpdateUtility"
+
+set "JAR_FILE=%APP_HOME%\CISNumberUpdateUtility.jar"
+
+set "INPUT_FOLDER=%APP_HOME%\input"
+
+set "CONFIG_FILE=%APP_HOME%\config\CISNumberUpdateUtility.properties"
+
+set "LOG4J_FILE=%APP_HOME%\config\log4j2.xml"
+
+set "BATCH_LOG_FOLDER=%APP_HOME%\batchlogs"
+
+
+REM ============================================================
+REM 3. FILES TO PROCESS
+REM ============================================================
+REM
+REM IMPORTANT:
+REM Change ONLY this line for each run.
+REM Put the files in the exact order you want them processed.
+REM
+REM Example below processes files 1 to 10.
+REM ============================================================
+
+set "FILES=Accounts_1.xlsx,Accounts_2.xlsx,Accounts_3.xlsx,Accounts_4.xlsx,Accounts_5.xlsx,Accounts_6.xlsx,Accounts_7.xlsx,Accounts_8.xlsx,Accounts_9.xlsx,Accounts_10.xlsx"
+
+
+REM ============================================================
+REM 4. CREATE BATCH LOG DIRECTORY
+REM ============================================================
+
+if not exist "%BATCH_LOG_FOLDER%" (
+    mkdir "%BATCH_LOG_FOLDER%"
+)
+
+
+REM ============================================================
+REM 5. BASIC VALIDATION
+REM ============================================================
+
+if not exist "%JAR_FILE%" (
+    echo.
+    echo ========================================================
+    echo ERROR
+    echo JAR file not found:
+    echo %JAR_FILE%
+    echo ========================================================
+    pause
+    exit /b 1
+)
+
+if not exist "%CONFIG_FILE%" (
+    echo.
+    echo ========================================================
+    echo ERROR
+    echo Configuration file not found:
+    echo %CONFIG_FILE%
+    echo ========================================================
+    pause
+    exit /b 1
+)
+
+if not exist "%LOG4J_FILE%" (
+    echo.
+    echo ========================================================
+    echo ERROR
+    echo Log4j configuration file not found:
+    echo %LOG4J_FILE%
+    echo ========================================================
+    pause
+    exit /b 1
+)
+
+if not exist "%INPUT_FOLDER%" (
+    echo.
+    echo ========================================================
+    echo ERROR
+    echo Input folder not found:
+    echo %INPUT_FOLDER%
+    echo ========================================================
+    pause
+    exit /b 1
+)
+
+
+REM ============================================================
+REM 6. START PROCESSING
+REM ============================================================
+
+echo.
+echo ============================================================
+echo CIS NUMBER UTILITY - BATCH PROCESSING STARTED
+echo ============================================================
+echo.
+echo Application Home : %APP_HOME%
+echo Input Folder     : %INPUT_FOLDER%
+echo.
+echo Selected Files:
+echo %FILES%
+echo.
+echo ============================================================
+
+
+REM Convert comma-separated filenames to a list
+set "FILE_LIST=%FILES:,= %"
+
+
+REM ============================================================
+REM 7. PROCESS EACH FILE SEQUENTIALLY
+REM ============================================================
+
+for %%F in (%FILE_LIST%) do (
+
+    echo.
+    echo ========================================================
+    echo STARTING FILE: %%F
+    echo START TIME:
+    echo !DATE! !TIME!
+    echo ========================================================
+    echo.
+
+    set "CURRENT_FILE=%INPUT_FOLDER%\%%F"
+    set "CURRENT_LOG=%BATCH_LOG_FOLDER%\%%~nF_console.log"
+
+
+    REM --------------------------------------------------------
+    REM Verify input file exists
+    REM --------------------------------------------------------
+
+    if not exist "!CURRENT_FILE!" (
+
+        echo.
+        echo ====================================================
+        echo ERROR: INPUT FILE NOT FOUND
+        echo !CURRENT_FILE!
+        echo ====================================================
+        echo.
+
+        goto :FAILED
+    )
+
+
+    REM --------------------------------------------------------
+    REM START JAVA UTILITY
+    REM
+    REM IMPORTANT:
+    REM We are NOT using "START".
+    REM
+    REM Therefore this BAT file WAITS here until the Java JVM
+    REM completely finishes processing the current Excel file.
+    REM
+    REM Only after Java exits will the next statement execute.
+    REM --------------------------------------------------------
+
+    "%JAVA_EXE%" ^
+        -Dconfig.file="%CONFIG_FILE%" ^
+        -Dlog4j.configurationFile="%LOG4J_FILE%" ^
+        -jar "%JAR_FILE%" ^
+        "!CURRENT_FILE!" ^
+        > "!CURRENT_LOG!" 2>&1
+
+
+    REM --------------------------------------------------------
+    REM Capture Java exit code immediately
+    REM --------------------------------------------------------
+
+    set "JAVA_EXIT_CODE=!ERRORLEVEL!"
+
+
+    REM --------------------------------------------------------
+    REM Check completion status
+    REM --------------------------------------------------------
+
+    if NOT "!JAVA_EXIT_CODE!"=="0" (
+
+        echo.
+        echo ====================================================
+        echo FAILED: %%F
+        echo.
+        echo Java Exit Code : !JAVA_EXIT_CODE!
+        echo Console Log    : !CURRENT_LOG!
+        echo.
+        echo Processing has been STOPPED.
+        echo The next Excel file will NOT be started.
+        echo ====================================================
+
+        goto :FAILED
+    )
+
+
+    echo.
+    echo ========================================================
+    echo COMPLETED SUCCESSFULLY: %%F
+    echo COMPLETION TIME:
+    echo !DATE! !TIME!
+    echo.
+    echo Java Exit Code : !JAVA_EXIT_CODE!
+    echo Console Log    : !CURRENT_LOG!
+    echo ========================================================
+    echo.
+
+)
+
+
+REM ============================================================
+REM 8. ALL FILES COMPLETED
+REM ============================================================
+
+echo.
+echo ============================================================
+echo ALL SELECTED FILES COMPLETED SUCCESSFULLY
+echo ============================================================
+echo.
+echo Completion Time:
+echo %DATE% %TIME%
+echo.
+echo ============================================================
+
+pause
+exit /b 0
+
+
+
+REM ============================================================
+REM 9. FAILURE HANDLING
+REM ============================================================
+
+:FAILED
+
+echo.
+echo ============================================================
+echo BATCH PROCESSING STOPPED
+echo ============================================================
+echo.
+echo One of the files failed or could not be found.
+echo.
+echo Fix the problem and restart the batch with the required
+echo remaining filenames in the FILES variable.
+echo.
+echo ============================================================
+
+pause
+exit /b 1
