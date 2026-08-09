@@ -1,1 +1,761 @@
-temp
+package com.cnb.updater.main;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.ss.util.PaneInformation;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.HashMap;
+import java.util.Map;
+
+public class ExcelFileSplitter {
+
+    // Hardcoded paths for local execution
+    private static final String INPUT_FILE =
+            "D:/Rameshwar/CISNumberUpdateUtility/input/Book2.xlsx";
+    private static final String OUTPUT_DIRECTORY =
+            "D:/Rameshwar/CISNumberUpdateUtility/input/split";
+
+    // Number of DATA rows in each output file.
+    // Header row is additional.
+    private static final int CHUNK_SIZE = 55_000;
+
+    // Assuming first row is the header.
+    private static final int HEADER_ROW_INDEX = 0;
+
+    public static void main(String[] args) {
+        String inputFile = INPUT_FILE;
+        String outputDirectory = OUTPUT_DIRECTORY;
+
+        try {
+            splitExcelFile(inputFile, outputDirectory);
+
+            System.out.println("Excel splitting completed successfully.");
+
+        } catch (Exception e) {
+            System.err.println("Error while splitting Excel file:");
+            e.printStackTrace();
+            System.exit(1);
+        }
+    }
+
+    public static void splitExcelFile(
+            String inputFilePath,
+            String outputDirectory) throws Exception {
+
+        Path inputPath = Paths.get(inputFilePath);
+        Path outputPath = Paths.get(outputDirectory);
+
+        if (!Files.exists(inputPath)) {
+            throw new FileNotFoundException(
+                    "Input file does not exist: " + inputFilePath
+            );
+        }
+
+        if (!Files.exists(outputPath)) {
+            Files.createDirectories(outputPath);
+        }
+
+        String originalFileName = inputPath.getFileName().toString();
+
+        String baseFileName;
+
+        int dotIndex = originalFileName.lastIndexOf('.');
+
+        if (dotIndex > 0) {
+            baseFileName = originalFileName.substring(0, dotIndex);
+        } else {
+            baseFileName = originalFileName;
+        }
+
+        System.out.println("Input File      : " + inputFilePath);
+        System.out.println("Output Directory: " + outputDirectory);
+        System.out.println("Chunk Size      : " + CHUNK_SIZE);
+
+        try (
+                InputStream inputStream =
+                        new BufferedInputStream(
+                                new FileInputStream(inputFilePath)
+                        );
+
+                Workbook sourceWorkbook =
+                        WorkbookFactory.create(inputStream)
+        ) {
+
+            Sheet sourceSheet = sourceWorkbook.getSheetAt(0);
+
+            int lastRowNumber = sourceSheet.getLastRowNum();
+
+            if (lastRowNumber < HEADER_ROW_INDEX) {
+                throw new IllegalStateException(
+                        "Input Excel sheet does not contain any rows."
+                );
+            }
+
+            Row headerRow = sourceSheet.getRow(HEADER_ROW_INDEX);
+
+            if (headerRow == null) {
+                throw new IllegalStateException(
+                        "Header row is empty."
+                );
+            }
+
+            int totalDataRows =
+                    lastRowNumber - HEADER_ROW_INDEX;
+
+            System.out.println("Total Data Rows : " + totalDataRows);
+
+            int fileNumber = 1;
+            int currentSourceRow = HEADER_ROW_INDEX + 1;
+
+            while (currentSourceRow <= lastRowNumber) {
+
+                String outputFileName =
+                        baseFileName
+                                + "_"
+                                + fileNumber
+                                + ".xlsx";
+
+                Path outputFile =
+                        outputPath.resolve(outputFileName);
+
+                System.out.println();
+                System.out.println(
+                        "Creating file: " + outputFile
+                );
+
+                int rowsCopied =
+                        createChunkFile(
+                                sourceWorkbook,
+                                sourceSheet,
+                                currentSourceRow,
+                                lastRowNumber,
+                                outputFile
+                        );
+
+                currentSourceRow += rowsCopied;
+
+                System.out.println(
+                        "Rows written: " + rowsCopied
+                );
+
+                fileNumber++;
+            }
+
+            System.out.println();
+            System.out.println(
+                    "Total output files created: "
+                            + (fileNumber - 1)
+            );
+        }
+    }
+
+    private static int createChunkFile(
+            Workbook sourceWorkbook,
+            Sheet sourceSheet,
+            int startSourceRow,
+            int lastSourceRow,
+            Path outputFile) throws Exception {
+
+        try (
+                XSSFWorkbook destinationWorkbook =
+                        new XSSFWorkbook()
+        ) {
+
+            Sheet destinationSheet =
+                    destinationWorkbook.createSheet(
+                            sourceSheet.getSheetName()
+                    );
+
+            /*
+             * Map source styles to destination styles.
+             *
+             * CellStyle objects cannot directly be reused between
+             * two different workbooks.
+             */
+            Map<Short, CellStyle> styleMap =
+                    new HashMap<>();
+
+            /*
+             * Copy column widths and hidden status.
+             */
+            Row sourceHeader =
+                    sourceSheet.getRow(HEADER_ROW_INDEX);
+
+            int maxColumns =
+                    getMaximumColumns(
+                            sourceSheet,
+                            startSourceRow,
+                            Math.min(
+                                    startSourceRow + CHUNK_SIZE - 1,
+                                    lastSourceRow
+                            )
+                    );
+
+            if (sourceHeader != null) {
+                maxColumns =
+                        Math.max(
+                                maxColumns,
+                                sourceHeader.getLastCellNum()
+                        );
+            }
+
+            copyColumnProperties(
+                    sourceSheet,
+                    destinationSheet,
+                    maxColumns
+            );
+
+            /*
+             * Copy header.
+             */
+            Row destinationHeader =
+                    destinationSheet.createRow(0);
+
+            copyRow(
+                    sourceWorkbook,
+                    destinationWorkbook,
+                    sourceHeader,
+                    destinationHeader,
+                    styleMap
+            );
+
+            int destinationRowNumber = 1;
+            int copiedRows = 0;
+
+            int endSourceRow =
+                    Math.min(
+                            startSourceRow + CHUNK_SIZE - 1,
+                            lastSourceRow
+                    );
+
+            System.out.println(
+                    "Source rows: "
+                            + (startSourceRow + 1)
+                            + " to "
+                            + (endSourceRow + 1)
+            );
+
+            for (
+                    int sourceRowNumber = startSourceRow;
+                    sourceRowNumber <= endSourceRow;
+                    sourceRowNumber++
+            ) {
+
+                Row sourceRow =
+                        sourceSheet.getRow(sourceRowNumber);
+
+                Row destinationRow =
+                        destinationSheet.createRow(
+                                destinationRowNumber++
+                        );
+
+                if (sourceRow != null) {
+
+                    copyRow(
+                            sourceWorkbook,
+                            destinationWorkbook,
+                            sourceRow,
+                            destinationRow,
+                            styleMap
+                    );
+                }
+
+                copiedRows++;
+
+                if (copiedRows % 5000 == 0) {
+
+                    System.out.println(
+                            "Copied "
+                                    + copiedRows
+                                    + " rows..."
+                    );
+                }
+            }
+
+            /*
+             * Preserve freeze panes if present.
+             */
+            copyFreezePane(
+                    sourceSheet,
+                    destinationSheet
+            );
+
+            /*
+             * Write output file.
+             */
+            try (
+                    OutputStream outputStream =
+                            new BufferedOutputStream(
+                                    new FileOutputStream(
+                                            outputFile.toFile()
+                                    )
+                            )
+            ) {
+
+                destinationWorkbook.write(outputStream);
+            }
+
+            return copiedRows;
+        }
+    }
+
+    private static void copyRow(
+            Workbook sourceWorkbook,
+            Workbook destinationWorkbook,
+            Row sourceRow,
+            Row destinationRow,
+            Map<Short, CellStyle> styleMap) {
+
+        if (sourceRow == null) {
+            return;
+        }
+
+        /*
+         * Preserve row height.
+         */
+        destinationRow.setHeight(
+                sourceRow.getHeight()
+        );
+
+        destinationRow.setZeroHeight(
+                sourceRow.getZeroHeight()
+        );
+
+        short firstCellNumber =
+                sourceRow.getFirstCellNum();
+
+        short lastCellNumber =
+                sourceRow.getLastCellNum();
+
+        if (firstCellNumber < 0 ||
+                lastCellNumber < 0) {
+
+            return;
+        }
+
+        for (
+                int cellNumber = firstCellNumber;
+                cellNumber < lastCellNumber;
+                cellNumber++
+        ) {
+
+            Cell sourceCell =
+                    sourceRow.getCell(
+                            cellNumber,
+                            Row.MissingCellPolicy.RETURN_BLANK_AS_NULL
+                    );
+
+            if (sourceCell == null) {
+                continue;
+            }
+
+            Cell destinationCell =
+                    destinationRow.createCell(cellNumber);
+
+            copyCell(
+                    sourceWorkbook,
+                    destinationWorkbook,
+                    sourceCell,
+                    destinationCell,
+                    styleMap
+            );
+        }
+    }
+
+    private static void copyCell(
+            Workbook sourceWorkbook,
+            Workbook destinationWorkbook,
+            Cell sourceCell,
+            Cell destinationCell,
+            Map<Short, CellStyle> styleMap) {
+
+        /*
+         * Copy cell style / formatting.
+         */
+        CellStyle sourceStyle =
+                sourceCell.getCellStyle();
+
+        if (sourceStyle != null) {
+
+            short styleIndex =
+                    sourceStyle.getIndex();
+
+            CellStyle destinationStyle =
+                    styleMap.get(styleIndex);
+
+            if (destinationStyle == null) {
+
+                destinationStyle =
+                        destinationWorkbook.createCellStyle();
+
+                destinationStyle.cloneStyleFrom(
+                        sourceStyle
+                );
+
+                styleMap.put(
+                        styleIndex,
+                        destinationStyle
+                );
+            }
+
+            destinationCell.setCellStyle(
+                    destinationStyle
+            );
+        }
+
+        /*
+         * Preserve hyperlink if present.
+         */
+        if (sourceCell.getHyperlink() != null) {
+
+            CreationHelper helper =
+                    destinationWorkbook.getCreationHelper();
+
+            Hyperlink newHyperlink =
+                    helper.createHyperlink(
+                            sourceCell
+                                    .getHyperlink()
+                                    .getType()
+                    );
+
+            newHyperlink.setAddress(
+                    sourceCell
+                            .getHyperlink()
+                            .getAddress()
+            );
+
+            destinationCell.setHyperlink(
+                    newHyperlink
+            );
+        }
+
+        /*
+         * Copy actual cell content without converting values
+         * to String. This preserves numeric/date/formula types.
+         */
+        switch (sourceCell.getCellType()) {
+
+            case STRING:
+
+                destinationCell.setCellValue(
+                        sourceCell.getRichStringCellValue()
+                );
+
+                break;
+
+            case NUMERIC:
+
+                if (DateUtil.isCellDateFormatted(sourceCell)) {
+
+                    destinationCell.setCellValue(
+                            sourceCell.getDateCellValue()
+                    );
+
+                } else {
+
+                    destinationCell.setCellValue(
+                            sourceCell.getNumericCellValue()
+                    );
+                }
+
+                break;
+
+            case BOOLEAN:
+
+                destinationCell.setCellValue(
+                        sourceCell.getBooleanCellValue()
+                );
+
+                break;
+
+            case FORMULA:
+
+                destinationCell.setCellFormula(
+                        sourceCell.getCellFormula()
+                );
+
+                break;
+
+            case ERROR:
+
+                destinationCell.setCellErrorValue(
+                        sourceCell.getErrorCellValue()
+                );
+
+                break;
+
+            case BLANK:
+
+                destinationCell.setBlank();
+
+                break;
+
+            default:
+
+                break;
+        }
+    }
+
+    private static void copyColumnProperties(
+            Sheet sourceSheet,
+            Sheet destinationSheet,
+            int maxColumns) {
+
+        for (
+                int columnIndex = 0;
+                columnIndex < maxColumns;
+                columnIndex++
+        ) {
+
+            destinationSheet.setColumnWidth(
+                    columnIndex,
+                    sourceSheet.getColumnWidth(
+                            columnIndex
+                    )
+            );
+
+            destinationSheet.setColumnHidden(
+                    columnIndex,
+                    sourceSheet.isColumnHidden(
+                            columnIndex
+                    )
+            );
+        }
+    }
+
+    private static int getMaximumColumns(
+            Sheet sheet,
+            int startRow,
+            int endRow) {
+
+        int maximumColumns = 0;
+
+        for (
+                int rowNumber = startRow;
+                rowNumber <= endRow;
+                rowNumber++
+        ) {
+
+            Row row = sheet.getRow(rowNumber);
+
+            if (row != null) {
+
+                maximumColumns =
+                        Math.max(
+                                maximumColumns,
+                                row.getLastCellNum()
+                        );
+            }
+        }
+
+        return Math.max(maximumColumns, 0);
+    }
+
+    private static void copyFreezePane(
+            Sheet sourceSheet,
+            Sheet destinationSheet) {
+
+        PaneInformation paneInformation =
+                sourceSheet.getPaneInformation();
+
+        if (paneInformation != null &&
+                paneInformation.isFreezePane()) {
+
+            destinationSheet.createFreezePane(
+                    paneInformation.getVerticalSplitPosition(),
+                    paneInformation.getHorizontalSplitPosition()
+            );
+        }
+    }
+}
+
+
+
+
+
+
+
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.cnb.updater</groupId>
+    <artifactId>CISPropertyUpdateUtility</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+
+    <name>CIS Property Update Utility</name>
+    <description>IBM FileNet utility for bulk CIS Number search and update</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.source>1.8</maven.compiler.source>
+        <maven.compiler.target>1.8</maven.compiler.target>
+        <commons-csv.version>1.10.0</commons-csv.version>
+        <commons-lang3.version>3.12.0</commons-lang3.version>
+        <log4j.version>2.20.0</log4j.version>
+        <poi.version>5.2.3</poi.version>
+        <filenet.jace.version>5.5.8</filenet.jace.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>jace</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>stax-api</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>xlxpScanner</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.ibm.filenet</groupId>
+            <artifactId>xlxpScannerUtils</artifactId>
+            <version>${filenet.jace.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>${poi.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-csv</artifactId>
+            <version>${commons-csv.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>${commons-lang3.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-api</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-core</artifactId>
+            <version>${log4j.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>1.8</source>
+                    <target>1.8</target>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>search-and-generate-csv</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <finalName>CISPropertyUpdateUtility-search</finalName>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.cnb.updater.main.SearchAndGenerateCsvMain</mainClass>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>update-cis-number</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <finalName>CISPropertyUpdateUtility-update</finalName>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.cnb.updater.main.UpdateCisNumberMain</mainClass>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>excel-file-splitter</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <finalName>CISPropertyUpdateUtility-excel-splitter</finalName>
+                            <transformers>
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>com.cnb.updater.main.ExcelFileSplitter</mainClass>
+                                </transformer>
+                            </transformers>
+                            <filters>
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
