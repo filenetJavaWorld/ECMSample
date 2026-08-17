@@ -1,1 +1,391 @@
-temp
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+
+import com.filenet.api.admin.PropertyTemplate;
+import com.filenet.api.collection.AccessPermissionList;
+import com.filenet.api.collection.PropertyTemplateSet;
+import com.filenet.api.constants.AccessRight;
+import com.filenet.api.constants.AccessType;
+import com.filenet.api.constants.RefreshMode;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.security.AccessPermission;
+
+public class PropertyTemplateSecurityUpdater {
+
+    /*
+     * Exact AD group shown in ACCE.
+     */
+    private static final String GROUP_NAME =
+            "G_FileNet_CNBObjectStore_Users";
+
+    /*
+     * Required Property Template symbolic names.
+     */
+    private static final String[] PROPERTY_TEMPLATE_SYMBOLIC_NAMES = {
+            "AccountNumber",
+            "CustomerNumber",
+            "ClaimNumber",
+            "PolicyNumber"
+    };
+
+    /*
+     * ACCE:
+     * Permission group = View properties <Default>
+     *
+     * Includes:
+     * - View all properties
+     * - Read permissions
+     */
+    private static final int VIEW_PROPERTIES_MASK =
+            AccessRight.READ_AS_INT
+                    | AccessRight.READ_ACL_AS_INT;
+
+    public static void updateSecurity(ObjectStore objectStore) {
+
+        int updatedCount = 0;
+        int skippedCount = 0;
+        int notFoundCount = 0;
+        int failedCount = 0;
+
+        /*
+         * Retrieve all Property Templates only once and place
+         * them in a map using symbolic name as the key.
+         */
+        Map<String, PropertyTemplate> propertyTemplateMap =
+                getPropertyTemplateMap(objectStore);
+
+        System.out.println(
+                "Total Property Templates retrieved: "
+                        + propertyTemplateMap.size()
+        );
+
+        for (String symbolicName :
+                PROPERTY_TEMPLATE_SYMBOLIC_NAMES) {
+
+            try {
+                System.out.println();
+                System.out.println(
+                        "Processing Property Template: "
+                                + symbolicName
+                );
+
+                PropertyTemplate propertyTemplate =
+                        propertyTemplateMap.get(
+                                normalize(symbolicName)
+                        );
+
+                if (propertyTemplate == null) {
+                    System.err.println(
+                            "NOT FOUND: Property Template symbolic name="
+                                    + symbolicName
+                    );
+
+                    notFoundCount++;
+                    continue;
+                }
+
+                AccessPermissionList permissions =
+                        propertyTemplate.get_Permissions();
+
+                if (groupAlreadyExists(
+                        permissions,
+                        GROUP_NAME)) {
+
+                    System.out.println(
+                            "SKIPPED: Group already exists. "
+                                    + "Template="
+                                    + symbolicName
+                                    + ", Group="
+                                    + GROUP_NAME
+                    );
+
+                    skippedCount++;
+                    continue;
+                }
+
+                addViewPropertiesPermission(
+                        propertyTemplate,
+                        permissions
+                );
+
+                /*
+                 * Refresh and verify the saved ACL.
+                 */
+                propertyTemplate.refresh();
+
+                if (groupExistsWithCorrectPermission(
+                        propertyTemplate.get_Permissions(),
+                        GROUP_NAME)) {
+
+                    System.out.println(
+                            "UPDATED AND VERIFIED: Template="
+                                    + symbolicName
+                                    + ", Group="
+                                    + GROUP_NAME
+                    );
+
+                    updatedCount++;
+
+                } else {
+                    System.err.println(
+                            "VERIFICATION FAILED: Template="
+                                    + symbolicName
+                                    + ", Group="
+                                    + GROUP_NAME
+                    );
+
+                    failedCount++;
+                }
+
+            } catch (Exception exception) {
+                failedCount++;
+
+                System.err.println(
+                        "FAILED: Template="
+                                + symbolicName
+                                + ", Error="
+                                + exception.getMessage()
+                );
+
+                exception.printStackTrace();
+            }
+        }
+
+        System.out.println();
+        System.out.println("========== SUMMARY ==========");
+        System.out.println(
+                "Requested : "
+                        + PROPERTY_TEMPLATE_SYMBOLIC_NAMES.length
+        );
+        System.out.println("Updated   : " + updatedCount);
+        System.out.println("Skipped   : " + skippedCount);
+        System.out.println("Not found : " + notFoundCount);
+        System.out.println("Failed    : " + failedCount);
+        System.out.println("=============================");
+    }
+
+    /**
+     * Retrieves all Property Templates from the Object Store
+     * and builds a map using symbolic name as the key.
+     *
+     * The key is normalized to lowercase so that the lookup
+     * is case-insensitive.
+     */
+    private static Map<String, PropertyTemplate>
+            getPropertyTemplateMap(ObjectStore objectStore) {
+
+        Map<String, PropertyTemplate> propertyTemplateMap =
+                new HashMap<String, PropertyTemplate>();
+
+        PropertyTemplateSet propertyTemplateSet =
+                objectStore.get_PropertyTemplates();
+
+        Iterator<?> iterator =
+                propertyTemplateSet.iterator();
+
+        while (iterator.hasNext()) {
+            PropertyTemplate propertyTemplate =
+                    (PropertyTemplate) iterator.next();
+
+            String symbolicName =
+                    propertyTemplate.get_SymbolicName();
+
+            if (symbolicName == null
+                    || symbolicName.trim().isEmpty()) {
+
+                System.out.println(
+                        "WARNING: Property Template has no symbolic name. "
+                                + "Display name="
+                                + propertyTemplate.get_DisplayName()
+                );
+
+                continue;
+            }
+
+            String mapKey = normalize(symbolicName);
+
+            if (propertyTemplateMap.containsKey(mapKey)) {
+                System.out.println(
+                        "WARNING: Duplicate Property Template "
+                                + "symbolic name found: "
+                                + symbolicName
+                );
+            }
+
+            propertyTemplateMap.put(
+                    mapKey,
+                    propertyTemplate
+            );
+        }
+
+        return propertyTemplateMap;
+    }
+
+    /**
+     * Adds this exact ACCE security configuration:
+     *
+     * Group:
+     * G_FileNet_CNBObjectStore_Users
+     *
+     * Source:
+     * Direct
+     *
+     * Permission type:
+     * Allow
+     *
+     * Apply to:
+     * This object only
+     *
+     * Permission group:
+     * View properties <Default>
+     */
+    private static void addViewPropertiesPermission(
+            PropertyTemplate propertyTemplate,
+            AccessPermissionList permissions) {
+
+        AccessPermission permission =
+                Factory.AccessPermission.createInstance();
+
+        permission.set_GranteeName(
+                GROUP_NAME
+        );
+
+        /*
+         * Permission type: Allow
+         */
+        permission.set_AccessType(
+                AccessType.ALLOW
+        );
+
+        /*
+         * Apply to: This object only
+         */
+        permission.set_InheritableDepth(
+                Integer.valueOf(0)
+        );
+
+        /*
+         * View properties <Default>
+         *
+         * - View all properties
+         * - Read permissions
+         */
+        permission.set_AccessMask(
+                VIEW_PROPERTIES_MASK
+        );
+
+        /*
+         * Adding it directly to the Property Template ACL
+         * makes the source "Direct."
+         */
+        permissions.add(permission);
+
+        propertyTemplate.set_Permissions(
+                permissions
+        );
+
+        propertyTemplate.save(
+                RefreshMode.REFRESH
+        );
+    }
+
+    /**
+     * Checks whether the group already has a direct ALLOW ACE.
+     *
+     * As requested, if the group already exists, the template
+     * is skipped without modifying its current permissions.
+     */
+    private static boolean groupAlreadyExists(
+            AccessPermissionList permissions,
+            String groupName) {
+
+        Iterator<?> iterator =
+                permissions.iterator();
+
+        while (iterator.hasNext()) {
+            AccessPermission permission =
+                    (AccessPermission) iterator.next();
+
+            if (sameGroup(
+                    permission.get_GranteeName(),
+                    groupName)
+                    && AccessType.ALLOW.equals(
+                            permission.get_AccessType())) {
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Post-save verification for:
+     *
+     * - Correct group
+     * - ALLOW
+     * - This object only
+     * - View properties <Default>
+     */
+    private static boolean groupExistsWithCorrectPermission(
+            AccessPermissionList permissions,
+            String groupName) {
+
+        Iterator<?> iterator =
+                permissions.iterator();
+
+        while (iterator.hasNext()) {
+            AccessPermission permission =
+                    (AccessPermission) iterator.next();
+
+            if (!sameGroup(
+                    permission.get_GranteeName(),
+                    groupName)) {
+                continue;
+            }
+
+            if (!AccessType.ALLOW.equals(
+                    permission.get_AccessType())) {
+                continue;
+            }
+
+            Integer inheritableDepth =
+                    permission.get_InheritableDepth();
+
+            if (inheritableDepth == null
+                    || inheritableDepth.intValue() != 0) {
+                continue;
+            }
+
+            int actualMask =
+                    permission.get_AccessMask();
+
+            if ((actualMask & VIEW_PROPERTIES_MASK)
+                    == VIEW_PROPERTIES_MASK) {
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static boolean sameGroup(
+            String existingGroupName,
+            String requiredGroupName) {
+
+        return existingGroupName != null
+                && requiredGroupName != null
+                && existingGroupName.trim().equalsIgnoreCase(
+                        requiredGroupName.trim()
+                );
+    }
+
+    private static String normalize(String value) {
+        return value == null
+                ? null
+                : value.trim().toLowerCase();
+    }
+}
