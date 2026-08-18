@@ -1,1 +1,376 @@
-temp
+import java.util.Iterator;
+
+import com.filenet.api.collection.AccessPermissionList;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.IndependentObject;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.collection.IndependentObjectSet;
+import com.filenet.api.constants.AccessLevel;
+import com.filenet.api.constants.AccessType;
+import com.filenet.api.constants.RefreshMode;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import com.filenet.api.security.AccessPermission;
+
+public class UploadManagerSecurityUpdater {
+
+    /*
+     * Verify the exact class symbolic name in ACCE.
+     */
+    private static final String CLASS_SYMBOLIC_NAME =
+            "UploadManager";
+
+    /*
+     * Exact AD group name.
+     */
+    private static final String GROUP_NAME =
+            "G_FileNet_CNBObjectStore_Users";
+
+    /*
+     * Keep false for the first Production execution.
+     * It will only report what would be changed.
+     *
+     * Change to true after validating the output.
+     */
+    private static final boolean UPDATE_MODE = false;
+
+    /*
+     * ACCE permission group: Full Control
+     * for a Document object.
+     */
+    private static final int FULL_CONTROL_MASK =
+            AccessLevel.FULL_CONTROL_DOCUMENT_AS_INT;
+
+    public static void updateSecurity(
+            ObjectStore objectStore) {
+
+        int retrievedCount = 0;
+        int updatedCount = 0;
+        int skippedCount = 0;
+        int failedCount = 0;
+
+        SearchSQL searchSQL = new SearchSQL();
+
+        /*
+         * Return the actual Document object.
+         */
+        searchSQL.setSelectList(
+                "d.[This]",
+                null,
+                false
+        );
+
+        /*
+         * false = do not include subclasses.
+         *
+         * Only direct UploadManager class instances will be returned.
+         */
+        searchSQL.setFromClauseInitialValue(
+                CLASS_SYMBOLIC_NAME,
+                "d",
+                false
+        );
+
+        /*
+         * Update current document versions only.
+         *
+         * Remove this condition only if security must also be updated
+         * on all historical versions.
+         */
+        searchSQL.setWhereClause(
+                "d.[IsCurrentVersion] = TRUE"
+        );
+
+        System.out.println(
+                "Query: " + searchSQL.toString()
+        );
+
+        SearchScope searchScope =
+                new SearchScope(objectStore);
+
+        IndependentObjectSet results =
+                searchScope.fetchObjects(
+                        searchSQL,
+                        null,
+                        null,
+                        Boolean.TRUE
+                );
+
+        Iterator<?> iterator = results.iterator();
+
+        while (iterator.hasNext()) {
+            retrievedCount++;
+
+            IndependentObject independentObject =
+                    (IndependentObject) iterator.next();
+
+            Document document =
+                    (Document) independentObject;
+
+            try {
+                String documentId =
+                        document.get_Id().toString();
+
+                String documentTitle =
+                        document.get_Name();
+
+                System.out.println();
+                System.out.println(
+                        "Processing document: ID="
+                                + documentId
+                                + ", Name="
+                                + documentTitle
+                );
+
+                UpdateResult result =
+                        updateDocumentSecurity(
+                                document,
+                                UPDATE_MODE
+                        );
+
+                switch (result) {
+                    case UPDATED:
+                        updatedCount++;
+                        break;
+
+                    case SKIPPED:
+                        skippedCount++;
+                        break;
+
+                    default:
+                        break;
+                }
+
+            } catch (Exception exception) {
+                failedCount++;
+
+                System.err.println(
+                        "FAILED: Document ID="
+                                + document.get_Id()
+                                + ", Error="
+                                + exception.getMessage()
+                );
+
+                exception.printStackTrace();
+            }
+        }
+
+        System.out.println();
+        System.out.println("========== SUMMARY ==========");
+        System.out.println(
+                "Class       : " + CLASS_SYMBOLIC_NAME
+        );
+        System.out.println(
+                "Group       : " + GROUP_NAME
+        );
+        System.out.println(
+                "Mode        : "
+                        + (UPDATE_MODE ? "UPDATE" : "DRY-RUN")
+        );
+        System.out.println(
+                "Retrieved   : " + retrievedCount
+        );
+        System.out.println(
+                "Updated     : " + updatedCount
+        );
+        System.out.println(
+                "Skipped     : " + skippedCount
+        );
+        System.out.println(
+                "Failed      : " + failedCount
+        );
+        System.out.println("=============================");
+    }
+
+    private static UpdateResult updateDocumentSecurity(
+            Document document,
+            boolean updateMode) {
+
+        AccessPermissionList permissions =
+                document.get_Permissions();
+
+        /*
+         * As requested:
+         * If the group already has an ALLOW entry, skip it.
+         */
+        if (groupAlreadyExists(
+                permissions,
+                GROUP_NAME)) {
+
+            System.out.println(
+                    "SKIPPED: Group already exists. Document ID="
+                            + document.get_Id()
+            );
+
+            return UpdateResult.SKIPPED;
+        }
+
+        System.out.println(
+                (updateMode
+                        ? "ADDING"
+                        : "WOULD ADD")
+                        + ": Group="
+                        + GROUP_NAME
+                        + ", Full Control"
+                        + ", Document ID="
+                        + document.get_Id()
+        );
+
+        if (!updateMode) {
+            return UpdateResult.UPDATED;
+        }
+
+        AccessPermission permission =
+                Factory.AccessPermission.createInstance();
+
+        /*
+         * AD group.
+         */
+        permission.set_GranteeName(
+                GROUP_NAME
+        );
+
+        /*
+         * Permission type: Allow.
+         */
+        permission.set_AccessType(
+                AccessType.ALLOW
+        );
+
+        /*
+         * Apply to: This object only.
+         */
+        permission.set_InheritableDepth(
+                Integer.valueOf(0)
+        );
+
+        /*
+         * Permission group:
+         * Full Control for Document.
+         */
+        permission.set_AccessMask(
+                FULL_CONTROL_MASK
+        );
+
+        /*
+         * Adding directly to the document ACL means:
+         * Source = Direct.
+         */
+        permissions.add(permission);
+
+        document.set_Permissions(
+                permissions
+        );
+
+        /*
+         * Persist the change and refresh the object.
+         */
+        document.save(
+                RefreshMode.REFRESH
+        );
+
+        /*
+         * Verify the saved security.
+         */
+        if (!groupExistsWithFullControl(
+                document.get_Permissions(),
+                GROUP_NAME)) {
+
+            throw new IllegalStateException(
+                    "Post-save verification failed for document "
+                            + document.get_Id()
+            );
+        }
+
+        System.out.println(
+                "UPDATED AND VERIFIED: Document ID="
+                        + document.get_Id()
+        );
+
+        return UpdateResult.UPDATED;
+    }
+
+    private static boolean groupAlreadyExists(
+            AccessPermissionList permissions,
+            String requiredGroup) {
+
+        Iterator<?> iterator =
+                permissions.iterator();
+
+        while (iterator.hasNext()) {
+            AccessPermission permission =
+                    (AccessPermission) iterator.next();
+
+            if (sameGroup(
+                    permission.get_GranteeName(),
+                    requiredGroup)
+                    && AccessType.ALLOW.equals(
+                            permission.get_AccessType())) {
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static boolean groupExistsWithFullControl(
+            AccessPermissionList permissions,
+            String requiredGroup) {
+
+        Iterator<?> iterator =
+                permissions.iterator();
+
+        while (iterator.hasNext()) {
+            AccessPermission permission =
+                    (AccessPermission) iterator.next();
+
+            if (!sameGroup(
+                    permission.get_GranteeName(),
+                    requiredGroup)) {
+                continue;
+            }
+
+            if (!AccessType.ALLOW.equals(
+                    permission.get_AccessType())) {
+                continue;
+            }
+
+            Integer inheritableDepth =
+                    permission.get_InheritableDepth();
+
+            if (inheritableDepth == null
+                    || inheritableDepth.intValue() != 0) {
+                continue;
+            }
+
+            int existingMask =
+                    permission.get_AccessMask();
+
+            if ((existingMask & FULL_CONTROL_MASK)
+                    == FULL_CONTROL_MASK) {
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static boolean sameGroup(
+            String existingGroup,
+            String requiredGroup) {
+
+        return existingGroup != null
+                && requiredGroup != null
+                && existingGroup.trim().equalsIgnoreCase(
+                        requiredGroup.trim()
+                );
+    }
+
+    private enum UpdateResult {
+        UPDATED,
+        SKIPPED
+    }
+}
