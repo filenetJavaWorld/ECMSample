@@ -1,1 +1,178 @@
-temp
+_executeOotbDocumentSearch: function(def, state, onComplete) {
+			var self = this;
+			this._ensureSearchInBeforeExecute(state, function(ready) {
+				if (!ready) {
+					console.error(LOG, "Document search aborted — Search In folder not ready");
+					if (onComplete) {
+						onComplete(null, null);
+					}
+					return;
+				}
+				self._ensureOotbDocumentMoreOptionsBeforeExecute(def);
+				self._logSearchExecutionContext(state, "both");
+
+				def._metlifeAdvancedDeferButtonEnable = true;
+				def.onSearchStarted(def.keepSearchCriteriaExpanded.get("value"));
+				def.searchButton.set("disabled", true);
+
+				var template = def._prepareSearchTemplateForExecution();
+				if (def._displayAllProps && def._displayAllProps.get("value") && def._getAllPropertiesResultsDisplay) {
+					template.resultsDisplay = def._getAllPropertiesResultsDisplay();
+				}
+				// Rank is valid for text/CBR search only. Property-only criteria must keep OOTB sort.
+				var useRankSort = self._templateHasTextSearchCriteria(template);
+				var sortProperty = null;
+				var descending = null;
+				if (useRankSort) {
+					self._applyDocumentRankSort(template);
+					sortProperty = "Rank";
+					descending = true;
+				}
+				self._logSearchPayload(state, "document", template);
+				console.log(LOG, "Document Search Started", { useRankSort: useRankSort });
+				def.onSearchTemplatePrepared(template);
+
+				var request = template.search(lang.hitch(self, function(results) {
+					var newFolder = def.searchInDropDown ? def.searchInDropDown.getSelected() : null;
+					if (newFolder && def._isTeamspace && def._isTeamspace(newFolder) && def.teamspace && def.teamspace.id) {
+						results.teamspaceId = def.teamspace.id;
+					}
+					self._logSearchPhaseComplete("document", results);
+					if (onComplete) {
+						onComplete(results, template);
+					}
+				}), sortProperty, descending, def.teamspace, function(err) {
+					console.error(LOG, "Document Search request failed", err);
+					self._logSearchPhaseComplete("document", null);
+					if (onComplete) {
+						onComplete(null, template);
+					}
+				});
+				var signal = aspect.after(request, "onRequestCompleted", function() {
+					signal.remove();
+					if (!def._metlifeAdvancedDeferButtonEnable && def.searchButton && def.searchButton.set) {
+						def.searchButton.set("disabled", false);
+					}
+				});
+			});
+		},
+		
+		
+		_installAdvancedSearchExecutionHook: function(tab, state) {
+			var def = tab.searchDefinition;
+			if (!def || def._metlifeAdvancedExecuteHook) {
+				return;
+			}
+			var tabKey = this._getTabKey(tab);
+			def._metlifeAdvancedExecuteHook = true;
+			def._metlifeAdvancedTabKey = tabKey;
+			var self = this;
+			aspect.around(def, "_executeSearch", function(originalExecute) {
+				def._metlifeAdvancedOriginalExecute = originalExecute;
+				return function() {
+					var execState = self._resolveExecutionState(def, state);
+					if (!execState) {
+						console.warn(LOG, "No execution state — falling back to OOTB search");
+						return originalExecute.apply(def, arguments);
+					}
+					var searchType = execState.controlsWidget ?
+						execState.controlsWidget.getSearchType() : "both";
+					self._persistAdvancedState(execState);
+					console.log(LOG, "Search button clicked", { searchType: searchType, tabKey: tabKey });
+
+					var runSearch = function(ready) {
+						if (!ready) {
+							console.error(LOG, "Search aborted — slice Search In folder could not be applied");
+							return;
+						}
+						if (searchType === "documents") {
+							self._ensureOotbDocumentMoreOptionsBeforeExecute(def);
+							self._logSearchExecutionContext(execState, "documents");
+							var docPrepLog = aspect.after(def, "onSearchTemplatePrepared", function(template) {
+								docPrepLog.remove();
+								// Rank is text/CBR only — skip for property-only document searches.
+								if (self._templateHasTextSearchCriteria(template)) {
+									self._applyDocumentRankSort(template);
+									self._installOneShotDocumentRankSearchHook(template);
+								}
+								self._logSearchPayload(execState, "document", template);
+								console.log(LOG, "Document Search Started", {
+									useRankSort: self._templateHasTextSearchCriteria(template)
+								});
+							});
+							var docCompleteLog = aspect.after(def, "onSearchCompleted", function(results) {
+								docCompleteLog.remove();
+								self._logSearchPhaseComplete("document", results);
+								self._logTotalResults(results);
+							});
+							originalExecute.apply(def, arguments);
+							return;
+						}
+						if (searchType === "folders") {
+							self._ensureOotbFolderMoreOptionsBeforeExecute(def);
+							self._logSearchExecutionContext(execState, "folders");
+							var folderPrepLog = aspect.after(def, "onSearchTemplatePrepared", function(template) {
+								folderPrepLog.remove();
+								self._logSearchPayload(execState, "folder", template);
+								console.log(LOG, "Folder Search Started");
+							});
+							var folderCompleteLog = aspect.after(def, "onSearchCompleted", function(results) {
+								folderCompleteLog.remove();
+								self._logSearchPhaseComplete("folder", results);
+								self._logTotalResults(results);
+							});
+							originalExecute.apply(def, arguments);
+							return;
+						}
+						self._runAdvancedBothSearch(execState, def);
+					};
+
+					self._ensureSearchInBeforeExecute(execState, runSearch);
+				};
+			});
+		},
+		
+		
+		=====================
+		
+		/**
+		 * True when the prepared template has real CBR/text criteria (non-empty text).
+		 * Rank sort is only valid in that case ("Rank (Text search only)").
+		 */
+		_templateHasTextSearchCriteria: function(template) {
+			if (!template) {
+				return false;
+			}
+			var criteria = template.textSearchCriteria;
+			if (criteria && !lang.isArray(criteria) && criteria.text) {
+				return String(criteria.text).trim().length > 0;
+			}
+			if (!lang.isArray(criteria) || !criteria.length) {
+				return false;
+			}
+			var i;
+			for (i = 0; i < criteria.length; i++) {
+				var c = criteria[i];
+				if (c && c.text != null && String(c.text).trim().length > 0) {
+					return true;
+				}
+			}
+			return false;
+		},
+
+		/**
+		 * Document/text search must sort by Rank (not OOTB Name default).
+		 * Caller must only invoke this when _templateHasTextSearchCriteria(template) is true.
+		 */
+		_applyDocumentRankSort: function(template) {
+			if (!template) {
+				return template;
+			}
+			if (!template.resultsDisplay) {
+				template.resultsDisplay = {};
+			}
+			template.resultsDisplay.sortBy = "Rank";
+			template.resultsDisplay.sortAsc = false;
+			console.log(LOG, "Document search sort set to Rank descending");
+			return template;
+		},
