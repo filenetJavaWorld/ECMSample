@@ -1,1 +1,342 @@
-temp
+_completeCombinedSearch: function(state, merged) {
+			var tab = state.tab;
+			var def = tab && tab.searchDefinition;
+			this._endCombinedSearchUi(state);
+			if (merged && merged.searchTemplate && !merged.searchTemplate.name) {
+				merged.searchTemplate.name = "Search results";
+			}
+			// Keep CE Rank sort on the request; re-order loaded rows by Modified On for the UI.
+			merged = this._sortResultSetByModifiedDescending(merged);
+			if (def && def.onSearchCompleted) {
+				def.onSearchCompleted(merged);
+			} else if (tab && tab.searchResults) {
+				tab.searchResults.setResultSet(merged);
+			}
+			if (tab && tab._setToolbarButtonDisabledState) {
+				tab._setToolbarButtonDisabledState("RefreshGrid", false);
+			}
+			this._endBothSearchStatusCaptureAndPublish(state, merged);
+		},
+
+		/**
+		 * Client-side only: sort the loaded result page by DateLastModified descending
+		 * (latest modified on top). Does not change the CE search Rank order_by.
+		 * Does not trigger a server re-sort when continuation pages exist.
+		 */
+		_sortResultSetByModifiedDescending: function(resultSet) {
+			if (!resultSet || !resultSet.items || !resultSet.items.length) {
+				return resultSet;
+			}
+			var propId = "DateLastModified";
+			var self = this;
+			var items = resultSet.items.slice();
+			items.sort(function(a, b) {
+				var aVal = self._getItemModifiedTimeValue(a, propId);
+				var bVal = self._getItemModifiedTimeValue(b, propId);
+				if (aVal === bVal) {
+					return 0;
+				}
+				if (aVal == null) {
+					return 1;
+				}
+				if (bVal == null) {
+					return -1;
+				}
+				return aVal > bVal ? -1 : 1;
+			});
+			resultSet.items = items;
+			var colIndex = this._findResultSetColumnSortIndex(resultSet, propId);
+			if (colIndex > 0) {
+				resultSet.sortIndex = colIndex;
+				resultSet.sortDirection = -1;
+			}
+			console.log("[MetlifeSearch] UI sorted loaded results by DateLastModified descending", {
+				itemCount: items.length,
+				sortIndex: resultSet.sortIndex,
+				hasContinuation: !!resultSet.continuationData
+			});
+			return resultSet;
+		},
+
+		_getItemModifiedTimeValue: function(item, propId) {
+			if (!item) {
+				return null;
+			}
+			var val = null;
+			if (item.getValue) {
+				try {
+					val = item.getValue(propId);
+				} catch (e) {
+					val = null;
+				}
+			}
+			if ((val == null || val === "") && item.attributes && item.attributes[propId] != null) {
+				val = item.attributes[propId];
+			}
+			if (lang.isArray(val)) {
+				val = val.length ? val[0] : null;
+			}
+			if (val == null || val === "") {
+				return null;
+			}
+			if (val instanceof Date) {
+				return val.getTime();
+			}
+			if (typeof val === "number" && !isNaN(val)) {
+				return val;
+			}
+			var parsed = Date.parse(val);
+			if (!isNaN(parsed)) {
+				return parsed;
+			}
+			return null;
+		},
+
+		_findResultSetColumnSortIndex: function(resultSet, propId) {
+			if (!resultSet || !propId) {
+				return -1;
+			}
+			resultSet.columnNames = null;
+			var columns = resultSet.getColumns ? resultSet.getColumns() : null;
+			if (columns && columns.length) {
+				var i;
+				for (i = 0; i < columns.length; i++) {
+					if (columns[i] === propId) {
+						return i + 1;
+					}
+				}
+			}
+			var cells = resultSet.structure && resultSet.structure.cells && resultSet.structure.cells[0];
+			if (cells && cells.length) {
+				var j;
+				for (j = 0; j < cells.length; j++) {
+					var cell = cells[j];
+					if (cell && (cell.field === propId || cell.name === propId)) {
+						return j + 1;
+					}
+				}
+			}
+			return -1;
+		},
+
+		_beginBothSearchStatusCapture: function(state) {
+			var self = this;
+			var desktop = ecm.model.desktop;
+			if (!state || !desktop || typeof desktop.addMessage !== "function") {
+				return;
+			}
+			this._endBothSearchStatusCapture(state);
+			state._metlifeBothSearchStatusCaptureActive = true;
+			state._metlifeBothSearchStatusSample = null;
+			state._metlifeBothSearchStatusOriginalAddMessage = desktop.addMessage;
+			desktop.addMessage = function(message) {
+				if (state._metlifeBothSearchStatusCaptureActive &&
+					self._isSearchResultsStatusMessage(message)) {
+					state._metlifeBothSearchStatusSample = message.text;
+					return;
+				}
+				return state._metlifeBothSearchStatusOriginalAddMessage.apply(desktop, arguments);
+			};
+		},
+		
+		
+		
+		
+		ADvanced search=======================
+		
+		
+		_setupAdvancedSearchTab: function(tab, tabKey) {
+			var def = tab.searchDefinition;
+			var state = this._tabStateByKey[tabKey] || {};
+			state.tab = tab;
+			state.def = def;
+			this._tabStateByKey[tabKey] = state;
+
+			this._hideOotbSearchInAndOptions(def);
+			this._injectAdvancedControls(tab, tabKey, state);
+			this._installTextSearchOperatorAllHook(def);
+			this._installAdvancedSearchExecutionHook(tab, state);
+			this._installModifiedOnUiSortHook(def);
+			this._installAdvancedSearchPersistenceHooks(tab, state);
+			this._installAdvancedSearchRestoreHooks(tab, state, tabKey);
+			state.restoredTemplateId = this._getTemplateIdentity(def.searchTemplate);
+			this._installDocumentClassCacheHook(def, state);
+			this._installExtraResultColumnSearchHook(tab);
+			this._scheduleEnsureExtraResultColumn(tabKey);
+			this._scheduleDocumentClassSelectorUi(def);
+			state.initialized = true;
+		},
+		
+		
+		
+		
+		
+		
+		_completeAdvancedSearch: function(state, resultSet) {
+			var def = state.def;
+			var tab = state.tab;
+			if (def) {
+				def._metlifeAdvancedDeferButtonEnable = false;
+			}
+			if (def && def.searchButton && def.searchButton.set) {
+				def.searchButton.set("disabled", false);
+			}
+			if (resultSet && resultSet.searchTemplate && !resultSet.searchTemplate.name) {
+				resultSet.searchTemplate.name = "Search results";
+			}
+			// Keep CE Rank sort on the request; re-order loaded rows by Modified On for the UI.
+			resultSet = this._sortResultSetByModifiedDescending(resultSet);
+			if (def && def.onSearchCompleted) {
+				def.onSearchCompleted(resultSet);
+			} else if (tab && tab.searchResults && tab.searchResults.setResultSet) {
+				tab.searchResults.setResultSet(resultSet);
+			}
+			if (tab && tab._setToolbarButtonDisabledState) {
+				tab._setToolbarButtonDisabledState("RefreshGrid", false);
+			}
+			this._endBothSearchStatusCaptureAndPublish(state, resultSet);
+		},
+
+		/**
+		 * Documents/Folders OOTB execute path: sort loaded results by Modified On before the grid binds.
+		 * Both mode is handled in _completeAdvancedSearch.
+		 */
+		_installModifiedOnUiSortHook: function(def) {
+			if (!def || def._metlifeModifiedOnUiSortHook) {
+				return;
+			}
+			def._metlifeModifiedOnUiSortHook = true;
+			var self = this;
+			aspect.around(def, "onSearchCompleted", function(originalOnSearchCompleted) {
+				return function(resultSet) {
+					self._sortResultSetByModifiedDescending(resultSet);
+					return originalOnSearchCompleted.apply(this, arguments);
+				};
+			});
+			console.log(LOG, "Modified On UI sort hook installed");
+		},
+
+		/**
+		 * Client-side only: sort the loaded result page by DateLastModified descending
+		 * (latest modified on top). Does not change the CE search Rank order_by.
+		 * Does not trigger a server re-sort when continuation pages exist.
+		 */
+		_sortResultSetByModifiedDescending: function(resultSet) {
+			if (!resultSet || !resultSet.items || !resultSet.items.length) {
+				return resultSet;
+			}
+			var propId = "DateLastModified";
+			var self = this;
+			var items = resultSet.items.slice();
+			items.sort(function(a, b) {
+				var aVal = self._getItemModifiedTimeValue(a, propId);
+				var bVal = self._getItemModifiedTimeValue(b, propId);
+				if (aVal === bVal) {
+					return 0;
+				}
+				if (aVal == null) {
+					return 1;
+				}
+				if (bVal == null) {
+					return -1;
+				}
+				return aVal > bVal ? -1 : 1;
+			});
+			resultSet.items = items;
+			var colIndex = this._findResultSetColumnSortIndex(resultSet, propId);
+			if (colIndex > 0) {
+				resultSet.sortIndex = colIndex;
+				resultSet.sortDirection = -1;
+			}
+			console.log(LOG, "UI sorted loaded results by DateLastModified descending", {
+				itemCount: items.length,
+				sortIndex: resultSet.sortIndex,
+				hasContinuation: !!resultSet.continuationData
+			});
+			return resultSet;
+		},
+
+		_getItemModifiedTimeValue: function(item, propId) {
+			if (!item) {
+				return null;
+			}
+			var val = null;
+			if (item.getValue) {
+				try {
+					val = item.getValue(propId);
+				} catch (e) {
+					val = null;
+				}
+			}
+			if ((val == null || val === "") && item.attributes && item.attributes[propId] != null) {
+				val = item.attributes[propId];
+			}
+			if (lang.isArray(val)) {
+				val = val.length ? val[0] : null;
+			}
+			if (val == null || val === "") {
+				return null;
+			}
+			if (val instanceof Date) {
+				return val.getTime();
+			}
+			if (typeof val === "number" && !isNaN(val)) {
+				return val;
+			}
+			var parsed = Date.parse(val);
+			if (!isNaN(parsed)) {
+				return parsed;
+			}
+			return null;
+		},
+
+		_findResultSetColumnSortIndex: function(resultSet, propId) {
+			if (!resultSet || !propId) {
+				return -1;
+			}
+			resultSet.columnNames = null;
+			var columns = resultSet.getColumns ? resultSet.getColumns() : null;
+			if (columns && columns.length) {
+				var i;
+				for (i = 0; i < columns.length; i++) {
+					if (columns[i] === propId) {
+						return i + 1;
+					}
+				}
+			}
+			var cells = resultSet.structure && resultSet.structure.cells && resultSet.structure.cells[0];
+			if (cells && cells.length) {
+				var j;
+				for (j = 0; j < cells.length; j++) {
+					var cell = cells[j];
+					if (cell && (cell.field === propId || cell.name === propId)) {
+						return j + 1;
+					}
+				}
+			}
+			return -1;
+		},
+
+		/**
+		 * OOTB posts one footer status message per search request. In Both mode the folder phase
+		 * overwrites the document count — capture and replace with the merged total.
+		 */
+		_beginBothSearchStatusCapture: function(state) {
+			var self = this;
+			var desktop = ecm.model.desktop;
+			if (!state || !desktop || typeof desktop.addMessage !== "function") {
+				return;
+			}
+			this._endBothSearchStatusCapture(state);
+			state._metlifeBothSearchStatusCaptureActive = true;
+			state._metlifeBothSearchStatusSample = null;
+			state._metlifeBothSearchStatusOriginalAddMessage = desktop.addMessage;
+			desktop.addMessage = function(message) {
+				if (state._metlifeBothSearchStatusCaptureActive &&
+					self._isSearchResultsStatusMessage(message)) {
+					state._metlifeBothSearchStatusSample = message.text;
+					return;
+				}
+				return state._metlifeBothSearchStatusOriginalAddMessage.apply(desktop, arguments);
+			};
+		},
