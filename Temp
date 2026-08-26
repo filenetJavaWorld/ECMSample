@@ -1,1 +1,386 @@
-temp
+_installExtraResultColumnSearchHook: function(tab) {
+			var def = tab && tab.searchDefinition;
+			if (!def || def._metlifeAdvancedExtraResultColumnHook) {
+				return;
+			}
+			def._metlifeAdvancedExtraResultColumnHook = true;
+			var self = this;
+			aspect.after(def, "_prepareSearchTemplateForExecution", function(prepared) {
+				var repo = tab.repository || self.repository;
+				return self._mergeExtraResultColumnOnSearchTemplate(prepared, repo);
+			});
+			aspect.after(def, "onSearchCompleted", function(resultSet) {
+				return self._applyExtraResultColumnDisplayLabels(resultSet);
+			}, true);
+			console.log(LOG, "FolderPath result column hook installed");
+		},
+
+=======================
+
+
+/**
+		 * First non-empty string from a criterion values array (Both folder-phase helper).
+		 */
+		_getCriterionFirstNonEmptyValue: function(criterion) {
+			if (!criterion || !criterion.values || !criterion.values.length) {
+				return "";
+			}
+			var i;
+			for (i = 0; i < criterion.values.length; i++) {
+				if (criterion.values[i] != null && String(criterion.values[i]).trim()) {
+					return String(criterion.values[i]).trim();
+				}
+			}
+			return "";
+		},
+
+		/**
+		 * Token for FolderName — mirrors Basic Search behavior.
+		 * Prefer document name property values; fall back to CBR/text (template then live widget).
+		 */
+		_extractFolderNameTokenFromDocumentTemplate: function(def, documentTemplate) {
+			if (documentTemplate) {
+				var docNameProp = this._getNamePropertyForMode(def, "document");
+				var criteria = documentTemplate.searchCriteria || [];
+				var i;
+				for (i = 0; i < criteria.length; i++) {
+					var criterion = criteria[i];
+					if (!criterion || !criterion.id) {
+						continue;
+					}
+					if (this._isDocumentNameProperty(criterion.id, docNameProp)) {
+						var nameValue = this._getCriterionFirstNonEmptyValue(criterion);
+						if (nameValue) {
+							return nameValue;
+						}
+					}
+				}
+				var fromTemplate = this._extractTextSearchToken(documentTemplate);
+				if (fromTemplate) {
+					return fromTemplate;
+				}
+			}
+			if (def && def._textSearchText && def._textSearchText.get) {
+				return String(def._textSearchText.get("value") || "").trim();
+			}
+			return "";
+		},
+
+		/**
+		 * Non-empty CBR / text-search string from a prepared document template.
+		 */
+		_extractTextSearchToken: function(template) {
+			if (!template) {
+				return "";
+			}
+			var criteria = template.textSearchCriteria;
+			if (criteria && !lang.isArray(criteria) && criteria.text != null) {
+				return String(criteria.text).trim();
+			}
+			if (!lang.isArray(criteria) || !criteria.length) {
+				return "";
+			}
+			var i;
+			for (i = 0; i < criteria.length; i++) {
+				var c = criteria[i];
+				if (c && c.text != null && String(c.text).trim()) {
+					return String(c.text).trim();
+				}
+			}
+			return "";
+		},
+
+		_isFolderNameCriterion: function(criterion, folderNameProp) {
+			if (!criterion) {
+				return false;
+			}
+			var id = criterion.id || criterion.name;
+			return id === folderNameProp || id === "FolderName" || criterion.name === "Folder Name";
+		},
+
+		/**
+		 * Both folder phase only: ensure FolderName LIKE has a real value (Basic-style),
+		 * or drop an empty FolderName so it is not submitted as values [].
+		 */
+		_ensureFolderNameCriterionForBothFolderPhase: function(def, folderTemplate, documentTemplate) {
+			if (!folderTemplate) {
+				return folderTemplate;
+			}
+			var folderNameProp = this._getNamePropertyForMode(def, "folder") || "FolderName";
+			var token = this._extractFolderNameTokenFromDocumentTemplate(def, documentTemplate);
+			var criteria = folderTemplate.searchCriteria ? folderTemplate.searchCriteria.slice() : [];
+			var folderNameCriterion = null;
+			var i;
+			for (i = 0; i < criteria.length; i++) {
+				if (this._isFolderNameCriterion(criteria[i], folderNameProp)) {
+					folderNameCriterion = criteria[i];
+					break;
+				}
+			}
+			var existingValue = this._getCriterionFirstNonEmptyValue(folderNameCriterion);
+			if (existingValue) {
+				return folderTemplate;
+			}
+			if (token) {
+				var values = [ token, "" ];
+				if (folderNameCriterion) {
+					folderNameCriterion.id = folderNameProp;
+					folderNameCriterion.name = "Folder Name";
+					// Force LIKE (Basic parity) — OOTB empty FolderName often defaults to STARTSWITH.
+					folderNameCriterion.selectedOperator = "LIKE";
+					folderNameCriterion.defaultOperator = "LIKE";
+					folderNameCriterion.dataType = folderNameCriterion.dataType || "xs:string";
+					folderNameCriterion.cardinality = folderNameCriterion.cardinality || "SINGLE";
+					folderNameCriterion.defaultValue = values;
+					if (folderNameCriterion.setValues) {
+						folderNameCriterion.setValues(values);
+					} else {
+						folderNameCriterion.values = values;
+					}
+				} else {
+					folderNameCriterion = new SearchCriterion({
+						id: folderNameProp,
+						name: "Folder Name",
+						selectedOperator: "LIKE",
+						defaultOperator: "LIKE",
+						dataType: "xs:string",
+						cardinality: "SINGLE",
+						valueRequired: false,
+						readOnly: false,
+						hidden: false
+					});
+					if (folderNameCriterion.setValues) {
+						folderNameCriterion.setValues(values);
+					} else {
+						folderNameCriterion.values = values;
+					}
+					folderNameCriterion.defaultValue = values;
+					criteria.push(folderNameCriterion);
+					folderTemplate.searchCriteria = criteria;
+				}
+				console.log(LOG, "Both folder phase — FolderName value applied from document name/CBR text", {
+					folderNameProp: folderNameProp,
+					token: token
+				});
+				return folderTemplate;
+			}
+			// No token: remove empty FolderName so it does not go out as values [].
+			if (folderNameCriterion) {
+				folderTemplate.searchCriteria = array.filter(criteria, lang.hitch(this, function(c) {
+					return !this._isFolderNameCriterion(c, folderNameProp);
+				}));
+				console.log(LOG, "Both folder phase — removed empty FolderName criterion (no document name/CBR token)");
+			}
+			return folderTemplate;
+		},
+
+		_prepareFolderTemplateFromDocumentTemplate: function(def, documentTemplate, callback) {
+			var self = this;
+			var documentClass = this._getDocumentClassFromTemplate(def, documentTemplate) ||
+				this._getSelectedDocumentClass(def);
+			var folderClassId = this._getExplicitFolderClassMapping(documentClass);
+			if (!folderClassId) {
+				console.log(LOG, "Folder search skipped — document class has no entry in DOCUMENT_TO_FOLDER_CLASS_MAP", {
+					documentClassId: documentClass && documentClass.id,
+					documentClassName: documentClass && (documentClass.name || documentClass.displayName)
+				});
+				callback(null);
+				return;
+			}
+
+			this._resolveFolderContentClass(def, folderClassId, function(folderClass) {
+				if (!documentTemplate || !folderClass) {
+					callback(null);
+					return;
+				}
+				var folderTemplate = documentTemplate.clone ? documentTemplate.clone() : lang.clone(documentTemplate);
+				folderTemplate = self._applyOotbFolderSearchTemplateFields(folderTemplate, def);
+				folderTemplate = self._mergeExtraResultColumnOnSearchTemplate(folderTemplate, def.repository);
+				var sourceCriteria = documentTemplate.searchCriteria || [];
+				var clonedCriteria = [];
+				var c;
+				for (c = 0; c < sourceCriteria.length; c++) {
+					if (sourceCriteria[c] && sourceCriteria[c].clone) {
+						clonedCriteria.push(sourceCriteria[c].clone());
+					} else if (sourceCriteria[c]) {
+						clonedCriteria.push(lang.clone(sourceCriteria[c]));
+					}
+				}
+				folderTemplate.searchCriteria = self._mapCriteriaForFolderClass(def, clonedCriteria, folderClass);
+				// Both folder phase only (this method is not used by folders-only / documents-only).
+				// Fill FolderName from DocumentTitle or CBR text when mapping left it empty.
+				folderTemplate = self._ensureFolderNameCriterionForBothFolderPhase(def, folderTemplate, documentTemplate);
+				if (folderTemplate.setSearchContentClass) {
+					folderTemplate.setSearchContentClass(folderClass);
+				} else {
+					folderTemplate.classes = [ folderClass.id ];
+				}
+				folderTemplate.includeSubclasses = documentTemplate.includeSubclasses !== false;
+				if (documentTemplate.folders) {
+					folderTemplate.folders = lang.clone(documentTemplate.folders);
+				}
+				var criteriaSummary = [];
+				if (folderTemplate.searchCriteria) {
+					var s;
+					for (s = 0; s < folderTemplate.searchCriteria.length; s++) {
+						var mc = folderTemplate.searchCriteria[s];
+						if (mc) {
+							criteriaSummary.push({
+								id: mc.id,
+								operator: mc.selectedOperator,
+								values: mc.values
+							});
+						}
+					}
+				}
+				console.log(LOG, "Folder template prepared (behind the scenes)", {
+					documentClass: documentClass && (documentClass.name || documentClass.id || documentTemplate.className),
+					folderClass: folderClass.id || folderClass.name,
+					mappedFromClass: documentTemplate.className,
+					criteriaCount: folderTemplate.searchCriteria ? folderTemplate.searchCriteria.length : 0,
+					criteria: criteriaSummary
+				});
+				callback(folderTemplate);
+			});
+		},
+
+		/**
+		 * Folders-only: match Basic Search — objectType=folder, FolderName LIKE from CBR text,
+		 * folder textSearchCriteria cleared. Mutates the prepared template before template.search().
+		 */
+		_alignFoldersOnlyTemplateLikeBasic: function(def, template) {
+			if (!template) {
+				return template;
+			}
+			// Capture CBR / FolderName token before folder fields clear textSearchCriteria.
+			var token = this._extractFolderNameTokenFromDocumentTemplate(def, template);
+			if (!token) {
+				var folderNameProp = this._getNamePropertyForMode(def, "folder") || "FolderName";
+				var criteria = template.searchCriteria || [];
+				var i;
+				for (i = 0; i < criteria.length; i++) {
+					if (this._isFolderNameCriterion(criteria[i], folderNameProp)) {
+						token = this._getCriterionFirstNonEmptyValue(criteria[i]);
+						if (token) {
+							break;
+						}
+					}
+				}
+			}
+			template = this._applyOotbFolderSearchTemplateFields(template, def);
+			template = this._mergeExtraResultColumnOnSearchTemplate(template, def && def.repository);
+			// Rebuild FolderName from captured token (Basic parity).
+			if (token) {
+				var snapshot = {
+					searchCriteria: [],
+					textSearchCriteria: [ { text: token } ]
+				};
+				template = this._ensureFolderNameCriterionForBothFolderPhase(def, template, snapshot);
+			} else {
+				template = this._ensureFolderNameCriterionForBothFolderPhase(def, template, template);
+			}
+			console.log(LOG, "Folders-only template aligned like Basic", {
+				objectType: template.objectType,
+				className: template.className,
+				token: token,
+				criteriaCount: template.searchCriteria ? template.searchCriteria.length : 0
+			});
+			return template;
+		},
+
+		_installAdvancedSearchExecutionHook: function(tab, state) {
+			var def = tab.searchDefinition;
+			if (!def || def._metlifeAdvancedExecuteHook) {
+				return;
+			}
+			var tabKey = this._getTabKey(tab);
+			def._metlifeAdvancedExecuteHook = true;
+			def._metlifeAdvancedTabKey = tabKey;
+			var self = this;
+			aspect.around(def, "_executeSearch", function(originalExecute) {
+				def._metlifeAdvancedOriginalExecute = originalExecute;
+				return function() {
+					var execState = self._resolveExecutionState(def, state);
+					if (!execState) {
+						console.warn(LOG, "No execution state — falling back to OOTB search");
+						return originalExecute.apply(def, arguments);
+					}
+					var searchType = execState.controlsWidget ?
+						execState.controlsWidget.getSearchType() : "both";
+					self._persistAdvancedState(execState);
+					console.log(LOG, "Search button clicked", { searchType: searchType, tabKey: tabKey });
+
+					var runSearch = function(ready) {
+						if (!ready) {
+							console.error(LOG, "Search aborted — slice Search In folder could not be applied");
+							return;
+						}
+						// Every search uses Text Options "All of the terms".
+						self._applyTextSearchOperatorAll(def);
+						if (searchType === "documents") {
+							self._ensureOotbDocumentMoreOptionsBeforeExecute(def);
+							self._logSearchExecutionContext(execState, "documents");
+							// Use around (not after) so we receive the real prepared template argument.
+							var docPrepHandle = aspect.around(def, "onSearchTemplatePrepared", function(originalPrepared) {
+								return function(template) {
+									if (docPrepHandle) {
+										docPrepHandle.remove();
+										docPrepHandle = null;
+									}
+									self._forceTextSearchCriteriaOperatorAll(template);
+									// Rank is text/CBR only — skip for property-only document searches.
+									if (self._templateHasTextSearchCriteria(template)) {
+										self._applyDocumentRankSort(template);
+										self._installOneShotDocumentRankSearchHook(template);
+									}
+									self._logSearchPayload(execState, "document", template);
+									console.log(LOG, "Document Search Started", {
+										useRankSort: self._templateHasTextSearchCriteria(template)
+									});
+									return originalPrepared.apply(this, arguments);
+								};
+							});
+							var docCompleteHandle = aspect.after(def, "onSearchCompleted", function(results) {
+								if (docCompleteHandle) {
+									docCompleteHandle.remove();
+								}
+								self._logSearchPhaseComplete("document", results);
+								self._logTotalResults(results);
+							}, true);
+							originalExecute.apply(def, arguments);
+							return;
+						}
+						if (searchType === "folders") {
+							self._ensureOotbFolderMoreOptionsBeforeExecute(def);
+							self._logSearchExecutionContext(execState, "folders");
+							var folderPrepHandle = aspect.around(def, "onSearchTemplatePrepared", function(originalPrepared) {
+								return function(template) {
+									if (folderPrepHandle) {
+										folderPrepHandle.remove();
+										folderPrepHandle = null;
+									}
+									// Basic parity: FolderName LIKE from CBR + objectType=folder.
+									template = self._alignFoldersOnlyTemplateLikeBasic(def, template);
+									self._forceTextSearchCriteriaOperatorAll(template);
+									self._logSearchPayload(execState, "folder", template);
+									console.log(LOG, "Folder Search Started");
+									return originalPrepared.apply(this, arguments);
+								};
+							});
+							var folderCompleteHandle = aspect.after(def, "onSearchCompleted", function(results) {
+								if (folderCompleteHandle) {
+									folderCompleteHandle.remove();
+								}
+								self._logSearchPhaseComplete("folder", results);
+								self._logTotalResults(results);
+							}, true);
+							originalExecute.apply(def, arguments);
+							return;
+						}
+						self._runAdvancedBothSearch(execState, def);
+					};
+
+					self._ensureSearchInBeforeExecute(execState, runSearch);
+				};
+			});
+		},
