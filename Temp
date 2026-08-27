@@ -1,1 +1,107 @@
-temp
+/**
+	 * Opens the configured search template URL in a new browser tab (OOTB template experience).
+	 * Placeholder URL is https://www.google.com — replace later with the real template link.
+	 */
+	lang.setObject("myReservedItemsAction", function(repository, items, callback, teamspace, resultSet, parameterMap) {
+		var logTag = "myReservedItemsAction";
+		var url = "https://www.google.com";
+		try {
+			if (parameterMap && parameterMap.searchTemplateUrl) {
+				url = String(parameterMap.searchTemplateUrl);
+			}
+		} catch (ex) {
+			console.warn(LOG + " " + logTag + ": could not read searchTemplateUrl from parameterMap", ex);
+		}
+		console.log(LOG + " " + logTag + " opening browser tab", url);
+		try {
+			window.open(url, "_blank");
+			safeCallback(callback, logTag + "-opened");
+		} catch (ex2) {
+			console.error(LOG + " " + logTag + " window.open failed", ex2);
+			safeCallback(callback, logTag + "-failed");
+		}
+	});
+	
+	
+	
+	package met.kms.ecm.search.action;
+
+import java.util.Locale;
+
+import com.ibm.ecm.extension.PluginAction;
+import com.ibm.json.java.JSONObject;
+
+/**
+ * Opens a saved search template URL in a new browser tab (OOTB template experience).
+ * Placeholder URL — replace with the real search template link later.
+ */
+public class MyReservedItemsAction extends PluginAction {
+
+	/** Placeholder until the real search template URL is configured. */
+	public static final String SEARCH_TEMPLATE_URL = "https://www.google.com";
+
+	@Override
+	public String getId() {
+		return "MyReservedItemsAction";
+	}
+
+	@Override
+	public String getName(Locale locale) {
+		return "My Reserved Items";
+	}
+
+	@Override
+	public String getIcon() {
+		return "";
+	}
+
+	@Override
+	public String getIconClass() {
+		return "";
+	}
+
+	@Override
+	public String getPrivilege() {
+		return "";
+	}
+
+	@Override
+	public boolean isMultiDoc() {
+		return false;
+	}
+
+	/**
+	 * Global so it can be placed on desktop menus without requiring a content selection.
+	 */
+	@Override
+	public boolean isGlobal() {
+		return true;
+	}
+
+	@Override
+	public String getActionFunction() {
+		return "myReservedItemsAction";
+	}
+
+	@Override
+	public String getServerTypes() {
+		return "p8";
+	}
+
+	@Override
+	public String[] getMenuTypes() {
+		return new String[0];
+	}
+
+	@Override
+	public JSONObject getAdditionalConfiguration(Locale locale) {
+		JSONObject json = new JSONObject();
+		json.put("searchTemplateUrl", SEARCH_TEMPLATE_URL);
+		return json;
+	}
+
+	@Override
+	public String getActionModelClass() {
+		return "";
+	}
+}
