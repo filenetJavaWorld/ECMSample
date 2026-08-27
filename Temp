@@ -1,1 +1,1398 @@
-temp
+@@CNB_PACKAGE_BEGIN@@
+FORMAT_VERSION=1
+CHARACTER_ENCODING=UTF-8
+SOURCE_ROOT_NAME=java
+CREATED_TIME=1787843501735
+CREATED_DATE=2026-08-27 12:11:41
+HOURS_BACK=48
+MODIFIED_FROM_TIME=1787670701658
+MODIFIED_FROM_DATE=2026-08-25 12:11:41
+@@CNB_PACKAGE_HEADER_END@@
+
+@@CNB_PACKAGE_DIRECTORY_BEGIN@@
+RELATIVE_PATH=com
+LAST_MODIFIED=1779283003330
+@@CNB_PACKAGE_DIRECTORY_END@@
+
+@@CNB_PACKAGE_DIRECTORY_BEGIN@@
+RELATIVE_PATH=com/cnb
+LAST_MODIFIED=1779283003330
+@@CNB_PACKAGE_DIRECTORY_END@@
+
+@@CNB_PACKAGE_DIRECTORY_BEGIN@@
+RELATIVE_PATH=com/cnb/reports
+LAST_MODIFIED=1779300934940
+@@CNB_PACKAGE_DIRECTORY_END@@
+
+@@CNB_PACKAGE_DIRECTORY_BEGIN@@
+RELATIVE_PATH=com/cnb/reports/config
+LAST_MODIFIED=1779284727111
+@@CNB_PACKAGE_DIRECTORY_END@@
+
+@@CNB_PACKAGE_DIRECTORY_BEGIN@@
+RELATIVE_PATH=com/cnb/reports/model
+LAST_MODIFIED=1784737717177
+@@CNB_PACKAGE_DIRECTORY_END@@
+
+@@CNB_PACKAGE_FILE_BEGIN@@
+FILE_NAME=ReportExecutionToolMain.java
+RELATIVE_PATH=com/cnb/reports/ReportExecutionToolMain.java
+FILE_TYPE=JAVA
+LAST_MODIFIED=1787842458330
+FILE_SIZE=4414
+@@CNB_PACKAGE_CONTENT_BEGIN@@
+package com.cnb.reports;
+
+import com.cnb.reports.config.AppConfig;
+import com.cnb.reports.model.ReportExecutionResult;
+import com.cnb.reports.model.ReportRequestSummary;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.core.config.Configurator;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Entry point for the standalone Report Execution Tool.
+ */
+public final class ReportExecutionToolMain {
+
+    private static final Logger LOGGER = LogManager.getLogger(ReportExecutionToolMain.class);
+
+    private ReportExecutionToolMain() {
+    }
+
+    public static void main(String[] args) {
+        initializeLogging();
+        int exitCode = 0;
+        try {
+            AppConfig config = AppConfig.loadFromSystemProperty();
+            LOGGER.info("Report Execution Tool starting.");
+            LOGGER.info("Configuration loaded from {}", System.getProperty("config.file"));
+            LOGGER.info("ReportRequest home ObjectStore: {}", config.getReportRequestObjectStoreName());
+            LOGGER.info("Processable statuses: {}", config.getProcessableStatuses());
+            LOGGER.info("Worker thread count: {}, poll batch size: {}", config.getWorkerThreadCount(),
+                    config.getPollBatchSize());
+
+            if (config.isPollingLoopEnabled()) {
+                runPollingLoop(config);
+            } else {
+                exitCode = runOnce(config);
+            }
+        } catch (Exception ex) {
+            LOGGER.error("Report Execution Tool failed to start.", ex);
+            exitCode = 1;
+        }
+        LOGGER.info("Report Execution Tool finished with exit code {}", exitCode);
+        System.exit(exitCode);
+    }
+
+    private static void initializeLogging() {
+        String logConfig = System.getProperty("log4j.configurationFile");
+        if (logConfig == null || logConfig.isBlank()) {
+            logConfig = "D:/Rameshwar/ReportsExecutionTool/config/Log4j2.xml";
+        }
+        Configurator.initialize(null, logConfig);
+    }
+
+    private static void runPollingLoop(AppConfig config) throws Exception {
+        LOGGER.info("Internal polling loop enabled. Interval={} minutes", config.getPollingIntervalMinutes());
+        while (true) {
+            runOnce(config);
+            Thread.sleep(TimeUnit.MINUTES.toMillis(config.getPollingIntervalMinutes()));
+        }
+    }
+
+    private static int runOnce(AppConfig config) throws Exception {
+        try (FileNetConnectionManager connectionManager = new FileNetConnectionManager(config)) {
+            connectionManager.testConnection();
+            LOGGER.info("FileNet connection established successfully.");
+
+            ReportRequestFinder finder = new ReportRequestFinder(config, connectionManager);
+            List<ReportRequestSummary> pendingRequests = finder.findProcessableRequests();
+            if (pendingRequests.isEmpty()) {
+                LOGGER.info("No processable ReportRequest documents found.");
+                return 0;
+            }
+
+            ExecutorService executor = Executors.newFixedThreadPool(config.getWorkerThreadCount());
+            List<Future<ReportExecutionResult>> futures = new ArrayList<>();
+            for (ReportRequestSummary summary : pendingRequests) {
+                futures.add(executor.submit(new ReportExecutionWorker(config, connectionManager, summary)));
+            }
+
+            executor.shutdown();
+            if (!executor.awaitTermination(12, TimeUnit.HOURS)) {
+                executor.shutdownNow();
+                LOGGER.warn("Worker pool did not finish within timeout.");
+            }
+
+            int successCount = 0;
+            int failureCount = 0;
+            for (Future<ReportExecutionResult> future : futures) {
+                ReportExecutionResult result = future.get();
+                if (result.isSuccess()) {
+                    successCount++;
+                } else {
+                    failureCount++;
+                }
+            }
+
+            LOGGER.info("Batch complete. success={}, failed={}", successCount, failureCount);
+            return failureCount > 0 ? 1 : 0;
+        }
+    }
+}
+@@CNB_PACKAGE_CONTENT_END@@
+@@CNB_PACKAGE_FILE_END@@
+
+@@CNB_PACKAGE_FILE_BEGIN@@
+FILE_NAME=ReportExecutionWorker.java
+RELATIVE_PATH=com/cnb/reports/ReportExecutionWorker.java
+FILE_TYPE=JAVA
+LAST_MODIFIED=1787842184805
+FILE_SIZE=11206
+@@CNB_PACKAGE_CONTENT_BEGIN@@
+package com.cnb.reports;
+
+import com.cnb.reports.config.AppConfig;
+import com.cnb.reports.email.EmailService;
+import com.cnb.reports.email.ReportRequestEmailContext;
+import com.cnb.reports.email.ReportRequestEmailContextFactory;
+import com.cnb.reports.model.ReportExecutionResult;
+import com.cnb.reports.model.ReportRequestPayload;
+import com.cnb.reports.model.ReportRequestSummary;
+import com.cnb.reports.model.ResultColumn;
+import com.cnb.reports.util.CePropertyMetadataResolver;
+import com.cnb.reports.util.SqlValidationUtil;
+import com.filenet.api.core.ObjectStore;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.Date;
+import java.util.concurrent.Callable;
+
+/**
+ * Processes a single claimed ReportRequest end-to-end.
+ * <ul>
+ * <li>Home ObjectStore — claim, payload read, status updates, Excel attach, email doc resolve</li>
+ * <li>Target ObjectStore ({@code RepositoryName}) — property metadata + SQL/export query</li>
+ * </ul>
+ */
+public final class ReportExecutionWorker implements Callable<ReportExecutionResult> {
+
+    private static final Logger LOGGER = LogManager.getLogger(ReportExecutionWorker.class);
+    private static final DateTimeFormatter FILE_TS = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+
+    private final AppConfig config;
+    private final FileNetConnectionManager connectionManager;
+    private final ReportRequestSummary summary;
+    private final EmailService emailService;
+
+    public ReportExecutionWorker(AppConfig config, FileNetConnectionManager connectionManager,
+            ReportRequestSummary summary) {
+        this.config = config;
+        this.connectionManager = connectionManager;
+        this.summary = summary;
+        this.emailService = new EmailService(config);
+    }
+
+    @Override
+    public ReportExecutionResult call() {
+        String documentId = summary.getDocumentId();
+        connectionManager.ensureSubjectOnCurrentThread();
+        ReportRequestSummary latestSummary = null;
+        ReportRequestPayload payload = null;
+        ObjectStore homeOs = connectionManager.getReportRequestObjectStore();
+        try {
+            ReportRequestClaimService claimService = new ReportRequestClaimService(config, homeOs);
+            if (!claimService.tryClaim(documentId)) {
+                return ReportExecutionResult.builder(documentId)
+                        .success(false)
+                        .message("ReportRequest was not claimed.")
+                        .build();
+            }
+
+            ReportRequestPayloadReader payloadReader = new ReportRequestPayloadReader(config, homeOs);
+            latestSummary = payloadReader.readSummary(documentId);
+            String jsonPayload = payloadReader.readJsonPayload(documentId);
+
+            ReportRequestPayloadParser parser = new ReportRequestPayloadParser();
+            payload = parser.parse(jsonPayload, latestSummary);
+
+            if (!SqlValidationUtil.isUsableSql(payload.getSqlQuery())) {
+                payload.setSqlQuery(latestSummary.getSqlQuery());
+            }
+
+            String targetOsName = resolveTargetObjectStoreName(
+                    latestSummary != null ? latestSummary : summary, payload);
+            ObjectStore targetOs = connectionManager.getObjectStore(targetOsName);
+
+            LOGGER.info(
+                    "Executing ReportRequest documentId={}, reportRequestId={}, reportName={}, "
+                            + "homeObjectStore={}, targetObjectStore={}, "
+                            + "class={}, includeSubclasses={}, searchScope={}, folderId={}, folderPath={}, "
+                            + "criteriaCount={}, resultColumnCount={}",
+                    documentId,
+                    payload.getReportRequestId(),
+                    payload.getReportName(),
+                    homeOs.get_Name(),
+                    targetOsName,
+                    payload.getTargetClassSymbolicName(),
+                    payload.isIncludeSubclasses(),
+                    payload.getSearchScope(),
+                    payload.getFolderId(),
+                    payload.getFolderPath(),
+                    payload.getCriteria().size(),
+                    payload.getResultColumns().size());
+
+            CePropertyMetadataResolver metadataResolver = new CePropertyMetadataResolver(targetOs);
+            FileNetQueryBuilder queryBuilder = new FileNetQueryBuilder(metadataResolver);
+            final String sql = queryBuilder.buildQuery(payload);
+            LOGGER.info("ReportRequest {} generated SQL: {}", documentId, sql);
+
+            FileNetQueryExecutor queryExecutor = new FileNetQueryExecutor(targetOs);
+
+            Path excelPath = buildExcelOutputPath(documentId, payload.getReportName());
+            ExcelReportWriter excelWriter = new ExcelReportWriter(config);
+            final java.util.List<ResultColumn> resultColumns = payload.getResultColumns();
+            ExcelReportWriter.WriteResult writeResult =
+                    excelWriter.writeReport(excelPath, payload.getReportName(), resultColumns,
+                            rowConsumer -> {
+                                try {
+                                    queryExecutor.execute(sql, resultColumns, rowConsumer);
+                                } catch (Exception ex) {
+                                    throw new RuntimeException(ex);
+                                }
+                            });
+            long rowCount = writeResult.getRowCount();
+
+            Date completedAt = new Date();
+            ReportStatusService statusService = new ReportStatusService(config, homeOs);
+            ReportAttachmentService attachmentService = new ReportAttachmentService(config, homeOs);
+            // Version 2 = Excel + Completed. Version 1 keeps request JSON.
+            attachmentService.attachExcelReport(documentId, writeResult.getOutputFile(), payload.getReportName(),
+                    statusService, completedAt);
+
+            ReportOutputArchiveService archiveService = new ReportOutputArchiveService(config);
+            Path archivedCopy = archiveService.archiveCompletedReport(writeResult.getOutputFile());
+
+            ReportRequestSummary postSummary = payloadReader.readSummary(documentId);
+            ReportRequestEmailContext emailContext = ReportRequestEmailContextFactory.from(
+                    config, homeOs, postSummary, payload, config.getCompletedStatus());
+            emailService.sendCompletionEmail(emailContext);
+
+            LOGGER.info("Completed ReportRequest {} with {} rows. Excel={} archived={}",
+                    documentId, rowCount, excelPath, archivedCopy);
+            return ReportExecutionResult.builder(documentId)
+                    .success(true)
+                    .message("Report execution completed.")
+                    .generatedSql(sql)
+                    .rowCount(rowCount)
+                    .excelFilePath(archivedCopy.toString())
+                    .build();
+        } catch (Exception ex) {
+            LOGGER.error("Failed processing ReportRequest {}", documentId, ex);
+            try {
+                ReportStatusService statusService = new ReportStatusService(config, homeOs);
+                statusService.markFailed(documentId, new Date());
+                sendFailureEmail(documentId, latestSummary, payload, homeOs);
+            } catch (Exception statusEx) {
+                LOGGER.error("Failed to update failed status for ReportRequest {}", documentId, statusEx);
+            }
+            return ReportExecutionResult.builder(documentId)
+                    .success(false)
+                    .message(ex.getMessage())
+                    .error(ex)
+                    .build();
+        } finally {
+            connectionManager.clearSubjectOnCurrentThread();
+        }
+    }
+
+    private void sendFailureEmail(String documentId, ReportRequestSummary latestSummary, ReportRequestPayload payload,
+            ObjectStore homeOs) {
+        try {
+            ReportRequestPayloadReader payloadReader = new ReportRequestPayloadReader(config, homeOs);
+            ReportRequestSummary failedSummary = payloadReader.readSummary(documentId);
+            ReportRequestPayload emailPayload = payload;
+            if (emailPayload == null && latestSummary != null) {
+                try {
+                    String jsonPayload = payloadReader.readJsonPayload(documentId);
+                    emailPayload = new ReportRequestPayloadParser().parse(jsonPayload, failedSummary);
+                } catch (Exception readEx) {
+                    LOGGER.warn("Unable to read JSON payload for failure email on ReportRequest {}", documentId, readEx);
+                }
+            }
+            ReportRequestEmailContext emailContext = ReportRequestEmailContextFactory.from(
+                    config, homeOs, failedSummary, emailPayload, config.getFailedStatus());
+            emailService.sendFailureEmail(emailContext);
+        } catch (Exception emailEx) {
+            LOGGER.error("Failed to send failure email for ReportRequest {}", documentId, emailEx);
+        }
+    }
+
+    /**
+     * Target ObjectStore for SQL/export comes from ReportRequest.RepositoryName
+     * (FileNet ObjectStore symbolic name), then payload repositoryName / objectStoreName.
+     */
+    private static String resolveTargetObjectStoreName(ReportRequestSummary summary, ReportRequestPayload payload) {
+        String fromSummaryRepo = summary != null ? trimToNull(summary.getRepositoryName()) : null;
+        if (fromSummaryRepo != null) {
+            return fromSummaryRepo;
+        }
+        String fromPayloadRepo = payload != null ? trimToNull(payload.getRepositoryName()) : null;
+        if (fromPayloadRepo != null) {
+            return fromPayloadRepo;
+        }
+        String fromPayloadOs = payload != null ? trimToNull(payload.getObjectStoreName()) : null;
+        if (fromPayloadOs != null) {
+            return fromPayloadOs;
+        }
+        throw new IllegalStateException(
+                "Unable to resolve target ObjectStore for ReportRequest "
+                        + (summary != null ? summary.getDocumentId() : "(unknown)")
+                        + ". RepositoryName (ObjectStore symbolic name) is empty on the document.");
+    }
+
+    private static String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private Path buildExcelOutputPath(String documentId, String reportName) {
+        String safeName = reportName == null ? "report" : reportName.replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (safeName.trim().isEmpty()) {
+            safeName = "report";
+        }
+        String fileName = safeName + "-" + documentId + "-" + LocalDateTime.now().format(FILE_TS) + ".xlsx";
+        return config.getOutputTempFolder().resolve(fileName);
+    }
+}
+@@CNB_PACKAGE_CONTENT_END@@
+@@CNB_PACKAGE_FILE_END@@
+
+@@CNB_PACKAGE_FILE_BEGIN@@
+FILE_NAME=ReportRequestFinder.java
+RELATIVE_PATH=com/cnb/reports/ReportRequestFinder.java
+FILE_TYPE=JAVA
+LAST_MODIFIED=1787842184667
+FILE_SIZE=7534
+@@CNB_PACKAGE_CONTENT_BEGIN@@
+package com.cnb.reports;
+
+import com.cnb.reports.config.AppConfig;
+import com.cnb.reports.model.ReportRequestSummary;
+import com.cnb.reports.util.P8PropertyReader;
+import com.cnb.reports.util.SqlValidationUtil;
+import com.filenet.api.collection.IndependentObjectSet;
+import com.filenet.api.collection.PageIterator;
+import com.filenet.api.collection.StringList;
+import com.filenet.api.constants.PropertyNames;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.Properties;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.query.SearchSQL;
+import com.filenet.api.query.SearchScope;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * Finds processable ReportRequest documents in the configured home ObjectStore only.
+ */
+public final class ReportRequestFinder {
+
+    private static final Logger LOGGER = LogManager.getLogger(ReportRequestFinder.class);
+
+    private final AppConfig config;
+    private final FileNetConnectionManager connectionManager;
+
+    public ReportRequestFinder(AppConfig config, FileNetConnectionManager connectionManager) {
+        this.config = config;
+        this.connectionManager = connectionManager;
+    }
+
+    public List<ReportRequestSummary> findProcessableRequests() throws Exception {
+        ObjectStore homeOs = connectionManager.getReportRequestObjectStore();
+        String sql = buildFindSql(config.getProcessableStatuses());
+        String homeOsName = homeOs.get_Name();
+        LOGGER.info("Searching ReportRequest home ObjectStore={} using SQL: {}", homeOsName, sql);
+
+        SearchSQL searchSQL = new SearchSQL(sql);
+        SearchScope scope = new SearchScope(homeOs);
+        PropertyFilter filter = buildPropertyFilter();
+        IndependentObjectSet resultSet = scope.fetchObjects(
+                searchSQL, config.getPollBatchSize(), filter, Boolean.TRUE);
+
+        List<ReportRequestSummary> summaries = new ArrayList<>();
+        PageIterator pageIterator = resultSet.pageIterator();
+        if (pageIterator.nextPage()) {
+            Object[] page = pageIterator.getCurrentPage();
+            if (page != null) {
+                for (Object item : page) {
+                    if (item instanceof Document) {
+                        summaries.add(toSummary((Document) item, homeOsName));
+                    }
+                }
+            }
+        }
+        LOGGER.info("Found {} processable ReportRequest documents in home ObjectStore={}",
+                summaries.size(), homeOsName);
+        return summaries;
+    }
+
+    private String buildFindSql(Set<String> statuses) {
+        String statusClause;
+        if (statuses.size() == 1) {
+            statusClause = config.getStatusProperty() + " = '"
+                    + SqlValidationUtil.escapeSqlString(statuses.iterator().next()) + "'";
+        } else {
+            statusClause = config.getStatusProperty() + " IN ("
+                    + statuses.stream()
+                            .map(status -> "'" + SqlValidationUtil.escapeSqlString(status) + "'")
+                            .collect(Collectors.joining(", "))
+                    + ")";
+        }
+
+        return "SELECT [This], Id, DocumentTitle, DateCreated, "
+                + config.getStatusProperty() + ", "
+                + config.getTargetClassProperty() + ", "
+                + config.getRepositoryNameProperty() + ", "
+                + config.getCriteriaProperty() + ", "
+                + config.getResultColumnsProperty() + ", "
+                + config.getSqlQueryProperty() + ", "
+                + config.getSendEmailToProperty() + ", "
+                + config.getSendEmailCcProperty() + ", "
+                + config.getStartDateProperty() + ", "
+                + config.getEndDateProperty()
+                + " FROM " + config.getReportClass()
+                + " WHERE " + statusClause
+                + " AND IsCurrentVersion = TRUE"
+                + " ORDER BY DateCreated ASC";
+    }
+
+    private PropertyFilter buildPropertyFilter() {
+        PropertyFilter filter = new PropertyFilter();
+        filter.addIncludeProperty(0, null, null, PropertyNames.ID, null);
+        filter.addIncludeProperty(0, null, null, "DocumentTitle", null);
+        filter.addIncludeProperty(0, null, null, config.getStatusProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getTargetClassProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getRepositoryNameProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getCriteriaProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getResultColumnsProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getSqlQueryProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getSendEmailToProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getSendEmailCcProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getStartDateProperty(), null);
+        filter.addIncludeProperty(0, null, null, config.getEndDateProperty(), null);
+        return filter;
+    }
+
+    private ReportRequestSummary toSummary(Document document, String homeObjectStoreName) {
+        Properties props = document.getProperties();
+        return new ReportRequestSummary(
+                document.get_Id().toString(),
+                P8PropertyReader.asString(props, "DocumentTitle"),
+                P8PropertyReader.asString(props, config.getStatusProperty()),
+                P8PropertyReader.asString(props, config.getTargetClassProperty()),
+                P8PropertyReader.asString(props, config.getRepositoryNameProperty()),
+                "",
+                homeObjectStoreName,
+                readStringList(props, config.getCriteriaProperty()),
+                readStringList(props, config.getResultColumnsProperty()),
+                P8PropertyReader.asString(props, config.getSqlQueryProperty()),
+                readStringList(props, config.getSendEmailToProperty()),
+                readStringList(props, config.getSendEmailCcProperty()),
+                P8PropertyReader.formatDateTime(P8PropertyReader.asDate(props, config.getStartDateProperty())),
+                P8PropertyReader.formatDateTime(P8PropertyReader.asDate(props, config.getEndDateProperty())));
+    }
+
+    private List<String> readStringList(Properties props, String propertyName) {
+        List<String> values = new ArrayList<>();
+        if (!props.isPropertyPresent(propertyName)) {
+            return values;
+        }
+        try {
+            StringList list = props.getStringListValue(propertyName);
+            if (list != null) {
+                for (Object item : list) {
+                    if (item != null) {
+                        String text = String.valueOf(item).trim();
+                        if (!text.isEmpty()) {
+                            values.add(text);
+                        }
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            String single = P8PropertyReader.asString(props, propertyName);
+            if (!single.isEmpty()) {
+                values.add(single);
+            }
+        }
+        return values;
+    }
+}
+@@CNB_PACKAGE_CONTENT_END@@
+@@CNB_PACKAGE_FILE_END@@
+
+@@CNB_PACKAGE_FILE_BEGIN@@
+FILE_NAME=FileNetConnectionManager.java
+RELATIVE_PATH=com/cnb/reports/FileNetConnectionManager.java
+FILE_TYPE=JAVA
+LAST_MODIFIED=1787842129816
+FILE_SIZE=4405
+@@CNB_PACKAGE_CONTENT_BEGIN@@
+package com.cnb.reports;
+
+import com.cnb.reports.config.AppConfig;
+import com.filenet.api.core.Connection;
+import com.filenet.api.core.Domain;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.util.UserContext;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import javax.security.auth.Subject;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Manages FileNet CE connection using configured service credentials.
+ * <ul>
+ * <li>Home ObjectStore ({@code filenet.reportRequestObjectStoreName}) — ReportRequest class/instances</li>
+ * <li>Target ObjectStore (per request {@code RepositoryName}) — where report SQL runs</li>
+ * </ul>
+ */
+public final class FileNetConnectionManager implements AutoCloseable {
+
+    private static final Logger LOGGER = LogManager.getLogger(FileNetConnectionManager.class);
+
+    private final AppConfig config;
+    private final Connection connection;
+    private final Subject subject;
+    private final Domain domain;
+    private final ObjectStore reportRequestObjectStore;
+    private final Map<String, ObjectStore> objectStoreCache = new ConcurrentHashMap<>();
+    private final ThreadLocal<Boolean> subjectPushed = ThreadLocal.withInitial(() -> Boolean.FALSE);
+
+    public FileNetConnectionManager(AppConfig config) {
+        this.config = config;
+        LOGGER.info("Connecting to FileNet CE at {}", config.getFileNetUri());
+        connection = Factory.Connection.getConnection(config.getFileNetUri());
+        subject = UserContext.createSubject(
+                connection,
+                config.getFileNetUsername(),
+                config.getFileNetPassword(),
+                config.getFileNetStanza());
+        UserContext.get().pushSubject(subject);
+        subjectPushed.set(Boolean.TRUE);
+        domain = Factory.Domain.fetchInstance(connection, null, null);
+        reportRequestObjectStore = Factory.ObjectStore.fetchInstance(
+                domain, config.getReportRequestObjectStoreName(), null);
+        objectStoreCache.put(reportRequestObjectStore.get_Name(), reportRequestObjectStore);
+        LOGGER.info("Connected to domain={} reportRequestHomeObjectStore={}",
+                domain.get_Name(), reportRequestObjectStore.get_Name());
+    }
+
+    /**
+     * Home ObjectStore where ReportRequest documents are stored.
+     */
+    public ObjectStore getReportRequestObjectStore() {
+        return reportRequestObjectStore;
+    }
+
+    /**
+     * Resolves any ObjectStore by symbolic name (cached), e.g. target store from RepositoryName.
+     */
+    public ObjectStore getObjectStore(String objectStoreName) {
+        if (objectStoreName == null || objectStoreName.trim().isEmpty()) {
+            throw new IllegalArgumentException("objectStoreName is required to resolve a FileNet ObjectStore.");
+        }
+        String key = objectStoreName.trim();
+        return objectStoreCache.computeIfAbsent(key, name -> {
+            LOGGER.debug("Fetching ObjectStore instance for {}", name);
+            return Factory.ObjectStore.fetchInstance(domain, name, null);
+        });
+    }
+
+    public Domain getDomain() {
+        return domain;
+    }
+
+    public AppConfig getConfig() {
+        return config;
+    }
+
+    public void ensureSubjectOnCurrentThread() {
+        if (!Boolean.TRUE.equals(subjectPushed.get())) {
+            UserContext.get().pushSubject(subject);
+            subjectPushed.set(Boolean.TRUE);
+        }
+    }
+
+    public void clearSubjectOnCurrentThread() {
+        if (Boolean.TRUE.equals(subjectPushed.get())) {
+            UserContext.get().popSubject();
+            subjectPushed.set(Boolean.FALSE);
+        }
+    }
+
+    public void testConnection() {
+        ensureSubjectOnCurrentThread();
+        ObjectStore home = getReportRequestObjectStore();
+        LOGGER.info("FileNet connection test succeeded. domain={} reportRequestHomeObjectStore={}",
+                domain.get_Name(), home.get_Name());
+    }
+
+    @Override
+    public void close() {
+        if (Boolean.TRUE.equals(subjectPushed.get())) {
+            UserContext.get().popSubject();
+            subjectPushed.set(Boolean.FALSE);
+        }
+        objectStoreCache.clear();
+        LOGGER.info("FileNet connection closed.");
+    }
+}
+@@CNB_PACKAGE_CONTENT_END@@
+@@CNB_PACKAGE_FILE_END@@
+
+@@CNB_PACKAGE_FILE_BEGIN@@
+FILE_NAME=AppConfig.java
+RELATIVE_PATH=com/cnb/reports/config/AppConfig.java
+FILE_TYPE=JAVA
+LAST_MODIFIED=1787842119755
+FILE_SIZE=13980
+@@CNB_PACKAGE_CONTENT_BEGIN@@
+package com.cnb.reports.config;
+
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Properties;
+import java.util.Set;
+import java.util.stream.Collectors;
+
+/**
+ * Loads external {@code ReportsExecutionTool.properties} for the Report Execution Tool.
+ */
+public final class AppConfig {
+
+    public static final String DEFAULT_CONFIG_FILE =
+            "D:/Rameshwar/ReportsExecutionTool/config/ReportsExecutionTool.properties";
+
+    private final Properties properties;
+
+    private final String fileNetUri;
+    private final String fileNetUsername;
+    private final String fileNetPassword;
+    /**
+     * Home ObjectStore symbolic name where ReportRequest class/instances live
+     * ({@code filenet.reportRequestObjectStoreName}, with legacy fallback {@code filenet.objectStoreName}).
+     */
+    private final String reportRequestObjectStoreName;
+    private final String fileNetStanza;
+
+    private final String reportClass;
+    private final String statusProperty;
+    private final String pendingStatus;
+    private final String inProgressStatus;
+    private final String completedStatus;
+    private final String failedStatus;
+    private final String rerunStatus;
+    private final String holdStatus;
+    private final String cancelledStatus;
+
+    private final String targetClassProperty;
+    private final String repositoryNameProperty;
+    private final String criteriaProperty;
+    private final String resultColumnsProperty;
+    private final String sqlQueryProperty;
+    private final String startDateProperty;
+    private final String endDateProperty;
+    private final String lastExecutionDateProperty;
+    private final String sendEmailToProperty;
+    private final String sendEmailCcProperty;
+
+    private final boolean mailEnabled;
+    private final String mailSmtpHost;
+    private final int mailSmtpPort;
+    private final boolean mailSmtpAuth;
+    private final boolean mailSmtpStartTlsEnable;
+    private final String mailSmtpUsername;
+    private final String mailSmtpPassword;
+    private final String mailFromAddress;
+    private final String mailFromName;
+    private final boolean mailAttachExcel;
+    private final Path acknowledgementTemplatePath;
+    private final Path completionTemplatePath;
+    private final Path failureTemplatePath;
+    private final String icnBaseUrl;
+    private final String icnDesktopId;
+
+    private final int pollBatchSize;
+    private final int workerThreadCount;
+    private final Set<String> processableStatuses;
+    private final Path outputTempFolder;
+    private final Path outputCompletedFolder;
+    private final int excelMaxRowsPerSheet;
+
+    private final boolean pollingLoopEnabled;
+    private final int pollingIntervalMinutes;
+
+    public AppConfig(String configFilePath) throws IOException {
+        properties = new Properties();
+        try (InputStream input = new FileInputStream(configFilePath)) {
+            properties.load(input);
+        }
+
+        fileNetUri = required("filenet.uri");
+        fileNetUsername = required("filenet.username");
+        fileNetPassword = required("filenet.password");
+        reportRequestObjectStoreName = resolveReportRequestObjectStoreName();
+        fileNetStanza = getString("filenet.stanza", "FileNetP8WSI");
+
+        reportClass = getString("report.class", "ReportRequest");
+        statusProperty = getString("status.property", "Status");
+        pendingStatus = getString("pending.status", "Pending");
+        inProgressStatus = getString("inprogress.status", "InProgress");
+        completedStatus = getString("completed.status", "Completed");
+        failedStatus = getString("failed.status", "Failed");
+        rerunStatus = getString("rerun.status", "Rerun");
+        holdStatus = getString("hold.status", "Hold");
+        cancelledStatus = getString("cancelled.status", "Cancelled");
+
+        targetClassProperty = getString("target.class.property", "TargetDocumentClass");
+        repositoryNameProperty = getString("repository.name.property", "RepositoryName");
+        criteriaProperty = getString("criteria.property", "SearchCriteriaParams");
+        resultColumnsProperty = getString("result.columns.property", "ResultSetColumns");
+        sqlQueryProperty = getString("sql.query.property", "SQLQuery");
+        startDateProperty = getString("start.date.property", "ReportExecutionStartDate");
+        endDateProperty = getString("end.date.property", "ReportExecutionEndDate");
+        lastExecutionDateProperty = getString("last.execution.date.property", "LastExecutionDate");
+        sendEmailToProperty = getString("send.email.to.property", "SendEmailTo");
+        sendEmailCcProperty = getString("send.email.cc.property", "SendEmailCC");
+
+        mailEnabled = getBoolean("mail.enabled", false);
+        mailSmtpHost = getString("mail.smtp.host", "");
+        mailSmtpPort = getInt("mail.smtp.port", 587);
+        mailSmtpAuth = getBoolean("mail.smtp.auth", true);
+        mailSmtpStartTlsEnable = getBoolean("mail.smtp.starttls.enable", true);
+        mailSmtpUsername = getString("mail.smtp.username", "");
+        mailSmtpPassword = getString("mail.smtp.password", "");
+        mailFromAddress = getString("mail.from.address", "");
+        mailFromName = getString("mail.from.name", "Reports Notification");
+        mailAttachExcel = getBoolean("mail.attach.excel", false);
+        Path configDir = Paths.get(getString("app.config.path", "D:/Rameshwar/ReportsExecutionTool/config/"));
+        acknowledgementTemplatePath = configDir.resolve("email-templates/acknowledgement.html");
+        completionTemplatePath = configDir.resolve("email-templates/completion.html");
+        failureTemplatePath = configDir.resolve("email-templates/failure.html");
+        icnBaseUrl = getString("icn.base.url", "");
+        icnDesktopId = getString("icn.desktop.id", "");
+
+        pollBatchSize = getInt("poll.batch.size", 10);
+        workerThreadCount = getInt("worker.thread.count", 5);
+        processableStatuses = parseStatusSet(getString("processable.statuses", pendingStatus));
+        outputTempFolder = Paths.get(getString("output.inprocess.folder",
+                getString("output.temp.folder", "D:/Rameshwar/ReportsExecutionTool/reports/Inprocess")));
+        outputCompletedFolder = Paths.get(getString("output.completed.folder",
+                "D:/Rameshwar/ReportsExecutionTool/reports/Completed"));
+        excelMaxRowsPerSheet = getInt("excel.max.rows.per.sheet", 100_000);
+
+        pollingLoopEnabled = getBoolean("polling.loop.enabled", false);
+        pollingIntervalMinutes = getInt("polling.interval.minutes", 5);
+
+        Files.createDirectories(outputTempFolder);
+        Files.createDirectories(outputCompletedFolder);
+    }
+
+    public static AppConfig loadFromSystemProperty() throws IOException {
+        String configFile = System.getProperty("config.file");
+        if (configFile == null || configFile.isBlank()) {
+            configFile = DEFAULT_CONFIG_FILE;
+        }
+        return new AppConfig(configFile);
+    }
+
+    private String required(String key) {
+        String value = properties.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            throw new IllegalArgumentException("Required configuration property missing: " + key);
+        }
+        return value.trim();
+    }
+
+    private String getString(String key, String defaultValue) {
+        String value = properties.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        return value.trim();
+    }
+
+    private int getInt(String key, int defaultValue) {
+        String value = properties.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        return Integer.parseInt(value.trim());
+    }
+
+    private boolean getBoolean(String key, boolean defaultValue) {
+        String value = properties.getProperty(key);
+        if (value == null || value.trim().isEmpty()) {
+            return defaultValue;
+        }
+        return Boolean.parseBoolean(value.trim());
+    }
+
+    /**
+     * Home ObjectStore for ReportRequest documents. Prefer
+     * {@code filenet.reportRequestObjectStoreName}; accept legacy {@code filenet.objectStoreName}.
+     */
+    private String resolveReportRequestObjectStoreName() {
+        String home = getString("filenet.reportRequestObjectStoreName", "");
+        if (home == null || home.isBlank()) {
+            home = getString("filenet.objectStoreName", "");
+        }
+        if (home == null || home.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Required configuration property missing: filenet.reportRequestObjectStoreName "
+                            + "(legacy filenet.objectStoreName is also accepted).");
+        }
+        return home.trim();
+    }
+
+    private Set<String> parseStatusSet(String csv) {
+        if (csv == null || csv.isBlank()) {
+            return Collections.singleton(pendingStatus);
+        }
+        return Arrays.stream(csv.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    public String getFileNetUri() {
+        return fileNetUri;
+    }
+
+    public String getFileNetUsername() {
+        return fileNetUsername;
+    }
+
+    public String getFileNetPassword() {
+        return fileNetPassword;
+    }
+
+    /**
+     * Home ObjectStore symbolic name where ReportRequest artifacts/instances are stored.
+     */
+    public String getReportRequestObjectStoreName() {
+        return reportRequestObjectStoreName;
+    }
+
+    /**
+     * @deprecated Use {@link #getReportRequestObjectStoreName()}.
+     */
+    @Deprecated
+    public String getFileNetObjectStoreName() {
+        return reportRequestObjectStoreName;
+    }
+
+    public String getFileNetStanza() {
+        return fileNetStanza;
+    }
+
+    public String getReportClass() {
+        return reportClass;
+    }
+
+    public String getStatusProperty() {
+        return statusProperty;
+    }
+
+    public String getPendingStatus() {
+        return pendingStatus;
+    }
+
+    public String getInProgressStatus() {
+        return inProgressStatus;
+    }
+
+    public String getCompletedStatus() {
+        return completedStatus;
+    }
+
+    public String getFailedStatus() {
+        return failedStatus;
+    }
+
+    public String getRerunStatus() {
+        return rerunStatus;
+    }
+
+    public String getHoldStatus() {
+        return holdStatus;
+    }
+
+    public String getCancelledStatus() {
+        return cancelledStatus;
+    }
+
+    public String getTargetClassProperty() {
+        return targetClassProperty;
+    }
+
+    public String getRepositoryNameProperty() {
+        return repositoryNameProperty;
+    }
+
+    public String getCriteriaProperty() {
+        return criteriaProperty;
+    }
+
+    public String getResultColumnsProperty() {
+        return resultColumnsProperty;
+    }
+
+    public String getSqlQueryProperty() {
+        return sqlQueryProperty;
+    }
+
+    public String getStartDateProperty() {
+        return startDateProperty;
+    }
+
+    public String getEndDateProperty() {
+        return endDateProperty;
+    }
+
+    public String getLastExecutionDateProperty() {
+        return lastExecutionDateProperty;
+    }
+
+    public String getSendEmailToProperty() {
+        return sendEmailToProperty;
+    }
+
+    public String getSendEmailCcProperty() {
+        return sendEmailCcProperty;
+    }
+
+    public boolean isMailEnabled() {
+        return mailEnabled;
+    }
+
+    public String getMailSmtpHost() {
+        return mailSmtpHost;
+    }
+
+    public int getMailSmtpPort() {
+        return mailSmtpPort;
+    }
+
+    public boolean isMailSmtpAuth() {
+        return mailSmtpAuth;
+    }
+
+    public boolean isMailSmtpStartTlsEnable() {
+        return mailSmtpStartTlsEnable;
+    }
+
+    public String getMailSmtpUsername() {
+        return mailSmtpUsername;
+    }
+
+    public String getMailSmtpPassword() {
+        return mailSmtpPassword;
+    }
+
+    public String getMailFromAddress() {
+        return mailFromAddress;
+    }
+
+    public String getMailFromName() {
+        return mailFromName;
+    }
+
+    public boolean isMailAttachExcel() {
+        return mailAttachExcel;
+    }
+
+    public Path getAcknowledgementTemplatePath() {
+        return acknowledgementTemplatePath;
+    }
+
+    public Path getCompletionTemplatePath() {
+        return completionTemplatePath;
+    }
+
+    public Path getFailureTemplatePath() {
+        return failureTemplatePath;
+    }
+
+    public String getIcnBaseUrl() {
+        return icnBaseUrl;
+    }
+
+    public String getIcnDesktopId() {
+        return icnDesktopId;
+    }
+
+    public int getPollBatchSize() {
+        return pollBatchSize;
+    }
+
+    public int getWorkerThreadCount() {
+        return workerThreadCount;
+    }
+
+    public Set<String> getProcessableStatuses() {
+        return processableStatuses;
+    }
+
+    public Path getOutputTempFolder() {
+        return outputTempFolder;
+    }
+
+    public Path getOutputCompletedFolder() {
+        return outputCompletedFolder;
+    }
+
+    public int getExcelMaxRowsPerSheet() {
+        return excelMaxRowsPerSheet;
+    }
+
+    public boolean isPollingLoopEnabled() {
+        return pollingLoopEnabled;
+    }
+
+    public int getPollingIntervalMinutes() {
+        return pollingIntervalMinutes;
+    }
+}
+@@CNB_PACKAGE_CONTENT_END@@
+@@CNB_PACKAGE_FILE_END@@
+
+@@CNB_PACKAGE_FILE_BEGIN@@
+FILE_NAME=ReportRequestPayloadReader.java
+RELATIVE_PATH=com/cnb/reports/ReportRequestPayloadReader.java
+FILE_TYPE=JAVA
+LAST_MODIFIED=1787675483906
+FILE_SIZE=7363
+@@CNB_PACKAGE_CONTENT_BEGIN@@
+package com.cnb.reports;
+
+import com.cnb.reports.config.AppConfig;
+import com.cnb.reports.model.ReportRequestSummary;
+import com.cnb.reports.util.P8PropertyReader;
+import com.filenet.api.collection.ContentElementList;
+import com.filenet.api.collection.StringList;
+import com.filenet.api.constants.PropertyNames;
+import com.filenet.api.core.ContentTransfer;
+import com.filenet.api.core.Document;
+import com.filenet.api.core.Factory;
+import com.filenet.api.core.ObjectStore;
+import com.filenet.api.property.Properties;
+import com.filenet.api.property.PropertyFilter;
+import com.filenet.api.util.Id;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * Reads ReportRequest metadata and attached JSON payload from FileNet.
+ */
+public final class ReportRequestPayloadReader {
+
+    private static final Logger LOGGER = LogManager.getLogger(ReportRequestPayloadReader.class);
+
+    private final AppConfig config;
+    private final ObjectStore objectStore;
+
+    public ReportRequestPayloadReader(AppConfig config, ObjectStore objectStore) {
+        this.config = config;
+        this.objectStore = objectStore;
+    }
+
+    public ReportRequestSummary readSummary(String documentId) throws Exception {
+        Document document = fetchDocument(documentId);
+        return toSummary(document);
+    }
+
+    public String readJsonPayload(String documentId) throws Exception {
+        Document document = fetchDocument(documentId);
+        return readJsonContent(document);
+    }
+
+    private ReportRequestSummary toSummary(Document document) {
+        Properties props = document.getProperties();
+        String objectStoreName = null;
+        try {
+            objectStoreName = objectStore != null ? objectStore.get_Name() : null;
+        } catch (Exception ignored) {
+            // keep null; caller may still have RepositoryName
+        }
+        return new ReportRequestSummary(
+                document.get_Id().toString(),
+                P8PropertyReader.asString(props, "DocumentTitle"),
+                P8PropertyReader.asString(props, config.getStatusProperty()),
+                P8PropertyReader.asString(props, config.getTargetClassProperty()),
+                P8PropertyReader.asString(props, config.getRepositoryNameProperty()),
+                "",
+                objectStoreName,
+                readStringList(props, config.getCriteriaProperty()),
+                readStringList(props, config.getResultColumnsProperty()),
+                P8PropertyReader.asString(props, config.getSqlQueryProperty()),
+                readStringList(props, config.getSendEmailToProperty()),
+                readStringList(props, config.getSendEmailCcProperty()),
+                P8PropertyReader.formatDateTime(P8PropertyReader.asDate(props, config.getStartDateProperty())),
+                P8PropertyReader.formatDateTime(P8PropertyReader.asDate(props, config.getEndDateProperty())));
+    }
+
+    private Document fetchDocument(String documentId) {
+        PropertyFilter pf = new PropertyFilter();
+        pf.addIncludeProperty(0, null, null, PropertyNames.ID, null);
+        pf.addIncludeProperty(0, null, null, "DocumentTitle", null);
+        pf.addIncludeProperty(0, null, null, config.getStatusProperty(), null);
+        pf.addIncludeProperty(0, null, null, config.getTargetClassProperty(), null);
+        pf.addIncludeProperty(0, null, null, config.getRepositoryNameProperty(), null);
+        pf.addIncludeProperty(0, null, null, config.getCriteriaProperty(), null);
+        pf.addIncludeProperty(0, null, null, config.getResultColumnsProperty(), null);
+        pf.addIncludeProperty(0, null, null, config.getSqlQueryProperty(), null);
+        pf.addIncludeProperty(0, null, null, config.getSendEmailToProperty(), null);
+        pf.addIncludeProperty(0, null, null, config.getSendEmailCcProperty(), null);
+        pf.addIncludeProperty(0, null, null, config.getStartDateProperty(), null);
+        pf.addIncludeProperty(0, null, null, config.getEndDateProperty(), null);
+        pf.addIncludeProperty(0, null, null, PropertyNames.CONTENT_ELEMENTS, null);
+        return Factory.Document.fetchInstance(objectStore, new Id(documentId), pf);
+    }
+
+    private List<String> readStringList(Properties props, String propertyName) {
+        List<String> values = new ArrayList<>();
+        if (!props.isPropertyPresent(propertyName)) {
+            return values;
+        }
+        try {
+            StringList list = props.getStringListValue(propertyName);
+            if (list != null) {
+                for (Object item : list) {
+                    if (item != null) {
+                        String text = String.valueOf(item).trim();
+                        if (!text.isEmpty()) {
+                            values.add(text);
+                        }
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            String single = P8PropertyReader.asString(props, propertyName);
+            if (!single.isEmpty()) {
+                values.add(single);
+            }
+        }
+        return values;
+    }
+
+    private String readJsonContent(Document document) throws Exception {
+        ContentElementList elements = document.get_ContentElements();
+        if (elements == null || elements.isEmpty()) {
+            throw new IllegalStateException("ReportRequest document has no content elements.");
+        }
+
+        for (Object element : elements) {
+            if (!(element instanceof ContentTransfer)) {
+                continue;
+            }
+            ContentTransfer transfer = (ContentTransfer) element;
+            String retrievalName = transfer.get_RetrievalName();
+            String contentType = transfer.get_ContentType();
+            if (isJsonContent(retrievalName, contentType)) {
+                return readStream(transfer);
+            }
+        }
+
+        Object first = elements.get(0);
+        if (!(first instanceof ContentTransfer)) {
+            throw new IllegalStateException("Unexpected content element type on ReportRequest document.");
+        }
+        return readStream((ContentTransfer) first);
+    }
+
+    private boolean isJsonContent(String retrievalName, String contentType) {
+        if (contentType != null && contentType.toLowerCase().contains("json")) {
+            return true;
+        }
+        return retrievalName != null && retrievalName.toLowerCase().endsWith(".json");
+    }
+
+    private String readStream(ContentTransfer transfer) throws Exception {
+        try (InputStream in = transfer.accessContentStream();
+                ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = in.read(buffer)) != -1) {
+                out.write(buffer, 0, read);
+            }
+            String text = out.toString(StandardCharsets.UTF_8);
+            LOGGER.debug("Read JSON payload ({} bytes) from content element {}", text.length(),
+                    transfer.get_RetrievalName());
+            return text;
+        }
+    }
+}
+@@CNB_PACKAGE_CONTENT_END@@
+@@CNB_PACKAGE_FILE_END@@
+
+@@CNB_PACKAGE_FILE_BEGIN@@
+FILE_NAME=ReportRequestSummary.java
+RELATIVE_PATH=com/cnb/reports/model/ReportRequestSummary.java
+FILE_TYPE=JAVA
+LAST_MODIFIED=1787675391639
+FILE_SIZE=4056
+@@CNB_PACKAGE_CONTENT_BEGIN@@
+package com.cnb.reports.model;
+
+import java.util.Collections;
+import java.util.List;
+
+public final class ReportRequestSummary {
+
+    private final String documentId;
+    private final String documentTitle;
+    private final String status;
+    private final String targetDocumentClass;
+    private final String repositoryName;
+    private final String repositoryId;
+    /** FileNet ObjectStore symbolic name where this ReportRequest document lives. */
+    private final String objectStoreName;
+    private final List<String> searchCriteriaParams;
+    private final List<String> resultSetColumns;
+    private final String sqlQuery;
+    private final List<String> sendEmailTo;
+    private final List<String> sendEmailCC;
+    private final String executionStartDate;
+    private final String executionEndDate;
+
+    public ReportRequestSummary(String documentId, String documentTitle, String status,
+            String targetDocumentClass, String repositoryName, String repositoryId,
+            List<String> searchCriteriaParams, List<String> resultSetColumns, String sqlQuery,
+            List<String> sendEmailTo, List<String> sendEmailCC,
+            String executionStartDate, String executionEndDate) {
+        this(documentId, documentTitle, status, targetDocumentClass, repositoryName, repositoryId, null,
+                searchCriteriaParams, resultSetColumns, sqlQuery, sendEmailTo, sendEmailCC, executionStartDate,
+                executionEndDate);
+    }
+
+    public ReportRequestSummary(String documentId, String documentTitle, String status,
+            String targetDocumentClass, String repositoryName, String repositoryId, String objectStoreName,
+            List<String> searchCriteriaParams, List<String> resultSetColumns, String sqlQuery,
+            List<String> sendEmailTo, List<String> sendEmailCC,
+            String executionStartDate, String executionEndDate) {
+        this.documentId = documentId;
+        this.documentTitle = documentTitle;
+        this.status = status;
+        this.targetDocumentClass = targetDocumentClass;
+        this.repositoryName = repositoryName;
+        this.repositoryId = repositoryId;
+        this.objectStoreName = objectStoreName;
+        this.searchCriteriaParams = searchCriteriaParams != null ? List.copyOf(searchCriteriaParams) : List.of();
+        this.resultSetColumns = resultSetColumns != null ? List.copyOf(resultSetColumns) : List.of();
+        this.sqlQuery = sqlQuery;
+        this.sendEmailTo = sendEmailTo != null ? List.copyOf(sendEmailTo) : List.of();
+        this.sendEmailCC = sendEmailCC != null ? List.copyOf(sendEmailCC) : List.of();
+        this.executionStartDate = executionStartDate;
+        this.executionEndDate = executionEndDate;
+    }
+
+    public String getDocumentId() {
+        return documentId;
+    }
+
+    public String getDocumentTitle() {
+        return documentTitle;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public String getTargetDocumentClass() {
+        return targetDocumentClass;
+    }
+
+    public String getRepositoryName() {
+        return repositoryName;
+    }
+
+    public String getRepositoryId() {
+        return repositoryId;
+    }
+
+    public String getObjectStoreName() {
+        return objectStoreName;
+    }
+
+    public List<String> getSearchCriteriaParams() {
+        return Collections.unmodifiableList(searchCriteriaParams);
+    }
+
+    public List<String> getResultSetColumns() {
+        return Collections.unmodifiableList(resultSetColumns);
+    }
+
+    public String getSqlQuery() {
+        return sqlQuery;
+    }
+
+    public List<String> getSendEmailTo() {
+        return Collections.unmodifiableList(sendEmailTo);
+    }
+
+    public List<String> getSendEmailCC() {
+        return Collections.unmodifiableList(sendEmailCC);
+    }
+
+    public String getExecutionStartDate() {
+        return executionStartDate;
+    }
+
+    public String getExecutionEndDate() {
+        return executionEndDate;
+    }
+}
+@@CNB_PACKAGE_CONTENT_END@@
+@@CNB_PACKAGE_FILE_END@@
+
+@@CNB_PACKAGE_END@@
