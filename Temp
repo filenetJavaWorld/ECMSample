@@ -1,1 +1,45 @@
-temp
+SELECT
+    DV.object_id AS Document_ID,
+    DV.[ACCOUNT_NUMBER_DB_COLUMN] AS Account_Number
+FROM [OS2].[dbo].[DocVersion] DV
+INNER JOIN [OS2].[dbo].[ClassDefinition] CD
+    ON CD.object_id = DV.object_class_id
+WHERE CD.symbolic_name = 'CNBAccounts'
+
+    -- Retrieve only the current document version
+    AND DV.is_current = 1
+
+    -- No CIS Number (Multi) value exists
+    AND NOT EXISTS
+    (
+        SELECT 1
+        FROM [OS2].[dbo].[ListOfString] LOS
+        INNER JOIN [OS2].[dbo].[PropertyDefinition] PD
+            ON PD.primary_id = LOS.parent_prop_id
+        WHERE LOS.parent_id = DV.object_id
+          AND PD.dbg_class_name = 'CNBAccounts'
+          AND PD.dbg_display_name = 'CIS Number (Multi)'
+    )
+ORDER BY DV.object_id;
+
+
+SELECT
+    DV.object_id AS Document_ID,
+    DV.[ACCOUNT_NUMBER_DB_COLUMN] AS Account_Number
+FROM [OS2].[dbo].[DocVersion] DV
+INNER JOIN [OS2].[dbo].[ClassDefinition] CD
+    ON CD.object_id = DV.object_class_id
+WHERE CD.symbolic_name = 'CNBAccounts'
+  AND DV.is_current = 1
+  AND NOT EXISTS
+  (
+      SELECT 1
+      FROM [OS2].[dbo].[ListOfString] LOS
+      INNER JOIN [OS2].[dbo].[PropertyDefinition] PD
+          ON PD.primary_id = LOS.parent_prop_id
+      WHERE LOS.parent_id = DV.object_id
+        AND PD.dbg_class_name = 'CNBAccounts'
+        AND PD.dbg_display_name = 'CIS Number (Multi)'
+        AND NULLIF(LTRIM(RTRIM(LOS.element_value)), '') IS NOT NULL
+  )
+ORDER BY DV.object_id;
