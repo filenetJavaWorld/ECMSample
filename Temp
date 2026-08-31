@@ -1,1 +1,18 @@
-temp
+/**
+		 * One-shot wrap so the next template.search() call uses order_by=Rank.
+		 * Removed after first use so later folder searches on the same template are unaffected.
+		 */
+		_installOneShotDocumentRankSearchHook: function(template) {
+			if (!template || !template.search) {
+				return;
+			}
+			var searchHandle = aspect.around(template, "search", function(originalSearch) {
+				return function(callback, sortProperty, descending, teamspace, errorCallback, useCache) {
+					if (searchHandle) {
+						searchHandle.remove();
+						searchHandle = null;
+					}
+					return originalSearch.call(this, callback, "Rank", true, teamspace, errorCallback, useCache);
+				};
+			});
+		},
