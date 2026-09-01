@@ -1,1 +1,325 @@
-temp
+ADvaned search:
+
+
+1111111
+
+/**
+		 * When openContentClass fails or attrs are not cached, map criteria by convention:
+		 * DocumentTitle → FolderName; other properties keep the same id/operator/values.
+		 */
+		_mapCriterionToFolderFallback: function(def, criterion) {
+			if (!criterion || !criterion.id) {
+				return null;
+			}
+			var docNameProp = this._getNamePropertyForMode(def, "document");
+			var folderNameProp = this._getNamePropertyForMode(def, "folder");
+			var mappedCriterion = criterion.clone ? criterion.clone() : lang.clone(criterion);
+			if (this._isDocumentNameProperty(criterion.id, docNameProp)) {
+				mappedCriterion.id = folderNameProp;
+				mappedCriterion.name = "Folder Name";
+				return mappedCriterion;
+			}
+			return mappedCriterion;
+		},
+
+		/**
+		 * Folder search uses property operators (LIKE), not CBR. Remove CBR syntax chars
+		 * (", ?, *) so values like "Sample test" become Sample test.
+		 * Document / CBR search must not call this.
+		 */
+		_sanitizeFolderSearchToken: function(token) {
+			if (token == null) {
+				return "";
+			}
+			return String(token).replace(/["?*]/g, "").trim();
+		},
+
+		/**
+		 * Sanitize FolderName criterion values on a folder template (folder call only).
+		 */
+		_sanitizeFolderNameCriteriaOnTemplate: function(def, folderTemplate) {
+			if (!folderTemplate || !folderTemplate.searchCriteria) {
+				return folderTemplate;
+			}
+			var folderNameProp = this._getNamePropertyForMode(def, "folder") || "FolderName";
+			var i;
+			for (i = 0; i < folderTemplate.searchCriteria.length; i++) {
+				var criterion = folderTemplate.searchCriteria[i];
+				if (!this._isFolderNameCriterion(criterion, folderNameProp)) {
+					continue;
+				}
+				if (!criterion.values || !criterion.values.length) {
+					continue;
+				}
+				var before = criterion.values.slice ? criterion.values.slice() : criterion.values;
+				var sanitizedValues = [];
+				var v;
+				for (v = 0; v < criterion.values.length; v++) {
+					var raw = criterion.values[v];
+					if (raw == null || raw === "") {
+						sanitizedValues.push(raw === undefined ? "" : raw);
+					} else {
+						sanitizedValues.push(this._sanitizeFolderSearchToken(raw));
+					}
+				}
+				if (criterion.setValues) {
+					criterion.setValues(sanitizedValues);
+				} else {
+					criterion.values = sanitizedValues;
+				}
+				criterion.defaultValue = sanitizedValues;
+				console.log(LOG, "Sanitized FolderName values for folder search (removed CBR chars \" ? *)", {
+					before: before,
+					after: sanitizedValues
+				});
+			}
+			return folderTemplate;
+		},
+
+
+
+22222222222222
+
+/**
+		 * Both folder phase only: ensure FolderName LIKE has a real value (Basic-style),
+		 * or drop an empty FolderName so it is not submitted as values [].
+		 */
+		_ensureFolderNameCriterionForBothFolderPhase: function(def, folderTemplate, documentTemplate) {
+			if (!folderTemplate) {
+				return folderTemplate;
+			}
+			var folderNameProp = this._getNamePropertyForMode(def, "folder") || "FolderName";
+			var token = this._sanitizeFolderSearchToken(
+				this._extractFolderNameTokenFromDocumentTemplate(def, documentTemplate));
+			var criteria = folderTemplate.searchCriteria ? folderTemplate.searchCriteria.slice() : [];
+			var folderNameCriterion = null;
+			var i;
+			for (i = 0; i < criteria.length; i++) {
+				if (this._isFolderNameCriterion(criteria[i], folderNameProp)) {
+					folderNameCriterion = criteria[i];
+					break;
+				}
+			}
+			var existingValue = this._sanitizeFolderSearchToken(
+				this._getCriterionFirstNonEmptyValue(folderNameCriterion));
+			if (existingValue) {
+				var existingValues = [ existingValue, "" ];
+				if (folderNameCriterion.setValues) {
+					folderNameCriterion.setValues(existingValues);
+				} else {
+					folderNameCriterion.values = existingValues;
+				}
+				folderNameCriterion.defaultValue = existingValues;
+				folderNameCriterion.selectedOperator = "LIKE";
+				folderNameCriterion.defaultOperator = "LIKE";
+				return this._sanitizeFolderNameCriteriaOnTemplate(def, folderTemplate);
+			}
+			if (token) {
+				var values = [ token, "" ];
+				if (folderNameCriterion) {
+					folderNameCriterion.id = folderNameProp;
+					folderNameCriterion.name = "Folder Name";
+					// Force LIKE (Basic parity) — OOTB empty FolderName often defaults to STARTSWITH.
+					folderNameCriterion.selectedOperator = "LIKE";
+					folderNameCriterion.defaultOperator = "LIKE";
+					folderNameCriterion.dataType = folderNameCriterion.dataType || "xs:string";
+					folderNameCriterion.cardinality = folderNameCriterion.cardinality || "SINGLE";
+					folderNameCriterion.defaultValue = values;
+					if (folderNameCriterion.setValues) {
+						folderNameCriterion.setValues(values);
+					} else {
+						folderNameCriterion.values = values;
+					}
+				} else {
+					folderNameCriterion = new SearchCriterion({
+						id: folderNameProp,
+						name: "Folder Name",
+						selectedOperator: "LIKE",
+						defaultOperator: "LIKE",
+						dataType: "xs:string",
+						cardinality: "SINGLE",
+						valueRequired: false,
+						readOnly: false,
+						hidden: false
+					});
+					if (folderNameCriterion.setValues) {
+						folderNameCriterion.setValues(values);
+					} else {
+						folderNameCriterion.values = values;
+					}
+					folderNameCriterion.defaultValue = values;
+					criteria.push(folderNameCriterion);
+					folderTemplate.searchCriteria = criteria;
+				}
+				console.log(LOG, "Both folder phase — FolderName value applied from document name/CBR text", {
+					folderNameProp: folderNameProp,
+					token: token
+				});
+				return this._sanitizeFolderNameCriteriaOnTemplate(def, folderTemplate);
+			}
+			// No token: remove empty FolderName so it does not go out as values [].
+			if (folderNameCriterion) {
+				folderTemplate.searchCriteria = array.filter(criteria, lang.hitch(this, function(c) {
+					return !this._isFolderNameCriterion(c, folderNameProp);
+				}));
+				console.log(LOG, "Both folder phase — removed empty FolderName criterion (no document name/CBR token)");
+			}
+			return this._sanitizeFolderNameCriteriaOnTemplate(def, folderTemplate);
+		},
+
+		_prepareFolderTemplateFromDocumentTemplate: 
+
+
+
+
+
+
+
+
+
+333333333333
+
+/**
+		 * Folders-only: match Basic Search — objectType=folder, FolderName LIKE from CBR text,
+		 * folder textSearchCriteria cleared. Mutates the prepared template before template.search().
+		 */
+		_alignFoldersOnlyTemplateLikeBasic: function(def, template) {
+			if (!template) {
+				return template;
+			}
+			// Capture CBR / FolderName token before folder fields clear textSearchCriteria.
+			var token = this._sanitizeFolderSearchToken(
+				this._extractFolderNameTokenFromDocumentTemplate(def, template));
+			if (!token) {
+				var folderNameProp = this._getNamePropertyForMode(def, "folder") || "FolderName";
+				var criteria = template.searchCriteria || [];
+				var i;
+				for (i = 0; i < criteria.length; i++) {
+					if (this._isFolderNameCriterion(criteria[i], folderNameProp)) {
+						token = this._sanitizeFolderSearchToken(
+							this._getCriterionFirstNonEmptyValue(criteria[i]));
+						if (token) {
+							break;
+						}
+					}
+				}
+			}
+			template = this._applyOotbFolderSearchTemplateFields(template, def);
+			template = this._mergeExtraResultColumnOnSearchTemplate(template, def && def.repository);
+			// Rebuild FolderName from captured token (Basic parity).
+			if (token) {
+				var snapshot = {
+					searchCriteria: [],
+					textSearchCriteria: [ { text: token } ]
+				};
+				template = this._ensureFolderNameCriterionForBothFolderPhase(def, template, snapshot);
+			} else {
+				template = this._ensureFolderNameCriterionForBothFolderPhase(def, template, template);
+			}
+			console.log(LOG, "Folders-only template aligned like Basic", {
+				objectType: template.objectType,
+				className: template.className,
+				token: token,
+				criteriaCount: template.searchCriteria ? template.searchCriteria.length : 0
+			});
+			return this._sanitizeFolderNameCriteriaOnTemplate(def, template);
+		},
+		
+		
+		
+		
+		Basic Search:
+		
+		1111111111111111
+		
+		_normalizeOotbFolderNameCriterion: function(criterion, token, searchTemplate) {
+			if (!criterion) {
+				return criterion;
+			}
+			// Folder search is property LIKE, not CBR — strip CBR wildcards/quotes from the token.
+			var trimmed = this._sanitizeFolderSearchToken(token);
+			var values = [ trimmed ,""];
+			criterion.id = "FolderName";
+			criterion.name = "Folder Name";
+			criterion.selectedOperator = "LIKE";
+			criterion.defaultOperator = "LIKE";
+			criterion.values = values;
+			criterion.dataType = "xs:string";
+			criterion.cardinality = "SINGLE";
+			criterion.defaultValue = values;
+			criterion.objectType = "folder";
+			criterion.template_name = this._folderTemplateName || (searchTemplate && searchTemplate.className) || "BaseFolder";
+			criterion.template_label = this._folderTemplateLabel || (searchTemplate && searchTemplate.classDisplayName) || "Base Folder";
+			criterion.hasSelectedOperators = false;
+			criterion.itemId = criterion.itemId || "";
+			if (criterion.setValues) {
+				criterion.setValues(values);
+			}
+			return criterion;
+		},
+
+		/**
+		 * Folder search uses property operators (LIKE), not CBR. Remove CBR syntax chars
+		 * (", ?, *) so values like "Sample test" become Sample test.
+		 * Document / CBR search must not call this.
+		 */
+		_sanitizeFolderSearchToken: function(token) {
+			if (token == null) {
+				return "";
+			}
+			return String(token).replace(/["?*]/g, "").trim();
+		},
+
+		_applyOotbFolderResultsDisplayOnDefinition: function(def) {
+			
+			
+			
+			
+			
+			2222222
+			
+			/**
+		 * Keeps exactly one search criterion (folder or document name + LIKE + token).
+		 */
+		_restrictSearchCriteriaToNameOnly: function(searchTemplate, def, mode) {
+			if (!searchTemplate || !mode) {
+				return searchTemplate;
+			}
+			var nameProp = this._getNamePropertyForSearchMode(def, mode);
+			var token = "";
+			if (mode === "folder") {
+				token = def && def._metlifeFolderSearchToken !== undefined && def._metlifeFolderSearchToken !== null ?
+					String(def._metlifeFolderSearchToken).trim() : "";
+				token = this._sanitizeFolderSearchToken(token);
+			} else {
+				//COmmented for DOcument title NOT TO SET - DONT UNCOMMENT
+				/*token = def && def._textSearchText && def._textSearchText.get ?
+					String(def._textSearchText.get("value") || "").trim() : "";*/
+				token = "";
+			}
+			
+			
+			3333333
+			
+			
+			
+			_syncFolderSearchCriteria: function(state, tokenValue, onComplete) {
+			var def = state.tab.searchDefinition;
+			if (!def) {
+				if (onComplete) {
+					onComplete();
+				}
+				return;
+			}
+			var nameProp = def._searchConfig && def._searchConfig.getNameProperty ?
+				def._searchConfig.getNameProperty("folder") : "FolderName";
+			var trimmed = this._sanitizeFolderSearchToken(tokenValue);
+			def._metlifeFolderSearchToken = trimmed;
+			var self = this;
+			var tabKey = this._getTabKey(state.tab);
+
+			console.log("[MetlifeSearch] Folder search criteria sync starting", {
+				tabKey: tabKey,
+				nameProperty: nameProp,
+				token: trimmed
+			});
