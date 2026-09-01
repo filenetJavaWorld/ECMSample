@@ -1,1 +1,708 @@
-temp
+1111111
+"ecm/model/ResultSet",
+
+222222222222
+
+_mergeAdvancedResults: function(documentResults, folderResults, state) {
+			if (!documentResults && !folderResults) {
+				return null;
+			}
+			if (!documentResults) {
+				return this._attachAdvancedRefreshHandler(folderResults, state);
+			}
+			if (!folderResults) {
+				return this._attachAdvancedRefreshHandler(documentResults, state);
+			}
+
+			// Option A: dual-stream Both paging — documents first, then folders; UI page ≤ 200.
+			return this._attachAdvancedRefreshHandler(
+				this._buildBothPagedResultSet(documentResults, folderResults, state), state);
+		},
+
+		/**
+		 * Combined Both UI page size (not 200 docs + 200 folders per page).
+		 */
+		_getCombinedUiPageSize: function(docRs, folderRs) {
+			var ps = (docRs && docRs.pageSize) || (folderRs && folderRs.pageSize) || 200;
+			return ps > 0 ? ps : 200;
+		},
+
+		_bothPagerHasMore: function(pager) {
+			if (!pager) {
+				return false;
+			}
+			if (pager.docOffset < pager.docFetched.length) {
+				return true;
+			}
+			if (pager.docContinuation) {
+				return true;
+			}
+			if (pager.folderOffset < pager.folderFetched.length) {
+				return true;
+			}
+			if (pager.folderContinuation) {
+				return true;
+			}
+			return false;
+		},
+
+		_takeNextBothPageItems: function(pager, maxCount) {
+			var pageItems = [];
+			if (!pager || !maxCount) {
+				return pageItems;
+			}
+			while (pageItems.length < maxCount && pager.docOffset < pager.docFetched.length) {
+				pageItems.push(pager.docFetched[pager.docOffset++]);
+			}
+			while (pageItems.length < maxCount && pager.folderOffset < pager.folderFetched.length) {
+				pageItems.push(pager.folderFetched[pager.folderOffset++]);
+			}
+			return pageItems;
+		},
+
+		_fetchBothStreamPage: function(pager, stream, callback, onError) {
+			var rs = stream === "document" ? pager.docRs : pager.folderRs;
+			var continuation = stream === "document" ? pager.docContinuation : pager.folderContinuation;
+			if (!rs || !continuation) {
+				if (stream === "document") {
+					pager.docContinuation = null;
+				} else {
+					pager.folderContinuation = null;
+				}
+				callback(false);
+				return;
+			}
+			rs.continuationData = continuation;
+			rs.items = stream === "document" ? pager.docFetched : pager.folderFetched;
+			var prevLen = rs.items ? rs.items.length : 0;
+			var self = this;
+			rs.retrieveNextPage(function() {
+				var items = rs.items || [];
+				if (stream === "document") {
+					pager.docFetched = items;
+					pager.docContinuation = rs.continuationData || null;
+					pager.docMaxResultsReached = !!rs.maxResultsReached;
+					self._markCombinedSearchResultTypes(items.slice(prevLen), "Document");
+				} else {
+					pager.folderFetched = items;
+					pager.folderContinuation = rs.continuationData || null;
+					pager.folderMaxResultsReached = !!rs.maxResultsReached;
+					self._markCombinedSearchResultTypes(items.slice(prevLen), "Folder");
+				}
+				if (items.length <= prevLen) {
+					if (stream === "document") {
+						pager.docContinuation = null;
+					} else {
+						pager.folderContinuation = null;
+					}
+					callback(false);
+					return;
+				}
+				callback(true);
+			}, pager.pageSize, function(err) {
+				console.error(LOG, "Both pager continueQuery failed", stream, err);
+				if (stream === "document") {
+					pager.docContinuation = null;
+				} else {
+					pager.folderContinuation = null;
+				}
+				if (onError) {
+					onError(err);
+				}
+				callback(false);
+			});
+		},
+
+		/**
+		 * Ensure buffers can supply `needed` more UI items (docs first, then folders).
+		 */
+		_fillBothPagerBuffers: function(pager, needed, callback, onError) {
+			var self = this;
+			if (!pager || needed <= 0) {
+				callback();
+				return;
+			}
+			var available = function() {
+				return (pager.docFetched.length - pager.docOffset) +
+					(pager.folderFetched.length - pager.folderOffset);
+			};
+			var step = function() {
+				if (available() >= needed) {
+					callback();
+					return;
+				}
+				var docsLeft = pager.docFetched.length - pager.docOffset;
+				if (docsLeft > 0) {
+					if (docsLeft >= needed) {
+						callback();
+						return;
+					}
+					if (pager.docContinuation) {
+						self._fetchBothStreamPage(pager, "document", function() {
+							step();
+						}, onError);
+						return;
+					}
+					var foldersLeft = pager.folderFetched.length - pager.folderOffset;
+					if (docsLeft + foldersLeft >= needed) {
+						callback();
+						return;
+					}
+					if (pager.folderContinuation) {
+						self._fetchBothStreamPage(pager, "folder", function() {
+							step();
+						}, onError);
+						return;
+					}
+					callback();
+					return;
+				}
+				if (pager.docContinuation) {
+					self._fetchBothStreamPage(pager, "document", function() {
+						step();
+					}, onError);
+					return;
+				}
+				var foldersLeft2 = pager.folderFetched.length - pager.folderOffset;
+				if (foldersLeft2 >= needed) {
+					callback();
+					return;
+				}
+				if (pager.folderContinuation) {
+					self._fetchBothStreamPage(pager, "folder", function() {
+						step();
+					}, onError);
+					return;
+				}
+				callback();
+			};
+			step();
+		},
+
+		_installBothPagedRetrieveNextPage: function(merged) {
+			var self = this;
+			merged.retrieveNextPage = function(retrievedCallback, itemsNeeded, onError) {
+				var pager = merged._metlifeBothPager;
+				if (!pager) {
+					merged.continuationData = null;
+					if (retrievedCallback) {
+						retrievedCallback(merged.items || []);
+					}
+					return null;
+				}
+				var target = itemsNeeded && itemsNeeded > 0 ?
+					itemsNeeded :
+					((merged.items ? merged.items.length : 0) + pager.pageSize);
+				var fillMore = function() {
+					if ((merged.items && merged.items.length >= target) || !self._bothPagerHasMore(pager)) {
+						merged.continuationData = self._bothPagerHasMore(pager) ? "metlifeBothPaging" : null;
+						merged.maxResultsReached = !!(pager.docMaxResultsReached || pager.folderMaxResultsReached);
+						if (merged.onNextPageRetrieved) {
+							merged.onNextPageRetrieved(merged);
+						}
+						if (retrievedCallback) {
+							retrievedCallback(merged.items || []);
+						}
+						return;
+					}
+					var stillNeeded = Math.min(pager.pageSize, target - (merged.items ? merged.items.length : 0));
+					if (stillNeeded <= 0) {
+						stillNeeded = pager.pageSize;
+					}
+					self._fillBothPagerBuffers(pager, stillNeeded, function() {
+						var pageItems = self._takeNextBothPageItems(pager, stillNeeded);
+						if (!pageItems.length) {
+							merged.continuationData = self._bothPagerHasMore(pager) ? "metlifeBothPaging" : null;
+							if (merged.onNextPageRetrieved) {
+								merged.onNextPageRetrieved(merged);
+							}
+							if (retrievedCallback) {
+								retrievedCallback(merged.items || []);
+							}
+							return;
+						}
+						merged.items = (merged.items || []).concat(pageItems);
+						fillMore();
+					}, onError);
+				};
+				fillMore();
+				return null;
+			};
+		},
+
+		/**
+		 * Builds a Both ResultSet with independent doc/folder continuations.
+		 * UI pages are ≤ pageSize combined items; documents are exhausted before folders.
+		 */
+		_buildBothPagedResultSet: function(docRs, folderRs, state) {
+			var pageSize = this._getCombinedUiPageSize(docRs, folderRs);
+			var docItems = this._markCombinedSearchResultTypes(
+				docRs.items ? docRs.items.slice() : [], "Document");
+			var folderItems = this._markCombinedSearchResultTypes(
+				folderRs.items ? folderRs.items.slice() : [], "Folder");
+
+			var pager = {
+				pageSize: pageSize,
+				docRs: docRs,
+				folderRs: folderRs,
+				docFetched: docItems,
+				folderFetched: folderItems,
+				docOffset: 0,
+				folderOffset: 0,
+				docContinuation: docRs.continuationData || null,
+				folderContinuation: folderRs.continuationData || null,
+				docMaxResultsReached: !!docRs.maxResultsReached,
+				folderMaxResultsReached: !!folderRs.maxResultsReached
+			};
+			// keep stream ResultSets aligned for continueQuery skip=items.length
+			docRs.items = pager.docFetched;
+			folderRs.items = pager.folderFetched;
+
+			var pageItems = this._takeNextBothPageItems(pager, pageSize);
+			var totalCount = null;
+			if (docRs.totalCount != null || folderRs.totalCount != null) {
+				totalCount = (docRs.totalCount || 0) + (folderRs.totalCount || 0);
+			}
+			var merged = new ResultSet({
+				id: docRs.id || folderRs.id || "metlifeBothResults",
+				name: "Search results",
+				repository: docRs.repository || folderRs.repository,
+				parentFolder: docRs.parentFolder || folderRs.parentFolder,
+				searchTemplate: docRs.searchTemplate || folderRs.searchTemplate,
+				setType: docRs.setType || folderRs.setType,
+				pageSize: pageSize,
+				structure: this._pickMergedGridStructure(docRs, folderRs),
+				magazineStructure: (docRs.magazineStructure && docRs.magazineStructure.length) ?
+					lang.clone(docRs.magazineStructure) :
+					(folderRs.magazineStructure ? lang.clone(folderRs.magazineStructure) : null),
+				items: pageItems,
+				continuationData: this._bothPagerHasMore(pager) ? "metlifeBothPaging" : null,
+				totalCount: totalCount,
+				totalCountType: docRs.totalCountType || folderRs.totalCountType,
+				maxResultsReached: !!(pager.docMaxResultsReached || pager.folderMaxResultsReached)
+			});
+			if (merged.searchTemplate && !merged.searchTemplate.name) {
+				merged.searchTemplate.name = "Search results";
+			}
+			merged._metlifeBothPager = pager;
+			merged._metlifeAdvancedCombinedSearch = true;
+			this._installBothPagedRetrieveNextPage(merged);
+			console.log(LOG, "Both paged result set built (Option A: docs then folders)", {
+				pageSize: pageSize,
+				firstPageCount: pageItems.length,
+				docBuffered: pager.docFetched.length,
+				folderBuffered: pager.folderFetched.length,
+				hasMore: !!merged.continuationData,
+				docContinuation: !!pager.docContinuation,
+				folderContinuation: !!pager.folderContinuation,
+				totalCount: totalCount
+			});
+			return merged;
+		},
+
+		_pickMergedGridStructure: function(docRs, folderRs) {
+			var docStruct = docRs && docRs.structure;
+			var folderStruct = folderRs && folderRs.structure;
+			var docCells = docStruct && docStruct.cells && docStruct.cells[0] ?
+				docStruct.cells[0].length : 0;
+			var folderCells = folderStruct && folderStruct.cells && folderStruct.cells[0] ?
+				folderStruct.cells[0].length : 0;
+			var picked = null;
+			if (docCells >= folderCells && docStruct) {
+				picked = lang.clone(docStruct);
+			} else if (folderStruct) {
+				picked = lang.clone(folderStruct);
+			} else if (docStruct) {
+				picked = lang.clone(docStruct);
+			}
+			return this._preserveFolderColumnDecoratorsOnMergedStructure(picked, folderStruct);
+		},
+
+		_markCombinedSearchResultTypes: function(items, resultType) {
+			if (!items || !items.length) {
+				return items;
+			}
+			for (var i = 0; i < items.length; i++) {
+				if (items[i]) {
+					items[i]._metlifeResultType = resultType;
+				}
+			}
+			return items;
+		},
+
+		/**
+		 * Copies missing grid cell decorators (e.g. FolderPath → EnterpriseLinkDecorator)
+		 * from the folder result structure onto the merged structure.
+		 */
+		_preserveFolderColumnDecoratorsOnMergedStructure:
+		
+		
+		
+		
+		
+3333
+
+_completeAdvancedSearch: function(state, resultSet) {
+	var def = state.def;
+	var tab = state.tab;
+	if (def) {
+		def._metlifeAdvancedDeferButtonEnable = false;
+	}
+	if (def && def.searchButton && def.searchButton.set) {
+		def.searchButton.set("disabled", false);
+	}
+	if (resultSet && resultSet.searchTemplate && !resultSet.searchTemplate.name) {
+		resultSet.searchTemplate.name = "Search results";
+	}
+	// Both paged stream keeps docs-then-folders order; skip global Modified On resort.
+	// Documents-only / Folders-only still sort loaded rows by Modified On.
+	if (resultSet && !resultSet._metlifeBothPager) {
+		resultSet = this._sortResultSetByModifiedDescending(resultSet);
+	}
+	if (def && def.onSearchCompleted) {
+		def.onSearchCompleted(resultSet);
+	} else if (tab && tab.searchResults && tab.searchResults.setResultSet) {
+		tab.searchResults.setResultSet(resultSet);
+	}
+	if (tab && tab._setToolbarButtonDisabledState) {
+		tab._setToolbarButtonDisabledState("RefreshGrid", false);
+	}
+	this._endBothSearchStatusCaptureAndPublish(state, resultSet);
+},
+
+
+
+Basic Search=======
+
+1111
+
+"ecm/model/ResultSet",
+222222
+
+
+_mergeSearchResultSets: function(docRs, folderRs, state) {
+			if (!docRs && !folderRs) {
+				return null;
+			}
+			if (!docRs) {
+				return this._attachCombinedSearchRefreshHandler(folderRs, state);
+			}
+			if (!folderRs) {
+				return this._attachCombinedSearchRefreshHandler(docRs, state);
+			}
+
+			// Option A: dual-stream Both paging — documents first, then folders; UI page ≤ 200.
+			return this._attachCombinedSearchRefreshHandler(
+				this._buildBothPagedResultSet(docRs, folderRs, state), state);
+		},
+
+		/**
+		 * Combined Both UI page size (not 200 docs + 200 folders per page).
+		 */
+		_getCombinedUiPageSize: function(docRs, folderRs) {
+			var ps = (docRs && docRs.pageSize) || (folderRs && folderRs.pageSize) || 200;
+			return ps > 0 ? ps : 200;
+		},
+
+		_bothPagerHasMore: function(pager) {
+			if (!pager) {
+				return false;
+			}
+			if (pager.docOffset < pager.docFetched.length) {
+				return true;
+			}
+			if (pager.docContinuation) {
+				return true;
+			}
+			if (pager.folderOffset < pager.folderFetched.length) {
+				return true;
+			}
+			if (pager.folderContinuation) {
+				return true;
+			}
+			return false;
+		},
+
+		_takeNextBothPageItems: function(pager, maxCount) {
+			var pageItems = [];
+			if (!pager || !maxCount) {
+				return pageItems;
+			}
+			while (pageItems.length < maxCount && pager.docOffset < pager.docFetched.length) {
+				pageItems.push(pager.docFetched[pager.docOffset++]);
+			}
+			while (pageItems.length < maxCount && pager.folderOffset < pager.folderFetched.length) {
+				pageItems.push(pager.folderFetched[pager.folderOffset++]);
+			}
+			return pageItems;
+		},
+
+		_fetchBothStreamPage: function(pager, stream, callback, onError) {
+			var rs = stream === "document" ? pager.docRs : pager.folderRs;
+			var continuation = stream === "document" ? pager.docContinuation : pager.folderContinuation;
+			if (!rs || !continuation) {
+				if (stream === "document") {
+					pager.docContinuation = null;
+				} else {
+					pager.folderContinuation = null;
+				}
+				callback(false);
+				return;
+			}
+			rs.continuationData = continuation;
+			rs.items = stream === "document" ? pager.docFetched : pager.folderFetched;
+			var prevLen = rs.items ? rs.items.length : 0;
+			var self = this;
+			rs.retrieveNextPage(function() {
+				var items = rs.items || [];
+				if (stream === "document") {
+					pager.docFetched = items;
+					pager.docContinuation = rs.continuationData || null;
+					pager.docMaxResultsReached = !!rs.maxResultsReached;
+					self._markCombinedSearchResultTypes(items.slice(prevLen), "Document");
+				} else {
+					pager.folderFetched = items;
+					pager.folderContinuation = rs.continuationData || null;
+					pager.folderMaxResultsReached = !!rs.maxResultsReached;
+					self._markCombinedSearchResultTypes(items.slice(prevLen), "Folder");
+				}
+				if (items.length <= prevLen) {
+					if (stream === "document") {
+						pager.docContinuation = null;
+					} else {
+						pager.folderContinuation = null;
+					}
+					callback(false);
+					return;
+				}
+				callback(true);
+			}, pager.pageSize, function(err) {
+				console.error("[MetlifeSearch] Both pager continueQuery failed", stream, err);
+				if (stream === "document") {
+					pager.docContinuation = null;
+				} else {
+					pager.folderContinuation = null;
+				}
+				if (onError) {
+					onError(err);
+				}
+				callback(false);
+			});
+		},
+
+		/**
+		 * Ensure buffers can supply `needed` more UI items (docs first, then folders).
+		 */
+		_fillBothPagerBuffers: function(pager, needed, callback, onError) {
+			var self = this;
+			if (!pager || needed <= 0) {
+				callback();
+				return;
+			}
+			var available = function() {
+				return (pager.docFetched.length - pager.docOffset) +
+					(pager.folderFetched.length - pager.folderOffset);
+			};
+			var step = function() {
+				if (available() >= needed) {
+					callback();
+					return;
+				}
+				var docsLeft = pager.docFetched.length - pager.docOffset;
+				if (docsLeft > 0) {
+					if (docsLeft >= needed) {
+						callback();
+						return;
+					}
+					if (pager.docContinuation) {
+						self._fetchBothStreamPage(pager, "document", function() {
+							step();
+						}, onError);
+						return;
+					}
+					var foldersLeft = pager.folderFetched.length - pager.folderOffset;
+					if (docsLeft + foldersLeft >= needed) {
+						callback();
+						return;
+					}
+					if (pager.folderContinuation) {
+						self._fetchBothStreamPage(pager, "folder", function() {
+							step();
+						}, onError);
+						return;
+					}
+					callback();
+					return;
+				}
+				if (pager.docContinuation) {
+					self._fetchBothStreamPage(pager, "document", function() {
+						step();
+					}, onError);
+					return;
+				}
+				var foldersLeft2 = pager.folderFetched.length - pager.folderOffset;
+				if (foldersLeft2 >= needed) {
+					callback();
+					return;
+				}
+				if (pager.folderContinuation) {
+					self._fetchBothStreamPage(pager, "folder", function() {
+						step();
+					}, onError);
+					return;
+				}
+				callback();
+			};
+			step();
+		},
+
+		_installBothPagedRetrieveNextPage: function(merged) {
+			var self = this;
+			merged.retrieveNextPage = function(retrievedCallback, itemsNeeded, onError) {
+				var pager = merged._metlifeBothPager;
+				if (!pager) {
+					merged.continuationData = null;
+					if (retrievedCallback) {
+						retrievedCallback(merged.items || []);
+					}
+					return null;
+				}
+				var target = itemsNeeded && itemsNeeded > 0 ?
+					itemsNeeded :
+					((merged.items ? merged.items.length : 0) + pager.pageSize);
+				var fillMore = function() {
+					if ((merged.items && merged.items.length >= target) || !self._bothPagerHasMore(pager)) {
+						merged.continuationData = self._bothPagerHasMore(pager) ? "metlifeBothPaging" : null;
+						merged.maxResultsReached = !!(pager.docMaxResultsReached || pager.folderMaxResultsReached);
+						if (merged.onNextPageRetrieved) {
+							merged.onNextPageRetrieved(merged);
+						}
+						if (retrievedCallback) {
+							retrievedCallback(merged.items || []);
+						}
+						return;
+					}
+					var stillNeeded = Math.min(pager.pageSize, target - (merged.items ? merged.items.length : 0));
+					if (stillNeeded <= 0) {
+						stillNeeded = pager.pageSize;
+					}
+					self._fillBothPagerBuffers(pager, stillNeeded, function() {
+						var pageItems = self._takeNextBothPageItems(pager, stillNeeded);
+						if (!pageItems.length) {
+							merged.continuationData = self._bothPagerHasMore(pager) ? "metlifeBothPaging" : null;
+							if (merged.onNextPageRetrieved) {
+								merged.onNextPageRetrieved(merged);
+							}
+							if (retrievedCallback) {
+								retrievedCallback(merged.items || []);
+							}
+							return;
+						}
+						merged.items = (merged.items || []).concat(pageItems);
+						fillMore();
+					}, onError);
+				};
+				fillMore();
+				return null;
+			};
+		},
+
+		/**
+		 * Builds a Both ResultSet with independent doc/folder continuations.
+		 * UI pages are ≤ pageSize combined items; documents are exhausted before folders.
+		 */
+		_buildBothPagedResultSet: function(docRs, folderRs, state) {
+			var pageSize = this._getCombinedUiPageSize(docRs, folderRs);
+			var docItems = this._markCombinedSearchResultTypes(
+				docRs.items ? docRs.items.slice() : [], "Document");
+			var folderItems = this._markCombinedSearchResultTypes(
+				folderRs.items ? folderRs.items.slice() : [], "Folder");
+
+			var pager = {
+				pageSize: pageSize,
+				docRs: docRs,
+				folderRs: folderRs,
+				docFetched: docItems,
+				folderFetched: folderItems,
+				docOffset: 0,
+				folderOffset: 0,
+				docContinuation: docRs.continuationData || null,
+				folderContinuation: folderRs.continuationData || null,
+				docMaxResultsReached: !!docRs.maxResultsReached,
+				folderMaxResultsReached: !!folderRs.maxResultsReached
+			};
+			// keep stream ResultSets aligned for continueQuery skip=items.length
+			docRs.items = pager.docFetched;
+			folderRs.items = pager.folderFetched;
+
+			var pageItems = this._takeNextBothPageItems(pager, pageSize);
+			var totalCount = null;
+			if (docRs.totalCount != null || folderRs.totalCount != null) {
+				totalCount = (docRs.totalCount || 0) + (folderRs.totalCount || 0);
+			}
+			var merged = new ResultSet({
+				id: docRs.id || folderRs.id || "metlifeBothResults",
+				name: "Search results",
+				repository: docRs.repository || folderRs.repository,
+				parentFolder: docRs.parentFolder || folderRs.parentFolder,
+				searchTemplate: docRs.searchTemplate || folderRs.searchTemplate,
+				setType: docRs.setType || folderRs.setType,
+				pageSize: pageSize,
+				structure: this._pickMergedGridStructure(docRs, folderRs),
+				magazineStructure: (docRs.magazineStructure && docRs.magazineStructure.length) ?
+					lang.clone(docRs.magazineStructure) :
+					(folderRs.magazineStructure ? lang.clone(folderRs.magazineStructure) : null),
+				items: pageItems,
+				continuationData: this._bothPagerHasMore(pager) ? "metlifeBothPaging" : null,
+				totalCount: totalCount,
+				totalCountType: docRs.totalCountType || folderRs.totalCountType,
+				maxResultsReached: !!(pager.docMaxResultsReached || pager.folderMaxResultsReached)
+			});
+			if (merged.searchTemplate && !merged.searchTemplate.name) {
+				merged.searchTemplate.name = "Search results";
+			}
+			merged._metlifeBothPager = pager;
+			merged._metlifeCombinedSearch = true;
+			this._installBothPagedRetrieveNextPage(merged);
+			console.log("[MetlifeSearch] Both paged result set built (Option A: docs then folders)", {
+				pageSize: pageSize,
+				firstPageCount: pageItems.length,
+				docBuffered: pager.docFetched.length,
+				folderBuffered: pager.folderFetched.length,
+				hasMore: !!merged.continuationData,
+				docContinuation: !!pager.docContinuation,
+				folderContinuation: !!pager.folderContinuation,
+				totalCount: totalCount
+			});
+			return merged;
+		},
+
+		_completeCombinedSearch: function(state, merged) {
+			var tab = state.tab;
+			var def = tab && tab.searchDefinition;
+			this._endCombinedSearchUi(state);
+			if (merged && merged.searchTemplate && !merged.searchTemplate.name) {
+				merged.searchTemplate.name = "Search results";
+			}
+			// Both paged stream keeps docs-then-folders order; skip global Modified On resort.
+			// Documents-only / Folders-only still sort loaded rows by Modified On.
+			if (merged && !merged._metlifeBothPager) {
+				merged = this._sortResultSetByModifiedDescending(merged);
+			}
+			if (def && def.onSearchCompleted) {
+				def.onSearchCompleted(merged);
+			} else if (tab && tab.searchResults) {
+				tab.searchResults.setResultSet(merged);
+			}
+			if (tab && tab._setToolbarButtonDisabledState) {
+				tab._setToolbarButtonDisabledState("RefreshGrid", false);
+			}
+			this._endBothSearchStatusCaptureAndPublish(state, merged);
+		},
+
+		/**
+		 * Client-side only: sort the loaded result page by DateLastModified descending
+		 * (latest modified on top). Does not change the CE search Rank order_by.
+		 * Does not trigger a server re-sort when continuation pages exist.
+		 */
+		_sortResultSetByModifiedDescending: 
