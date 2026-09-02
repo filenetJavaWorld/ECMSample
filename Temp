@@ -1,1 +1,13 @@
-temp
+| Activity                                   | Scope                                                                                                                                       | Maximum Hours |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------: |
+| Requirements analysis and technical design | Confirm metadata, security, source-system details, naming rules, historical document volume, and migration approach                         |            12 |
+| FileNet document class configuration       | Create the new document class, property templates, data types, defaults, required fields, security, and PDF-related configuration           |            28 |
+| Choice lists                               | Create and associate choice lists for Document Category, Document Type, Risk Level, and any other confirmed properties                      |            12 |
+| Entry template configuration               | Create entry template(s), configure property layout, default values, mandatory fields, security, and filing location                        |            20 |
+| Document naming convention                 | Implement and validate automatic document-title generation using the agreed format, such as `RITM_VendorName_DocumentType_DocumentName.pdf` |            24 |
+| Search template                            | Create a search template using the required metadata fields, configure result columns, sorting, permissions, and validate searches          |            18 |
+| Historical document migration              | Develop the extraction/import process, metadata mapping, naming transformation, PDF validation, error handling, logging, and test migration |            36 |
+| Unit and integration testing               | Validate document creation, naming, metadata, choice lists, entry template, search, security, and historical uploads                        |            16 |
+| UAT and defect resolution                  | Support business testing and address identified defects                                                                                     |             8 |
+| Deployment and documentation               | Prepare deployment instructions, configuration documentation, production implementation, and post-deployment verification                   |             6 |
+| **Total Maximum Estimate**                 |                                                                                                                                             | **180 hours** |
