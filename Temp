@@ -1,1 +1,249 @@
-temp
+1. Replace _readApplicationAdvancedState
+
+This supports both the existing JSON format and a prefixed string format.
+
+_readApplicationAdvancedState: function(template) {
+	if (!template || !template.application) {
+		return null;
+	}
+
+	try {
+		var application = template.application;
+
+		/*
+		 * Preferred JSON format.
+		 */
+		var app = typeof application === "string" ?
+			JSON.parse(application) :
+			application;
+
+		if (app && app.metlifeAdvanced) {
+			return {
+				searchType:
+					this._normalizeAdvancedSearchType(
+						app.metlifeAdvanced.searchType
+					),
+				sliceFolderId:
+					app.metlifeAdvanced.sliceFolderId || null,
+				sliceLabel:
+					app.metlifeAdvanced.sliceLabel || null
+			};
+		}
+	} catch (e) {
+		/*
+		 * application may contain a normal ICN application value.
+		 * Do not fail the saved-search restoration.
+		 */
+		console.log(
+			LOG,
+			"Search template application is not MetLife JSON",
+			template.application
+		);
+	}
+
+	return null;
+},
+2. Replace _getSavedSearchType
+_getSavedSearchType: function(template) {
+	if (!template) {
+		return "both";
+	}
+
+	var fromApplication =
+		this._readApplicationAdvancedState(template);
+
+	if (fromApplication && fromApplication.searchType) {
+		console.log(
+			LOG,
+			"Restoring search type from application",
+			fromApplication.searchType
+		);
+
+		return this._normalizeAdvancedSearchType(
+			fromApplication.searchType
+		);
+	}
+
+	if (template.moreOptions &&
+			template.moreOptions.metlifeSearchType) {
+		console.log(
+			LOG,
+			"Restoring search type from moreOptions",
+			template.moreOptions.metlifeSearchType
+		);
+
+		return this._normalizeAdvancedSearchType(
+			template.moreOptions.metlifeSearchType
+		);
+	}
+
+	if (template._metlifeAdvancedSearchType) {
+		console.log(
+			LOG,
+			"Restoring search type from runtime property",
+			template._metlifeAdvancedSearchType
+		);
+
+		return this._normalizeAdvancedSearchType(
+			template._metlifeAdvancedSearchType
+		);
+	}
+
+	/*
+	 * Folder can be identified from the standard ICN object type.
+	 */
+	if (template.objectType === "folder") {
+		console.log(
+			LOG,
+			"No custom search type found; restoring Folder from objectType"
+		);
+
+		return "folders";
+	}
+
+	/*
+	 * Documents and Both both use objectType=document.
+	 * Old templates cannot be differentiated, so preserve the
+	 * existing backward-compatible default of Both.
+	 */
+	console.log(
+		LOG,
+		"No persisted custom search type found; defaulting to Both",
+		{
+			objectType: template.objectType,
+			application: template.application,
+			moreOptions: template.moreOptions
+		}
+	);
+
+	return "both";
+},
+3. Add this new serialization-hook method
+
+This is the important part. It ensures the custom state is present at the exact moment ICN calls toJson() to build its save request.
+
+_installAdvancedStateSerializationHook: function(state) {
+	if (!state || !state.def || !state.def.searchTemplate) {
+		return;
+	}
+
+	var self = this;
+	var template = state.def.searchTemplate;
+
+	if (!template.toJson ||
+			template._metlifeAdvancedSerializationHook) {
+		return;
+	}
+
+	template._metlifeAdvancedSerializationHook = true;
+
+	aspect.around(template, "toJson", function(originalToJson) {
+		return function() {
+			/*
+			 * Apply the current UI selection immediately before ICN
+			 * serializes the template.
+			 */
+			self._persistAdvancedState(state, template);
+
+			var jsonResult =
+				originalToJson.apply(this, arguments);
+
+			try {
+				var payload =
+					typeof jsonResult === "string" ?
+						JSON.parse(jsonResult) :
+						jsonResult;
+
+				if (!payload) {
+					return jsonResult;
+				}
+
+				/*
+				 * Force application into the actual serialized payload.
+				 * Setting only template.application is not sufficient
+				 * when ICN's toJson() omits or overwrites the value.
+				 */
+				payload.application = template.application;
+
+				console.log(
+					LOG,
+					"Advanced search state added to serialized template",
+					{
+						searchType:
+							state.controlsWidget ?
+								state.controlsWidget.getSearchType() :
+								null,
+						application: payload.application
+					}
+				);
+
+				return typeof jsonResult === "string" ?
+					JSON.stringify(payload) :
+					payload;
+			} catch (e) {
+				console.warn(
+					LOG,
+					"Could not add advanced state to serialized template",
+					e
+				);
+
+				return jsonResult;
+			}
+		};
+	});
+},
+4. Update _installAdvancedSearchPersistenceHooks
+
+Replace it with:
+
+_installAdvancedSearchPersistenceHooks: function(tab, state) {
+	var def = tab.searchDefinition;
+
+	if (!def || def._metlifeAdvancedPersistHook) {
+		return;
+	}
+
+	def._metlifeAdvancedPersistHook = true;
+
+	var self = this;
+
+	/*
+	 * Install serialization protection on the current template.
+	 */
+	this._installAdvancedStateSerializationHook(state);
+
+	aspect.before(def, "_updateSearchTemplate", function() {
+		self._persistAdvancedState(state);
+
+		/*
+		 * The SearchTemplate instance may have changed.
+		 */
+		self._installAdvancedStateSerializationHook(state);
+	});
+
+	aspect.after(def, "_updateSearchTemplate", function(searchTemplate) {
+		var updatedTemplate =
+			searchTemplate || def.searchTemplate;
+
+		self._persistAdvancedState(
+			state,
+			updatedTemplate
+		);
+
+		self._installAdvancedStateSerializationHook(state);
+
+		return searchTemplate;
+	});
+},
+5. Keep the confirmed folder fix
+
+In _applyAdvancedSearchTypeUi(), keep this check inside the Folder branch:
+
+if (this._isDefinitionInFolderUiMode(def)) {
+	console.log(
+		LOG,
+		"Folder UI already restored by ICN — preserving saved class and criteria"
+	);
+
+	return;
+}
