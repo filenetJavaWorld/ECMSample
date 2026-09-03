@@ -1,1 +1,172 @@
-temp
+Replace the following methods in your existing JavaScript file.
+
+1. Replace _normalizeAdvancedSearchType
+_normalizeAdvancedSearchType: function(searchType) {
+	var normalized = searchType == null ? "" :
+		String(searchType).toLowerCase().trim();
+
+	if (normalized === "document") {
+		normalized = "documents";
+	} else if (normalized === "folder") {
+		normalized = "folders";
+	}
+
+	if (normalized === "documents" ||
+			normalized === "folders" ||
+			normalized === "both") {
+		return normalized;
+	}
+
+	return "both";
+},
+2. Replace _persistAdvancedState
+_persistAdvancedState: function(state, targetTemplate) {
+	var def = state.def;
+
+	if (!def || !def.searchTemplate) {
+		return;
+	}
+
+	var controls = state.controlsWidget;
+	if (!controls) {
+		return;
+	}
+
+	var searchType = controls.getSearchType();
+	var sliceFolderId = controls.getSelectedSliceValue();
+	var sliceLabel = state.selectedSlice && state.selectedSlice.label ?
+		state.selectedSlice.label : null;
+
+	var template = targetTemplate || def.searchTemplate;
+
+	template._metlifeAdvancedSearchType = searchType;
+	template._metlifeAdvancedSliceFolderId = sliceFolderId;
+
+	if (sliceLabel) {
+		template._metlifeAdvancedSliceLabel = sliceLabel;
+	}
+
+	if (!template.moreOptions) {
+		template.moreOptions = {};
+	}
+
+	template.moreOptions.metlifeSearchType = searchType;
+
+	var appPayload = {};
+
+	if (template.application) {
+		try {
+			appPayload = typeof template.application === "string" ?
+				JSON.parse(template.application) :
+				template.application;
+		} catch (e) {
+			appPayload = {};
+		}
+	}
+
+	appPayload.metlifeAdvanced = {
+		searchType: searchType,
+		sliceFolderId: sliceFolderId,
+		sliceLabel: sliceLabel
+	};
+
+	template.application = JSON.stringify(appPayload);
+
+	/*
+	 * ICN may return a different SearchTemplate instance while saving.
+	 * Keep the live SearchDefinition template synchronized as well.
+	 */
+	if (template !== def.searchTemplate) {
+		def.searchTemplate._metlifeAdvancedSearchType = searchType;
+		def.searchTemplate._metlifeAdvancedSliceFolderId = sliceFolderId;
+
+		if (sliceLabel) {
+			def.searchTemplate._metlifeAdvancedSliceLabel = sliceLabel;
+		}
+
+		def.searchTemplate.moreOptions =
+			def.searchTemplate.moreOptions || {};
+
+		def.searchTemplate.moreOptions.metlifeSearchType = searchType;
+		def.searchTemplate.application = template.application;
+	}
+},
+3. Replace _installAdvancedSearchPersistenceHooks
+_installAdvancedSearchPersistenceHooks: function(tab, state) {
+	var def = tab.searchDefinition;
+
+	if (!def || def._metlifeAdvancedPersistHook) {
+		return;
+	}
+
+	def._metlifeAdvancedPersistHook = true;
+
+	var self = this;
+
+	/*
+	 * Persist the custom Slice/Search Options values before ICN prepares
+	 * the template for saving.
+	 */
+	aspect.before(def, "_updateSearchTemplate", function() {
+		self._persistAdvancedState(state);
+	});
+
+	/*
+	 * ICN may update or replace fields inside _updateSearchTemplate.
+	 * Reapply the custom values to the exact returned template.
+	 */
+	aspect.after(def, "_updateSearchTemplate", function(searchTemplate) {
+		self._persistAdvancedState(
+			state,
+			searchTemplate || def.searchTemplate
+		);
+
+		return searchTemplate;
+	});
+},
+4. In _installAdvancedSearchRestoreHooks, replace only the onSearchSaved section
+
+Find this existing block near the end of the method:
+
+aspect.after(def, "onSearchSaved", function(savedTemplate) {
+	// Existing code
+});
+
+Replace that complete block with:
+
+aspect.after(def, "onSearchSaved", function(savedTemplate) {
+	if (savedTemplate) {
+		state.restoredTemplateId =
+			self._getTemplateIdentity(savedTemplate);
+
+		/*
+		 * Keep the custom search type on the SearchTemplate object
+		 * returned by ICN.
+		 */
+		if (state.controlsWidget) {
+			var searchType =
+				state.controlsWidget.getSearchType();
+
+			savedTemplate._metlifeAdvancedSearchType =
+				searchType;
+
+			if (!savedTemplate.moreOptions) {
+				savedTemplate.moreOptions = {};
+			}
+
+			savedTemplate.moreOptions.metlifeSearchType =
+				searchType;
+		}
+	}
+
+	state.controlsRestored = true;
+
+	self._persistAdvancedState(
+		state,
+		savedTemplate || def.searchTemplate
+	);
+
+	return savedTemplate;
+});
+
+After deploying, create and save a new template with Documents selected, then reopen it. Old templates created before this fix may still open as Both because they were saved without the custom search-type metadata.
